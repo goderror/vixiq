@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+
+# 运行时数据(程序自动生成,不入库)
+data/
+config/user.json
+config/user.json.local
+
+# 打包产物
+build/
+dist/
+dist-release/
+*.spec.bak
+
+# 体积大 / 可再分发性存疑的二进制,不进库(缺失不影响运行):
+#   msedgedriver.exe 23MB —— Edge 驱动由用户按自己 Edge 版本自备, 或让 Selenium 自动下载匹配版本
+#   to-top*.png —— 回到顶部按钮用的立绘是他人 pixiv 作品, 版权原因不进公开发布包(本地保留)
+#   (图片缺失时按钮会降级成纯色圆形, 见 style.css #to-top)
+resources/msedgedriver.exe
+web/static/to-top.png
+web/static/to-top_src.png
+
+# 内部开发记录 / 生成物
+.trae/
+autotest/SMOKE_REPORT.md
+autotest/archive/
+DEBUG_HISTORY.md
+
+# 敏感文件(登录凭据,严禁入库)
+cookies.txt
+feature_db/
+*.db
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/

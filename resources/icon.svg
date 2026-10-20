@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Vixiq · 图标「魔盒·溢星屑」(手写贝塞尔, 无 PIL 图元拼贴)
+       配色: 紫 #B14EFF / 蓝 #3B82F6 / 红 #FF2D5E 三色挑染 (避开 pixiv 蓝)
+       源资产: 本文件。icon.ico / favicon.svg / favicon.ico / splash.png 均由它栅格化而来。 -->
+  <defs>
+    <linearGradient id="bg" x1="0.08" y1="0" x2="0.68" y2="1">
+      <stop offset="0" stop-color="#170B2E"/>
+      <stop offset="0.5" stop-color="#0D0719"/>
+      <stop offset="1" stop-color="#06030D"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#A855F7" stop-opacity="0.34"/>
+      <stop offset="0.5" stop-color="#6D3BF0" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#6D3BF0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.42"/>
+      <stop offset="0.45" stop-color="#D9C6FF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#D9C6FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mouth" x1="0" y1="1" x2="0.18" y2="0">
+      <stop offset="0" stop-color="#F4EBFF" stop-opacity="0.84"/>
+      <stop offset="0.34" stop-color="#A96BFF" stop-opacity="0.82"/>
+      <stop offset="0.68" stop-color="#6D6BF5" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#3D1F74" stop-opacity="0.5"/>
+    </linearGradient>
+    <linearGradient id="tri" x1="0.12" y1="0" x2="0.88" y2="1">
+      <stop offset="0" stop-color="#B14EFF"/>
+      <stop offset="0.46" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#FF2D5E"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0.1" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#2B1652" stop-opacity="0.94"/>
+      <stop offset="1" stop-color="#140A2A" stop-opacity="0.97"/>
+    </linearGradient>
+    <linearGradient id="glassR" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#1C0F38"/>
+      <stop offset="1" stop-color="#0E0720"/>
+    </linearGradient>
+    <linearGradient id="lidTop" x1="0.05" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#3A1E6E"/>
+      <stop offset="1" stop-color="#1E1040"/>
+    </linearGradient>
+    <linearGradient id="beamP" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#B14EFF" stop-opacity="0.60"/>
+      <stop offset="0.45" stop-color="#8B5CF6" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#7C3AED" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="beamB" x1="0" y1="1" x2="0.1" y2="0">
+      <stop offset="0" stop-color="#3B82F6" stop-opacity="0.55"/>
+      <stop offset="0.5" stop-color="#4F86F7" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#3B82F6" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="beamR" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#FF2D5E" stop-opacity="0.55"/>
+      <stop offset="0.5" stop-color="#F43F6D" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#FF2D5E" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="beamW" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="0.42" stop-color="#D9C6FF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#D9C6FF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="starA" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.55" stop-color="#EFE3FF"/>
+      <stop offset="1" stop-color="#BB8DFF"/>
+    </linearGradient>
+    <filter id="blurBig" x="-60%" y="-40%" width="220%" height="180%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="blurMid" x="-90%" y="-60%" width="280%" height="220%">
+      <feGaussianBlur stdDeviation="11"/>
+    </filter>
+    <filter id="blurSm" x="-90%" y="-60%" width="280%" height="220%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+
+  <!-- 圆角深底 (四角透明) -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <g transform="translate(0,14)">
+    <!-- 星屑辉光 -->
+    <ellipse cx="256" cy="212" rx="188" ry="196" fill="url(#halo)"/>
+
+    <!-- ── 星屑光雾: 紫主雾 + 左蓝右红挑染 + 中心白芯 ── -->
+    <g style="mix-blend-mode:screen">
+      <path d="M178,302 C152,218 182,138 256,66 C330,138 360,218 334,302 Z"
+            fill="url(#beamP)" filter="url(#blurBig)" opacity="0.86"/>
+      <path d="M164,302 C144,236 154,176 196,124 C216,182 224,250 222,302 Z"
+            fill="url(#beamB)" filter="url(#blurMid)" opacity="0.78"/>
+      <path d="M348,302 C368,236 358,176 316,124 C296,182 288,250 290,302 Z"
+            fill="url(#beamR)" filter="url(#blurMid)" opacity="0.78"/>
+      <path d="M232,302 C226,244 232,178 256,116 C280,178 286,244 280,302 Z"
+            fill="url(#beamW)" filter="url(#blurSm)" opacity="0.9"/>
+    </g>
+
+    <!-- ── 盒内溢光 (开口内壁) ── -->
+    <path d="M132,300 L324,300 L380,276 L188,276 Z" fill="url(#mouth)"/>
+
+    <!-- ── 盒体: 右侧面在後, 正脸在前 ── -->
+    <path d="M324,300 L380,276 L380,378 Q380,392 366,395 L324,414 Z"
+          fill="url(#glassR)" stroke="url(#tri)" stroke-width="9"
+          stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M132,300 L324,300 L324,398 Q324,414 308,414 L148,414 Q132,414 132,398 Z"
+          fill="url(#glass)" stroke="url(#tri)" stroke-width="11"
+          stroke-linejoin="round" stroke-linecap="round"/>
+
+    <!-- ── 悬浮微掀的盒盖 (逆时针 -5°, 右侧被掀起) ── -->
+    <g transform="rotate(-5 256 240)">
+      <path d="M126,244 L318,244 L374,220 L182,220 Z" fill="url(#lidTop)"/>
+      <path d="M126,244 L318,244 L318,261 L126,261 Z" fill="#1B0E36"/>
+      <path d="M318,244 L374,220 L374,237 L318,261 Z" fill="#12091F"/>
+      <path d="M182,220 L374,220 L374,237 L318,261 L126,261 L126,244 Z"
+            fill="none" stroke="url(#tri)" stroke-width="10"
+            stroke-linejoin="round" stroke-linecap="round"/>
+      <path d="M126,244 L318,244 L374,220" fill="none"
+            stroke="url(#tri)" stroke-width="5" stroke-opacity="0.55"
+            stroke-linejoin="round"/>
+    </g>
+
+    <!-- ── 四角星 ✦ 与星屑颗粒 ── -->
+    <circle cx="256" cy="128" r="132" fill="url(#core)"/>
+    <path d="M206,53 Q206,68 221,68 Q206,68 206,83 Q206,68 191,68 Q206,68 206,53 Z"
+          fill="#C77DFF"/>
+    <path d="M332,79 Q332,93 346,93 Q332,93 332,107 Q332,93 318,93 Q332,93 332,79 Z"
+          fill="#FF4E78"/>
+    <path d="M138,164 Q138,196 170,196 Q138,196 138,228 Q138,196 106,196 Q138,196 138,164 Z"
+          fill="#B14EFF"/>
+    <path d="M392,158 Q392,186 420,186 Q392,186 392,214 Q392,186 364,186 Q392,186 392,158 Z"
+          fill="#FF2D5E"/>
+    <!-- 蓝星: 落在盒口缝隙里, 像刚从盖子底下溢出来 -->
+    <path d="M198,252 Q198,270 216,270 Q198,270 198,288 Q198,270 180,270 Q198,270 198,252 Z"
+          fill="#3B82F6"/>
+    <path d="M256,70 Q256,128 314,128 Q256,128 256,186 Q256,128 198,128 Q256,128 256,70 Z"
+          fill="url(#starA)"/>
+
+    <g opacity="0.9">
+      <circle cx="228" cy="200" r="5" fill="#D9B8FF"/>
+      <circle cx="300" cy="176" r="4" fill="#E6D6FF"/>
+      <circle cx="176" cy="126" r="4" fill="#B14EFF"/>
+      <circle cx="342" cy="132" r="4.5" fill="#FF2D5E"/>
+      <circle cx="212" cy="104" r="3.5" fill="#3B82F6"/>
+      <circle cx="288" cy="86" r="3.5" fill="#C77DFF"/>
+      <circle cx="158" cy="226" r="3.5" fill="#3B82F6"/>
+      <circle cx="334" cy="244" r="3.5" fill="#FF4E78"/>
+      <circle cx="238" cy="204" r="6" fill="#F4EBFF" opacity="0.85"/>
+      <circle cx="196" cy="164" r="3" fill="#E0CBFF"/>
+      <circle cx="312" cy="120" r="3" fill="#FFD6E0"/>
+    </g>
+  </g>
+</svg>

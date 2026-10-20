@@ -1,0 +1,13 @@
+{
+  "_comment": "Pixiv / saucenao 的页面 XPath。前端改版后改这里即可,无需动代码。从旧 common.py 迁移。",
+  "pixiv": {
+    "more_img_button": "//*[@id=\"__next\"]/div/div[2]/div[5]/div[1]/div/div[1]/main/section/div[1]/div/div[5]/div/div[2]/button",
+    "author_id": "//*[@id=\"__next\"]/div/div[2]/div[5]/div[1]/div/div[1]/aside/section[1]/h2/div/div/a",
+    "author_name": "//*[@id=\"__next\"]/div/div[2]/div[5]/div[1]/div/div[1]/aside/section[1]/h2/div/div/a/div",
+    "pages_count": "//*[@id=\"__next\"]/div/div[2]/div[5]/div[1]/div/div[1]/main/section/div[1]/div/figure/div/div[1]/div/div/div/div/div/span"
+  },
+  "saucenao": {
+    "input_file": "//input[@type=\"file\" and @name=\"file\" and @id=\"fileInput\"]",
+    "click_to_search": "//input[@type=\"submit\" and @id=\"searchButton\"]"
+  }
+}

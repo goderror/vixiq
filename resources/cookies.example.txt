@@ -1,0 +1,18 @@
+本文件为 cookies 格式说明模板,实际 cookies 由程序写入 data/cookies.txt(不入库)。
+
+格式:JSON 数组,每项是一个 cookie dict,字段如下(由 Selenium driver.get_cookies() 生成):
+[
+  {
+    "domain": ".pixiv.net",
+    "name": "PHPSESSID",
+    "value": "1234567890_abcdef",
+    "httpOnly": true,
+    "secure": true,
+    "path": "/",
+    ...
+  },
+  ...
+]
+
+获取方式:在程序 GUI 点【获取 Cookies】,会打开 Edge 浏览器;
+手动登录 pixiv.net 后,回到 GUI 点【保存】,程序自动写入 data/cookies.txt。

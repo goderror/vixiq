@@ -1,0 +1,108 @@
+{
+  "browser": {
+    "headless": true,
+    "page_load_strategy": "eager",
+    "implicit_wait": 3,
+    "explicit_wait_crawler": 10,
+    "explicit_wait_reverse": 30,
+    "page_load_timeout": 45,
+    "use_chromium": true
+  },
+  "crawler": {
+    "between_works_delay_min": 1.0,
+    "between_works_delay_max": 3.0,
+    "between_pages_delay_min": 0.0,
+    "between_pages_delay_max": 1.0,
+    "max_retries": 3,
+    "min_file_size": 10240,
+    "use_img_list": false
+  },
+  "reverse_search": {
+    "max_attempts": 6,
+    "retry_interval_sec": 1.0,
+    "between_images_delay_min": 5.0,
+    "between_images_delay_max": 8.0,
+    "compress_max_size": 600,
+    "max_error_count": 9,
+    "batch_size": 5,
+    "batch_break_sec": 30
+  },
+  "local_search": {
+    "library_path": null,
+    "orb_nfeatures": 1000,
+    "weight_orb": 0.6,
+    "weight_color": 0.4,
+    "top_k": 5,
+    "candidate_pool": 100
+  },
+  "cookies": {
+    "_note": "Pixiv 登录态保存。use_dpapi=true 时启用 Windows DPAPI 加密,文件绑定当前 Windows 账号,拷到别的电脑打不开。rotate_days=-1 表示不强制过期。",
+    "cookies_filename": "cookies.bin",
+    "use_dpapi": true,
+    "rotate_days": -1,
+    "minimum_version": 1
+  },
+  "paths": {
+    "_note1": "output 是最终图保存的根目录(默认 data/img 子目录), 你可以改成绝对路径比如 D:/Pixiv 让图不占 C 盘。",
+    "_note2": "其它 *_subdir 都是相对 data/ 可写区的子目录名。",
+    "_note3": "★【放 F 盘】不想占系统盘时,把下面两个字段改成绝对路径即可(留空=默认写项目 data/ 下)。\n    data_root_override: 整个 data/ (图/DB/日志/cookies) 迁到哪里,例 D:/vixiq-data\n    temp_root_override: Selenium 临时 profile/Python 临时文件迁到哪里,例 D:/vixiq-temp\n    两个都改到 F 盘后,项目产生的一切文件不会再写到 C 盘。",
+    "data_root_override": "",
+    "temp_root_override": "",
+    "temp_max_age_h": 24,
+    "temp_max_size_mb": 5120,
+    "output": "img",
+    "img_subdir": "img",
+    "input_subdir": "input",
+    "failed_subdir": "failed",
+    "logs_subdir": "logs",
+    "temp_subdir": "temp_upload",
+    "feature_db_subdir": "feature_db",
+    "db_filename": "pixiv.db",
+    "cookies_filename": "cookies.bin",
+    "wallpaper_dir": "",
+    "_note4": "wallpaper_dir: 壁纸夹(用来挑「上一张/下一张/幻灯片」的候选目录, 绝对路径)。留空 = 用当前桌面壁纸所在的那个文件夹。"
+  },
+  "logging": {
+    "write_to_file": true,
+    "log_filename_pattern": "日志_{Y%m%d_%H%M}.txt",
+    "readonly_after_finish": true
+  },
+  "web": {
+    "_note": "Web 版界面 (替代 Tkinter gui/)。port 是本地服务端口; 是否启动时自动打开浏览器由 launcher.auto_open_browser 决定 (默认关, 只驻托盘)。",
+    "port": 7790
+  },
+  "launcher": {
+    "_note": "启动器形态 (2026-09-24): 托盘常驻。tray_enabled=双击 exe 后常驻右下角任务栏托盘; auto_open_browser=启动时是否自动打开浏览器界面 (默认关); wall_widget=是否显示桌面壁纸小控件 (默认关); notify_on_wall_change=壁纸切换时是否弹提示气泡 (默认关); exit_on_browser_close=浏览器页面全关后是否自动退出 (默认关 —— 开了就不是常驻托盘了)。",
+    "tray_enabled": true,
+    "auto_open_browser": false,
+    "wall_widget": false,
+    "notify_on_wall_change": false,
+    "exit_on_browser_close": false
+  },
+  "ai_text": {
+    "_note": "✨ 壁纸文案 (2026-09-27): 用 OpenAI 兼容接口给当前壁纸生成「标题 + 一句衬托气氛的话」, 显示在桌面小控件卡片上。base_url 填到 /v1 为止, 只改 base_url + model 就能换服务商(DeepSeek/Moonshot/智谱/通义 compatible-mode/OpenAI 都是这一套)。enabled=false 时完全不走网络, 卡片用本地按画面明暗色调推的那句兜底。vision=true 会把壁纸缩略图(压到 512px)一起发给服务商, 认内容更准、也更贵; false 只发标题/作者/画面色调这些文字线索。api_key 明文存在本文件里, 只在本机使用, 别把这个文件传到别处。生成结果按「路径+改动时间+大小」缓存, 同一张图只生成一次。",
+    "enabled": false,
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "api_key": "",
+    "vision": false,
+    "timeout": 25
+  },
+  "safemode": {
+    "_note": "安全模式: enabled=true 时 R18 内容在图库/搜索结果中模糊打码, Lightbox 需点「显示」才解锁; 图库默认筛选非 R18 由前端 libFilters.r18='0' 控制(可手动切换)。",
+    "enabled": false,
+    "blur_mode": true
+  },
+  "pixiv_actions": {
+    "_note": "对 pixiv 账号的写操作。auto_bookmark=true 时, 单个作品下载成功后会调用 pixiv 网页端的收藏接口 (原网页点 ♡ 红心)。bookmark_private=true 表示非公开收藏 (只有自己可见)。R18 作品一律走非公开收藏, 与 bookmark_private 无关。注意: 「点赞(いいね)」不做 —— pixiv 官方说明点赞无法取消、每作品每天仅一次。已收藏的作品一律跳过, 绝不改你原本的公开/非公开设置。",
+    "auto_bookmark": true,
+    "bookmark_private": false
+  },
+  "activity_log": {
+    "_note": "实时活动日志(2026-09-17): 把每个 HTTP 请求 + 每次点击/控件变化/切页逐条记下来, 既在终端打屏又落盘, 便于事后自检(core 反复对着 log 定位问题)。落盘位置 <data_root>/logs/activity/activity-YYYY-MM-DD.log; max_mb=单文件上限, 超了顺延 .2/.3…; keep_days=保留天数, 超期自动清理。enabled=false 则只打屏不落盘, console=false 则只落盘不打屏。",
+    "enabled": true,
+    "console": true,
+    "max_mb": 8,
+    "keep_days": 7
+  }
+}

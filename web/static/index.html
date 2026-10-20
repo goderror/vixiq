@@ -1,0 +1,622 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vixiq</title>
+<!-- favicon 带 ?v= 版本号: 浏览器对站点图标缓存极其顽固 (旧蓝色图标会一直顶在标签页上),
+     换图标后必须换 URL 才会重新拉取  -->
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
+<link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
+<link rel="stylesheet" href="/static/style.css?v=20260929a">
+</head>
+<body>
+
+<!-- ===== 顶栏 ===== -->
+<header class="topbar">
+  <div class="brand">✦ Vixiq</div>
+  <form id="search-form" class="search-wrap" autocomplete="off">
+    <div class="search-box">
+      <input id="search-input" type="text" placeholder="作品ID / 作者URL / 关键字标签…" spellcheck="false">
+      <button id="search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
+    </div>
+    <button id="search-btn" class="btn accent" type="submit">🔎 搜索</button>
+  </form>
+  <div class="account-wrap">
+    <button id="top-quit-btn" class="quit-btn" title="退出程序（停止服务并释放端口）" aria-label="退出程序">
+      <span class="quit-icon">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/>
+          <line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </span>
+    </button>
+    <button id="account-btn" class="account-btn" title="账户 / 登录">
+      <span id="account-avatar" class="account-avatar off">👤</span>
+      <span id="account-label">未登录</span>
+      <span class="account-caret">▾</span>
+    </button>
+    <div id="account-menu" class="account-menu hidden"></div>
+  </div>
+</header>
+
+<!-- ===== Tab 导航 ===== -->
+<nav class="tabs">
+  <button class="tab active" data-tab="search">🌐 网络查询</button>
+  <button class="tab" data-tab="tasks">📥 下载任务<span id="cart-badge" class="badge hidden">0</span></button>
+  <button class="tab" data-tab="reverse">🔎 反搜来源</button>
+  <button class="tab" data-tab="library">📚 图库管理</button>
+  <button class="tab" data-tab="trash">🗑️ 回收站<span id="trash-badge" class="badge hidden">0</span></button>
+  <button class="tab" data-tab="authors">👤 作者管理</button>
+  <button class="tab" data-tab="stats">📊 统计</button>
+  <button class="tab" data-tab="settings">⚙ 设置</button>
+</nav>
+
+<main>
+  <!-- ===== 查询: 作品 / 作者 双子页 ===== -->
+  <section id="tab-search" class="tabpage active">
+    <div class="panel">
+      <div class="search-subtabs">
+        <button class="sstab active" data-scope="artwork">🔍 搜索作品</button>
+        <button class="sstab" data-scope="author">👤 搜索作者</button>
+        <button id="search-hide-ai" type="button" class="btn icon-toggle active" style="margin-left:auto"
+                title="隐藏搜索结果里的 AI 作品（按 pixiv 官方 aiType 判定，未标记的按非 AI 处理）">🚫 隐藏 AI 作品</button>
+      </div>
+      <div id="search-result">
+        <div class="hint">输入作品ID / 作者URL / 关键字后回车。</div>
+      </div>
+      <!-- 没输入内容时的推荐 (2026-09-20): 两个来源可切换, 清空搜索框再点搜索就回到这里 -->
+      <div id="search-feed">
+        <div class="search-subtabs">
+          <button type="button" class="sstab feed-kind active" data-kind="ranking">🏆 排行榜</button>
+          <button type="button" class="sstab feed-kind" data-kind="discovery">✨ 为你推荐</button>
+          <button type="button" class="btn ghost" id="search-feed-refresh" style="margin-left:auto" title="重新取一批">↻ 刷新</button>
+        </div>
+        <div id="search-feed-body"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 下载任务 (独立页) ===== -->
+  <section id="tab-tasks" class="tabpage">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>📥 下载任务</h2>
+        <div class="panel-actions">
+          <button id="dl-stop" class="btn danger" disabled>■ 停止任务</button>
+          <button id="dl-clear" class="btn ghost" title="清空当前栏的记录，正在下载的任务会被中止">🧹 清空当前栏</button>
+          <button id="dl-retry-failed" class="btn ghost">↻ 重试失败</button>
+          <select id="dl-strategy" title="下载策略">
+            <option value="only_new">📥 仅下载缺失页</option>
+            <option value="overwrite">⚠ 强制重下覆盖</option>
+          </select>
+          <button id="dl-run" class="btn accent">▶ 开始所有未完成</button>
+        </div>
+      </div>
+      <div id="dl-progress-wrap" class="progress-wrap hidden">
+        <div id="dl-progress-bar" class="progress-bar"></div>
+        <span id="dl-progress-text">0%</span>
+      </div>
+      <div class="field-row lib-filters">
+        <div class="task-filters" id="task-filters">
+          <button class="btn filter-btn active" data-f="all">全部</button>
+          <button class="btn filter-btn" data-f="running">进行中</button>
+          <button class="btn filter-btn" data-f="done">完成</button>
+          <button class="btn filter-btn" data-f="failed">失败</button>
+        </div>
+        <span class="lib-spacer"></span>
+        <button id="task-show-thumb" type="button" class="btn icon-toggle active" title="切换缩略图显示">🖼️ 缩略图</button>
+        <button id="task-order" class="btn ghost" title="按发起时间升降序">↓ 时间倒序</button>
+        <span id="task-total" class="status-line"></span>
+      </div>
+      <div id="cart-table-wrap" class="table-wrap">
+        <table id="cart-table" class="table">
+          <thead><tr>
+            <th class="th-thumb">图</th><th>任务名称</th><th>作者</th><th>类型</th><th>进度</th><th>状态</th><th>发起时间</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 反搜 ===== -->
+  <section id="tab-reverse" class="tabpage">
+    <div class="panel">
+      <div class="panel-head"><h2>🔎 反搜来源</h2></div>
+      <div id="reverse-status" class="status-line">正在读取扫描目录…</div>
+      <div class="field-row">
+        <label>方式：</label>
+        <select id="reverse-mode">
+          <option value="id">按文件名中的作品ID 直查 Pixiv（快）</option>
+          <option value="saucenao">以图搜源 SauceNAO（慢，适合无ID图片）</option>
+        </select>
+        <label>归档：</label>
+        <select id="reverse-archive" title="识别成功是否直接归档进图库">
+          <option value="1">自动归档</option>
+          <option value="0">仅识别不归档</option>
+        </select>
+        <label>已存在：</label>
+        <select id="reverse-existing" title="归档时目标文件夹已有同名文件的处理方式">
+          <option value="copy">加副本(推荐)</option>
+          <option value="skip">跳过</option>
+          <option value="overwrite">覆盖</option>
+        </select>
+        <label title="每批张数">批次：</label>
+        <select id="reverse-batch-size" title="每批之间强制休息，避免触发站点风控">
+          <option value="3">3 张/批</option>
+          <option value="5" selected>5 张/批</option>
+          <option value="10">10 张/批</option>
+          <option value="20">20 张/批</option>
+        </select>
+        <label title="批次间休息时长">休息：</label>
+        <select id="reverse-batch-break" title="批次之间的休息时长">
+          <option value="15">15s</option>
+          <option value="30" selected>30s</option>
+          <option value="60">60s</option>
+          <option value="120">120s</option>
+        </select>
+        <button id="reverse-run-sel" class="btn accent">▶ 反搜选中 (<span id="reverse-sel-count">0</span>)</button>
+        <button id="reverse-adopt-sel" class="btn" disabled title="把勾选的图片建为自定义作品收进图库（标题取文件名）">📥 入库选中</button>
+        <button id="reverse-drop-sel" class="btn ghost" disabled title="送进电脑回收站（可还原）">🗑️ 丢弃选中</button>
+        <button id="reverse-run" class="btn ghost">▶ 反搜全部</button>
+        <button id="reverse-upload" class="btn ghost">➕ 添加图片</button>
+        <button id="reverse-clear" class="btn danger" title="清空待反搜区（送进电脑回收站，可还原）">🗑️ 清空待反搜</button>
+        <button id="reverse-clear-result" class="btn ghost" title="清空结果面板">🧹 清空结果</button>
+        <input type="file" id="reverse-file-input" accept="image/*" multiple style="display:none">
+      </div>
+      <div id="reverse-progress" class="rev-progress" style="display:none">
+        <div class="progress-wrap">
+          <div class="progress-bar"><div id="reverse-progress-fill"></div></div>
+          <span id="reverse-progress-text" class="cell-progress"></span>
+        </div>
+        <div id="reverse-progress-line" class="hint"></div>
+      </div>
+      <div class="hint">图片放入下方显示的<strong>输入目录</strong>（独立于图库），或用「➕ 添加图片」选择；文件名含作品ID 可直查。
+        「自动归档」= 识别成功即移入图库并登记；未识别的可勾选后「📥 入库选中」收进图库。</div>
+      <div class="rev-section-title">📋 反搜任务 <span id="rev-task-count" class="muted"></span></div>
+      <div class="field-row">
+        <div class="task-filters" id="rev-task-filters">
+          <button class="btn filter-btn active" data-f="all">全部</button>
+          <button class="btn filter-btn" data-f="running">进行中</button>
+          <button class="btn filter-btn" data-f="done">完成</button>
+          <button class="btn filter-btn" data-f="failed">失败</button>
+        </div>
+        <span class="lib-spacer"></span>
+        <span id="rev-task-total" class="status-line"></span>
+        <button id="rev-task-clear-failed" class="btn ghost" disabled title="只移除未识别 / 待确认的行，文件仍留在待反搜区">🧹 清空失败</button>
+        <button id="rev-task-clear" class="btn ghost" title="只清这张列表，不动文件和图库">🧹 清空全部</button>
+      </div>
+      <div id="rev-task-wrap" class="table-wrap">
+        <table id="rev-task-table" class="table">
+          <thead><tr><th class="th-thumb">图</th><th>文件名</th><th>识别结果</th><th>状态</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="rev-task-empty" class="rev-empty">暂无任务：点「反搜全部 / 反搜选中」，或对图库图片点「进反搜」，任务会在这里逐张显示进度与结果</div>
+      <div id="rev-gallery-result"></div>
+      <div class="rev-section-title">🖼️ 待反搜图片 <span id="reverse-pending-count" class="muted"></span>
+        <label class="rev-check-all"><input type="checkbox" id="reverse-check-all" checked> 全选</label></div>
+      <div id="reverse-pending-grid" class="rev-grid"></div>
+    </div>
+  </section>
+
+  <!-- ===== 图库管理 ===== -->
+  <section id="tab-library" class="tabpage">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>📚 图库管理</h2>
+        <div class="panel-actions">
+          <button id="lib-tidy-btn" class="btn accent" title="错位作品归位、作者夹规范命名、散落文件归类（先预览后执行）">🧹 一键整理</button>
+          <button id="lib-selfcheck-btn" class="btn accent" title="对账 / 离线清理 / 作者名同步 / 补元数据 / 文件整理 / 汇总报告，可单独跑">🩺 体检</button>
+          <button id="lib-backup" class="btn accent" title="数据库备份（zip）与「重下修复」留下的 .bak 管理">💾 备份</button>
+        </div>
+      </div>
+      <!-- 🖼 当前壁纸 (2026-09-24): 桌面幻灯片播到哪一张, Windows 会把路径写进注册表,
+           后端读得到 → 这张卡片当场告诉你是谁画的、库内哪一页、有没有更高清的一版。
+           只读展示; 删壁纸要用户亲手点, 且只进 Windows 电脑回收站。 -->
+      <div id="wall-card" class="wall-card hidden">
+        <div class="wall-head">
+          <span class="wall-title">🖼️ 当前壁纸</span>
+          <span id="wall-name" class="wall-name"></span>
+          <span id="wall-badges"></span>
+          <span class="lib-spacer"></span>
+          <button class="btn ghost" onclick="wallDupesOpen()" title="与图库字节一致的壁纸副本，勾选后移进电脑回收站">🧹 清理副本</button>
+          <button id="wall-refresh" class="btn ghost" onclick="wallRefresh()" title="立即刷新">↻</button>
+          <button id="wall-fold" class="btn ghost" onclick="wallFold()" title="收起 / 展开">收起</button>
+        </div>
+        <div id="wall-body" class="wall-body"></div>
+      </div>
+      <div id="lib-stats" class="stats-grid"><div class="stat-card">读取统计中…</div></div>
+      <div id="lib-missing-hint" class="hint" style="display:none"></div>
+      <div id="lib-health-hint" class="health-row" style="display:none"></div>
+      <div class="field-row">
+        <div class="search-box">
+          <input id="lib-search-input" type="text" placeholder="在图库中搜索作品/作者/标签/本地文件名…" spellcheck="false">
+          <button id="lib-search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
+        </div>
+        <button id="lib-search-btn" class="btn accent">搜索</button>
+        <button id="lib-recent-btn" class="btn">📋 全部作品</button>
+        <button id="lib-sync-btn" class="btn ghost">🔄 同步</button>
+        <button id="lib-similar-btn" class="btn ghost" title="上传一张图，在图库里找最像的">🔍 以图搜图</button>
+        <input id="lib-similar-file" type="file" accept="image/*" style="display:none">
+        <button id="lib-import-btn" class="btn ghost" title="文件名含作品ID的直接入库，无ID的转反搜收件箱；源文件进回收站（可还原）">📁 导入文件夹</button>
+        <button id="lib-import-files-btn" class="btn ghost" title="同上，按多张图片导入">🖼️ 导入图片</button>
+        <span class="view-toggle" id="lib-data-toggle" title="按作品看 / 按单张图片看">
+          <button class="btn view-btn active" data-view="artwork" title="每个作品一张卡片">🖼️ 作品</button>
+          <button class="btn view-btn" data-view="image" title="逐张列出库内图片">🖼️ 图片</button>
+        </span>
+        <span class="view-toggle" id="lib-view-toggle">
+          <button class="btn view-btn active" data-view="grid" title="网格视图">🟦 网格</button>
+          <button class="btn view-btn" data-view="list" title="列表视图">☰ 列表</button>
+        </span>
+      </div>
+      <div class="field-row lib-filters">
+        <select id="lib-f-type" title="按类型筛选"><option value="">类型: 全部</option><option value="0">插画</option><option value="1">漫画</option><option value="2">动图</option></select>
+        <select id="lib-f-status" title="按作者存续状态筛选"><option value="">状态: 全部</option><option value="alive">作者活跃中</option><option value="gone">作者已注销</option><option value="unknown">未知作者</option></select>
+        <select id="lib-f-source" title="按来源筛选"><option value="">来源: 全部</option><option value="pixiv">pixiv</option><option value="danbooru">danbooru</option><option value="twitter">X（推特）</option><option value="bilibili">bilibili</option><option value="ggac">GGAC</option><option value="artstation">ArtStation</option><option value="deviantart">DeviantArt</option><option value="niconico">Nico静画</option><option value="skeb">Skeb</option><option value="yandere">yande.re</option><option value="konachan">Konachan</option><option value="gelbooru">Gelbooru</option><option value="sankaku">Sankaku</option><option value="other">未知来源</option></select>
+        <button id="lib-src-manage" class="btn ghost" title="管理来源分类">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg>
+        </button>
+        <select id="lib-f-r18" title="按 R18 筛选"><option value="0" selected>R18: 非 R18</option><option value="1">仅 R18</option><option value="">全部（含 R18）</option></select>
+        <select id="lib-f-ai" title="按 AI 生成筛选（按 pixiv 官方 aiType 标记）"><option value="" selected>AI: 全部</option><option value="0">AI: 非 AI</option><option value="2">AI: 仅 AI</option></select>
+        <div class="combo" id="combo-author">
+          <input type="text" id="lib-f-author-input" placeholder="作者: 输入关键词筛选" autocomplete="off" spellcheck="false">
+          <button class="input-clear" hidden aria-label="清空作者筛选" title="清空">✕</button>
+          <div class="combo-list" id="lib-f-author-list"></div>
+        </div>
+        <div class="combo" id="combo-tag">
+          <input type="text" id="lib-f-tag-input" placeholder="标签: 输入关键词筛选" autocomplete="off" spellcheck="false">
+          <button class="input-clear" hidden aria-label="清空标签筛选" title="清空">✕</button>
+          <div class="combo-list" id="lib-f-tag-list"></div>
+        </div>
+        <select id="lib-f-sort" title="排序">
+          <option value="date">排序: 按发布日</option>
+          <option value="created">排序: 按入库时间</option>
+          <option value="updated" selected>排序: 按修改时间</option>
+          <option value="title">排序: 按标题</option>
+          <option value="author">排序: 按作者</option>
+          <option value="id">排序: 按ID</option>
+          <option value="bookmark">排序: 按收藏</option>
+        </select>
+        <button id="lib-f-order" class="btn ghost" title="切换升降序">↓ 降序</button>
+      </div>
+      <!-- 操作行: 条数靠左 + 状态筛选/批量按钮靠右, 与筛选控件分行 -->
+      <div class="lib-ops-row">
+        <span id="lib-total" class="status-line"></span>
+        <div class="lib-batch-group">
+          <button id="lib-f-missing" type="button" class="btn icon-toggle" title="缺标题/标签/封面等信息的作品">🏷️ 缺元数据</button>
+          <button id="lib-f-missing-file" type="button" class="btn icon-toggle" title="数据库有记录但磁盘文件已丢失的作品">⚠ 缺失文件</button>
+          <button id="lib-f-deleted" type="button" class="btn icon-toggle" title="pixiv 作品页已确认不存在（404）的作品，本地文件仍可查看">🗑️ 已失效</button>
+          <button id="lib-sel-all" type="button" class="btn icon-toggle" title="全选 / 取消全选">☑ 全选</button>
+          <button id="lib-sel-clear" class="btn ghost" disabled title="取消全部选中">✕ 取消选择</button>
+          <button id="lib-batch-addcart" class="btn" disabled title="加进下载队列并开始；库里已完整的不重下，缺页的只补缺失页，永不覆盖本地文件">➕ 批量加入下载(<span id="lib-sel-count3">0</span>)</button>
+          <button id="lib-batch-repair" class="btn danger" disabled title="用 pixiv 官方源覆盖重下，旧文件自动备份为 .bak（可在「💾 备份」里恢复）。只对 pixiv 作品有效">♻ 重下修复(<span id="lib-sel-count4">0</span>)</button>
+          <button id="lib-batch-edit" class="btn" disabled title="批量改选中项的作者/标签/类型/R18/来源，只改勾选的字段">✏️ 批量编辑(<span id="lib-sel-count2">0</span>)</button>
+          <button id="lib-batch-merge" class="btn" disabled title="把选中的图片并为同一作品的多页，可并入已有作品或新建作品">🔗 合并图片</button>
+          <button id="lib-batch-split" class="btn" disabled title="把选中的图片从原作品拆出（每张独立或组成新作品）；只改数据库归属，图片文件不动">✂️ 拆分</button>
+          <button id="lib-batch-srcsearch" class="btn" disabled title="已记录来源URL的直接归类；其余用 SauceNAO 反搜（较慢）。反搜结果只作参考">🔎 批量搜索来源</button>
+          <button id="lib-batch-del" class="btn danger" disabled>🗑️ 批量删除(<span id="lib-sel-count">0</span>)</button>
+        </div>
+      </div>
+      <div id="lib-only-banner" class="lib-only-banner" hidden></div>
+      <div id="lib-pager-top" class="lib-pager"></div>
+      <div id="lib-result"></div>
+      <div id="lib-pager-bottom" class="lib-pager"></div>
+    </div>
+  </section>
+
+  <!-- ===== 🗑️ 回收站 (应用内软删除: 删除只是移进来, 可恢复; 彻底删除也只进电脑回收站) ===== -->
+  <section id="tab-trash" class="tabpage">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>🗑️ 回收站</h2>
+        <div class="panel-actions">
+          <span id="trash-total" class="status-line"></span>
+          <button id="trash-restore-all" class="btn" onclick="trashRestoreAll()">↩ 全部恢复</button>
+          <button id="trash-purge-all" class="btn danger" onclick="trashPurgeAll()">🗑️ 清空回收站</button>
+        </div>
+      </div>
+      <div class="hint" style="margin:6px 0 10px">
+        删过但还没真正删掉的东西在这里。恢复＝原样搬回图库；彻底删除＝文件送进 Windows 电脑回收站（仍可还原）。原位置被占用时只跳过，不覆盖。
+      </div>
+      <div class="btn-row" style="margin-bottom:8px">
+        <button class="btn ghost trash-kind active" data-kind="artwork" onclick="trashSwitchKind('artwork')">📦 作品</button>
+        <button class="btn ghost trash-kind" data-kind="page" onclick="trashSwitchKind('page')">🖼️ 单张图片</button>
+      </div>
+      <div id="trash-result"></div>
+    </div>
+  </section>
+
+  <!-- ===== 作者管理 (作者维度数据库: 筛选/排序/搜索/编辑) ===== -->
+  <section id="tab-authors" class="tabpage">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>👤 作者管理</h2>
+        <div class="panel-actions">
+          <span id="authors-total" class="status-line"></span>
+        </div>
+      </div>
+      <div class="field-row lib-filters">
+        <div class="search-box">
+          <input id="authors-search-input" type="text" placeholder="搜索作者名 / 曾用名 / ID…" spellcheck="false">
+          <button id="authors-search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
+        </div>
+        <button id="authors-search-btn" class="btn accent">搜索</button>
+        <select id="authors-f-status" title="按作者存续状态筛选"><option value="">状态: 全部</option><option value="alive">活跃中</option><option value="gone">已注销</option><option value="unknown">未知</option></select>
+        <select id="authors-f-source" title="按作品来源筛选"><option value="">来源: 全部</option><option value="pixiv">pixiv</option><option value="danbooru">danbooru</option><option value="twitter">X（推特）</option><option value="bilibili">bilibili</option><option value="ggac">GGAC</option><option value="other">未知来源</option></select>
+        <span class="lib-spacer"></span>
+        <span id="authors-total-inline" class="status-line"></span>
+      </div>
+      <div id="authors-pager-top" class="lib-pager"></div>
+      <div id="authors-result" class="table-wrap">
+        <div class="hint">加载中…</div>
+      </div>
+      <div id="authors-pager-bottom" class="lib-pager"></div>
+    </div>
+  </section>
+
+  <!-- ===== 统计: 概览 + 各维度分布 (纯统计, 明细移入作者管理) ===== -->
+  <section id="tab-stats" class="tabpage">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>📊 图库统计</h2>
+        <span id="stats-refresh-line" class="status-line" style="margin:0"></span>
+      </div>
+      <div id="stats-cards" class="stats-grid"><div class="stat-card"><div class="num">…</div><div class="lbl">读取中</div></div></div>
+      <div class="stats-cols">
+        <div class="stats-col">
+          <h4 class="stats-sec">作品来源分布</h4>
+          <div id="stats-source" class="stats-bars"></div>
+        </div>
+        <div class="stats-col">
+          <h4 class="stats-sec">作者存续状态</h4>
+          <div id="stats-status" class="stats-bars"></div>
+        </div>
+        <div class="stats-col">
+          <h4 class="stats-sec">作品类型</h4>
+          <div id="stats-type" class="stats-bars"></div>
+        </div>
+        <div class="stats-col">
+          <h4 class="stats-sec">R18 分布</h4>
+          <div id="stats-r18" class="stats-bars"></div>
+        </div>
+        <div class="stats-col">
+          <h4 class="stats-sec">作者作品数分布</h4>
+          <div id="stats-author-works" class="stats-bars"></div>
+        </div>
+        <div class="stats-col">
+          <h4 class="stats-sec">标签 Top 60</h4>
+          <div id="stats-tags" class="stats-bars"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 设置 ===== -->
+  <section id="tab-settings" class="tabpage">
+    <div class="panel">
+      <div class="panel-head"><h2>⚙ 设置</h2></div>
+
+      <div class="set-group">
+        <h4>账户</h4>
+        <div class="card-row">
+          <div class="card mini">
+            <h3>账户</h3>
+            <div id="account-card" class="account-card">
+              <div id="ac-avatar" class="ac-avatar off">👤</div>
+              <div class="ac-info">
+                <div id="ac-name" class="ac-name">未登录</div>
+                <div id="ac-status" class="ac-status">点击下方按钮登录 Pixiv 账号</div>
+              </div>
+            </div>
+            <div class="btn-row">
+              <button id="ac-login" class="btn accent">🔑 登录 Pixiv</button>
+              <button id="ac-logout" class="btn danger" style="display:none">🚪 退出登录</button>
+              <button id="ac-cancel-login" class="btn ghost" style="display:none">✖ 取消登录</button>
+            </div>
+            <div id="ac-login-hint" class="hint" style="display:none">浏览器已弹出，在窗口中完成登录即可；<strong>登录成功后 Cookies 自动保存</strong>。</div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="ac-show-browser" class="btn ghost">👁 显示浏览器窗口</button>
+              <button id="ac-hide-browser" class="btn ghost">🫥 隐藏浏览器</button>
+            </div>
+            <div class="hint">默认后台无头运行；「显示浏览器窗口」可切出可见窗口。登录态经 DPAPI 加密存本机，仅当前 Windows 用户可解密。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>桌面与壁纸</h4>
+        <div class="card-row">
+          <div class="card mini">
+            <h3>🖼️ 壁纸夹</h3>
+            <div class="field-row">
+              <div class="search-box">
+                <input id="wall-dir-input" type="text" readonly spellcheck="false"
+                       placeholder="未设置（跟随当前壁纸所在文件夹）" title="目录只能通过右侧按钮选择">
+                <button id="wall-dir-clear" class="input-clear" type="button" hidden
+                        title="清除设置，改为跟随当前壁纸所在文件夹" onclick="clearWallDir()">✕</button>
+              </div>
+              <button id="wall-dir-pick" class="btn accent" onclick="pickWallDir()">📁 选择文件夹…</button>
+            </div>
+            <div class="hint">「上一张 / 下一张 / 幻灯片」在此目录内取图；未设置时跟随当前壁纸所在文件夹。</div>
+            <div class="hint">当前生效：<span id="wall-dir-state">读取中…</span></div>
+          </div>
+          <div class="card mini">
+            <h3>🖼️ 壁纸库</h3>
+            <div class="hint">按「宽 ≥ 1920、高 ≥ 1080 且比例贴近 16:9」从图库挑选，原样复制进壁纸夹并登记。重复生成不会多占文件。</div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="wall-lib-run" class="btn accent" onclick="runWallLib()">⬆ 从图库生成壁纸</button>
+            </div>
+            <div class="hint" style="margin-top:8px">当前状态：<span id="wall-lib-state">读取中…</span></div>
+          </div>
+          <div class="card mini">
+            <h3>✨ 壁纸文案</h3>
+            <div class="hint">调用 OpenAI 兼容接口，把当前壁纸缩到 512px 连图一起上传，生成「标题 + 一句氛围话」，显示在桌面小控件卡片上。密钥保存在本机 <code>config/user.json</code>。</div>
+            <div class="field-row" style="margin-top:10px">
+              <input id="ai-base" type="text" spellcheck="false" placeholder="接口地址（到 /v1 为止）">
+            </div>
+            <div class="field-row" style="margin-top:8px">
+              <input id="ai-model" type="text" spellcheck="false" placeholder="模型名">
+            </div>
+            <div class="field-row" style="margin-top:8px">
+              <input id="ai-key" type="password" spellcheck="false" placeholder="API 密钥" autocomplete="off">
+            </div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="ai-test" class="btn ghost" onclick="testAiText()">🔌 测试连接</button>
+              <button id="ai-run" class="btn accent" onclick="runAiText()">⬆ 上传当前壁纸</button>
+            </div>
+            <div class="hint" style="margin-top:8px">当前状态：<span id="ai-state">读取中…</span></div>
+            <div class="hint">「测试连接」用一次最省的请求验证地址 / 密钥 / 模型名，不发图、不要求有当前壁纸；生成只对当前这一张，换壁纸后需再点一次。</div>
+          </div>
+          <div class="card mini">
+            <h3>🚀 启动与托盘</h3>
+            <div class="hint">启动后常驻右下角托盘，右键可开界面 / 改设置 / 退出。修改保存到 <code>config/user.json</code>，重启后生效。</div>
+            <div id="launcher-switches" class="btn-row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+              <button class="btn ghost" data-k="tray_enabled">🖥 托盘常驻</button>
+              <button class="btn ghost" data-k="auto_open_browser">🌐 启动自动开浏览器</button>
+              <button class="btn ghost" data-k="wall_widget">🖼️ 桌面壁纸小控件</button>
+              <button class="btn ghost" data-k="notify_on_wall_change">🔔 壁纸切换提示</button>
+              <button class="btn ghost" data-k="exit_on_browser_close">🚪 关页面即退出</button>
+            </div>
+            <div class="hint" style="margin-top:8px">当前状态：<span id="launcher-state">读取中…</span>（亮起 = 已开启）</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>浏览与下载</h4>
+        <div class="card-row">
+          <div class="card mini">
+            <h3>🖼️ 缩略图缓存</h3>
+            <div id="thumbs-stats" class="hint">正在读取缓存信息…</div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="thumbs-warm-btn" class="btn accent">🖼️ 立即预热全部缩略图</button>
+              <button id="thumbs-orphan-btn" class="btn ghost" title="只删图被移动/改名/删除后的残留缓存">🧹 清理孤儿</button>
+              <button id="thumbs-clear-btn" class="btn danger">🗑️ 清除缓存</button>
+            </div>
+            <div class="hint" style="margin-top:8px">缩略图缓存在 <code>data\thumbs\</code>。清除缓存不影响原图。</div>
+          </div>
+          <div class="card mini">
+            <h3>🛡 安全模式</h3>
+            <div class="hint">开启后 R18 显示打码占位图，浏览器不加载原图；大图内点「🔒 显示」才临时加载该张。</div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="safemode-toggle" class="btn ghost">🛡 开启</button>
+            </div>
+            <div class="hint" style="margin-top:8px">当前状态：<span id="safemode-state">读取中…</span>（保存到 <code>config/user.json</code>，重启后生效）</div>
+          </div>
+          <div class="card mini">
+            <h3>♡ 下载后自动收藏</h3>
+            <div class="hint">单个作品下载成功后自动收藏（已收藏的跳过）；画师批量不自动收藏，R18 一律非公开收藏。</div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="autobook-toggle" class="btn ghost">♡ 开启</button>
+              <select id="autobook-vis" title="公开 = 他人可见收藏列表；非公开 = 仅自己可见">
+                <option value="public">公开收藏</option>
+                <option value="private">非公开收藏</option>
+              </select>
+            </div>
+            <div class="hint" style="margin-top:8px">当前状态：<span id="autobook-state">读取中…</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>日志与记录</h4>
+        <div class="card-row">
+          <div class="card mini">
+            <h3>实时任务日志</h3>
+            <div id="log-panel" class="log-panel"><div class="log-empty">等待任务日志…</div></div>
+          </div>
+          <div class="card mini">
+            <h3>📜 运行日志</h3>
+            <div id="activity-stats" class="hint">正在读取…</div>
+            <div class="btn-row" style="margin-top:10px">
+              <button class="btn accent" onclick="openActivityLog()">📜 查看最近日志</button>
+              <button class="btn ghost" onclick="openActivityLog(2000)">📜 查看 2000 行</button>
+            </div>
+            <div class="hint" style="margin-top:8px">
+              接口请求与界面操作逐条留痕，落盘 <code>logs\activity\</code>（滚动 8MB，保留 7 天）。
+              与「操作记录」的区别：这里记操作过程，那里记图库数据的增删改。
+            </div>
+          </div>
+          <div class="card mini">
+            <h3>📋 操作记录</h3>
+            <div class="hint">记录图库/作者的新增、修改、删除（不记浏览），保留最近 3000 条。</div>
+            <div class="btn-row" style="margin-top:8px">
+              <button class="btn ghost op-filter active" data-op="all" onclick="filterOps('all')">全部 <span id="op-cnt-all">0</span></button>
+              <button class="btn ghost op-filter" data-op="add" onclick="filterOps('add')">＋ 新增 <span id="op-cnt-add">0</span></button>
+              <button class="btn ghost op-filter" data-op="update" onclick="filterOps('update')">✎ 修改 <span id="op-cnt-update">0</span></button>
+              <button class="btn ghost op-filter" data-op="delete" onclick="filterOps('delete')">🗑️ 删除 <span id="op-cnt-delete">0</span></button>
+            </div>
+            <div id="op-list" class="op-list"><div class="log-empty">打开本页即自动加载操作记录…</div></div>
+            <div class="btn-row" style="margin-top:8px">
+              <button class="btn ghost" onclick="loadOperations()">🔄 刷新</button>
+              <button class="btn danger" onclick="clearOperations()">🗑️ 清空记录</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>维护</h4>
+        <div class="card-row">
+          <div class="card mini">
+            <h3>🩺 体检与审批</h3>
+            <div id="settings-selfcheck" class="hint">正在读取上次体检结果…</div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="set-selfcheck-btn" class="btn accent" onclick="runSelfCheck()">🩺 体检</button>
+              <button class="btn ghost" onclick="showSelfCheckReport()">📋 查看报告</button>
+            </div>
+            <div class="hint">6 个可单独执行的项目：磁盘对账 / 离线清理 / 作者改名同步 / 补元数据 / 文件整理 / 汇总报告。报告分「可疑项」（可自动修）与「待办项」（需人工确认）。</div>
+          </div>
+          <div class="card mini">
+            <h3>ℹ️ 版本与构建</h3>
+            <div id="settings-version" class="hint">正在读取…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 回到顶部 (初音 Q 版立绘, 滚动后淡入) -->
+<button id="to-top" title="回到顶部" aria-label="回到顶部"></button>
+
+<!-- 🎯 万能刷新 (轻量/定向刷新): 按你上一步的操作决定刷新哪一块, 一步到位反映当前视图真实状态;
+     全库磁盘普查交给「设置 → 🩺 体检」, 刷新只做"行脚医生", 保持毫秒级。
+     样式刻意做成"透明背景 + 细线图标", 平时半透明不抢视线, 悬停才亮起来 -->
+<button id="smart-refresh" title="刷新" aria-label="刷新" data-tip="刷新">
+  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor"
+       stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/>
+    <path d="M20.5 3.5v5.2h-5.2"/>
+  </svg>
+</button>
+
+<!-- ===== 全局弹窗 (图库/作者/统计共用, 必须放在 body 直属, 否则切 tab 后被隐藏的 section 藏住) ===== -->
+<div id="lib-modal" class="modal-mask" style="display:none"
+     onmousedown="window._libModalDownOnMask = (event.target === this)"
+     onclick="if(event.target===this && window._libModalDownOnMask)closeLibModal()">
+  <div class="modal-box">
+    <div class="modal-head"><h3 id="lib-modal-title"></h3><button class="btn ghost" onclick="closeLibModal()">✕</button></div>
+    <div id="lib-modal-body"></div>
+  </div>
+</div>
+
+<!-- 来源管理独立弹窗 (不覆盖编辑弹窗, 从编辑弹窗打开时编辑表单保持原样) -->
+<div id="src-modal" class="modal-mask" style="display:none"
+     onmousedown="window._srcModalDownOnMask = (event.target === this)"
+     onclick="if(event.target===this && window._srcModalDownOnMask)closeSrcModal()">
+  <div class="modal-box modal-lg">
+    <div class="modal-head"><h3 id="src-modal-title"></h3><button class="btn ghost" onclick="closeSrcModal()">✕</button></div>
+    <div id="src-modal-body"></div>
+  </div>
+</div>
+
+<script src="/static/app.js?v=20260929a"></script>
+</body>
+</html>
+
+

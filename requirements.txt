@@ -1,0 +1,17 @@
+# Web 服务 (web/server.py "from flask import Flask") —— 以前漏声明, 别人 clone 下来
+# pip install -r requirements.txt 之后运行会直接 ModuleNotFoundError: No module named 'flask'
+# (开发机 .venv 里恰好装着所以一直没暴露)。冒烟 T7 现在会扫描源码 import 与 requirements 的差集。
+Flask>=3.0,<4
+
+selenium>=4.15,<5
+
+# opencv: 旧版 Python 用 4.x;Python 3.13+ 需 5.0+(cp313/cp314 wheel 从这开始)
+opencv-python>=4.8,<5; python_version < "3.13"
+opencv-python>=5.0; python_version >= "3.13"
+
+# numpy: 旧版 Python 用 1.26~2.1;Python 3.13+ 需 2.3+(支持新解释器的 wheel)
+numpy>=1.26,<2.2; python_version < "3.13"
+numpy>=2.3; python_version >= "3.13"
+
+Pillow>=10.0
+tqdm>=4.65

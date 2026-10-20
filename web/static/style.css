@@ -1,0 +1,1298 @@
+/* Vixiq · Web 版样式 (Fluent 极简风, 配色对齐原 theme.py) */
+:root {
+  --accent: #1976d2;
+  --accent-hover: #1565c0;
+  --success: #2e7d32;
+  --warn: #f9a825;
+  --error: #c62828;
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --text: #1b1f24;
+  --muted: #6b7480;
+  --border: #e3e7ec;
+  --shadow: 0 2px 10px rgba(0,0,0,.06);
+  --radius: 12px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  background: var(--bg); color: var(--text); font-size: 14px;
+  display: flex; flex-direction: column;
+}
+.hidden { display: none !important; }
+
+/* ===== 顶栏 ===== */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 20px; background: var(--panel);
+  border-bottom: 1px solid var(--border); box-shadow: var(--shadow);
+  z-index: 5;
+}
+.brand { font-size: 18px; font-weight: 700; letter-spacing: .5px; white-space: nowrap; }
+.search-wrap { flex: 1; display: flex; gap: 8px; max-width: 720px; margin: 0 auto; }
+.search-wrap input {
+  flex: 1; padding: 9px 14px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 14px; outline: none; transition: border .15s;
+}
+.search-wrap input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(25,118,210,.12); }
+/* 带小叉叉清空的搜索框 (顶栏 / 图库 / 作者管理共用) */
+.search-box { position: relative; display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
+.search-box input { width: 100%; padding-right: 30px; }
+.search-box .input-clear, .combo .input-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 20px; height: 20px; line-height: 1; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--muted);
+  font-size: 13px; cursor: pointer; border-radius: 50%;
+}
+.search-box .input-clear:hover, .combo .input-clear:hover { background: rgba(0,0,0,.08); color: var(--text); }
+.chip {
+  padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  white-space: nowrap;
+}
+.chip.ok   { background: #e7f5ea; color: var(--success); }
+.chip.warn { background: #fdf3e0; color: #b7791f; }
+.chip.err  { background: #fdecea; color: var(--error); }
+.cart-btn { position: relative; }
+.badge {
+  position: absolute; top: -6px; right: -8px; min-width: 18px; height: 18px;
+  background: var(--error); color: #fff; border-radius: 999px;
+  font-size: 11px; line-height: 18px; text-align: center; padding: 0 5px;
+}
+
+/* ===== 按钮 ===== */
+.btn {
+  border: none; border-radius: 8px; padding: 9px 16px; font-size: 14px;
+  cursor: pointer; transition: background .15s, transform .05s; white-space: nowrap;
+}
+.btn:active { transform: scale(.97); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.accent { background: var(--accent); color: #fff; }
+.btn.accent:hover { background: var(--accent-hover); }
+.btn.danger { background: var(--error); color: #fff; }
+.btn.danger:hover { background: #b71c1c; }
+.btn.ghost { background: #eef1f5; color: var(--text); }
+.btn.ghost:hover { background: #e2e7ed; }
+
+/* ===== Tab ===== */
+.tabs {
+  display: flex; gap: 4px; padding: 8px 20px 0; background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  border: none; background: transparent; padding: 10px 18px; font-size: 14px;
+  color: var(--muted); cursor: pointer; border-bottom: 3px solid transparent;
+  border-radius: 8px 8px 0 0;
+}
+.tab:hover { background: #f4f6f8; color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+main { flex: 1; overflow-y: auto; padding: 20px; }
+.tabpage { display: none; }
+.tabpage.active { display: block; }
+
+/* ===== 回到顶部 (初音 Q 版立绘贴纸, 滚动后淡入右下角) ===== */
+#to-top {
+  /* z-index 必须低于弹窗遮罩(.modal-mask=200): 否则这个浮动贴纸会压在弹窗右下角的按钮上,
+     实测会挡住「指定作者」小窗的「取消」按钮中心点 (2026-09-13) */
+  position: fixed; right: 20px; bottom: 24px; z-index: 150;
+  width: 76px; height: 76px; border: none; border-radius: 50%; cursor: pointer;
+  background: url('to-top.png') center/cover no-repeat;
+  filter: drop-shadow(0 5px 14px rgba(0,0,0,.38));
+  opacity: 0; transform: translateY(16px) scale(.85); pointer-events: none;
+  transition: opacity .25s, transform .25s, filter .2s;
+}
+#to-top.show { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+#to-top:hover { filter: drop-shadow(0 8px 20px rgba(0,0,0,.5)) brightness(1.08); transform: translateY(-2px) scale(1.08); }
+#to-top:active { transform: scale(.94); }
+#to-top::after { /* 悬停小标签: 萌萌提示 */
+  content: '回顶部'; position: absolute; right: 84px; top: 50%; transform: translateY(-50%);
+  background: rgba(20,30,28,.85); color: #e8fdfa; font-size: 12px; padding: 4px 10px;
+  border-radius: 999px; white-space: nowrap; opacity: 0; transition: opacity .2s; pointer-events: none;
+}
+#to-top:hover::after { opacity: 1; }
+/* 立绘缺失时的降级态 (公开发布包不带他人作品的派生图, 由 app.js 探测 onerror 后挂 .no-img):
+   纯色圆 + 白色箭头 SVG(data URI, 不依赖字体, 避免缺字变成方框)。 */
+#to-top.no-img {
+  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 19V5M5 12l7-7 7 7'/%3E%3C/svg%3E") center/38px no-repeat;
+}
+
+/* ===== 🗂 作者对账台 (2026-09-17): 左=我库里来源未定的图, 右=TA 在 pixiv 的作品 ===== */
+.rc-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.rc-head .btn { margin-left: auto; }
+.rc-cols { display: grid; grid-template-columns: minmax(230px, 32%) 1fr; gap: 12px; margin-top: 10px; }
+.rc-col { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: #fcfdff; }
+.rc-col-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.rc-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px;
+  max-height: 56vh; overflow-y: auto;
+}
+.rc-item {
+  position: relative;   /* 选中序号角标的定位基准 */
+  border: 2px solid transparent; border-radius: 8px; overflow: hidden; cursor: pointer;
+  background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  transition: border-color .15s, transform .15s, box-shadow .15s;
+}
+/* 选中序号 (① ② ③…): 顺序配对靠它核对"第几张配第几个", 别靠记忆 */
+.rc-item[data-ord]::after {
+  content: attr(data-ord); position: absolute; left: 4px; top: 4px; z-index: 2;
+  min-width: 18px; height: 18px; line-height: 18px; text-align: center; padding: 0 5px;
+  border-radius: 9px; background: var(--accent); color: #fff;
+  font-size: 11px; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.35);
+}
+.rc-item:hover { transform: translateY(-1px); border-color: rgba(53,182,166,.5); }
+.rc-item.on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(53,182,166,.25); }
+.rc-item.inlib { opacity: .5; }
+.rc-item img { display: block; width: 100%; height: 108px; object-fit: cover; background: #f0f2f5; }
+.rc-noimg { height: 108px; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 12px; background: #f0f2f5; }
+.rc-meta { padding: 5px 7px; font-size: 12px; line-height: 1.35; }
+.rc-meta b, .rc-meta .hint { display: block; margin: 0; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+/* 底部操作条: 选择计数 / 配对模式 / 批量认领 / 上次结果 (2026-09-17 多选认领) */
+.rc-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 0 2px; margin-top: 6px; border-bottom: 1px solid var(--border);
+}
+.rc-bar .btn { margin: 0; }
+.rc-bar .hint { margin: 0; }
+.rc-result { flex-basis: 100%; background: #f6fbfa; border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 9px; font-size: 12px; }
+.rc-preview { max-height: 26vh; overflow-y: auto; border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 9px; background: #fafcff; }
+.rc-preview .hint { margin: 0; }
+
+/* ===== 🎯 万能刷新 (轻量/定向刷新, 2026-09-17) =====
+   不知道刷什么时就点它: 按"最近一次改动"决定只刷新哪一块 (作品/作者/图库), 不跑全量自检。
+   样式: 无底色、无阴影的单色细线图标,
+   平时半透明不抢视线, 悬停才亮起来并给一层极淡的圆形底。
+   z-index 与 #to-top 一致(150): 必须低于弹窗遮罩(.modal-mask=200), 否则会压住弹窗右下角按钮。 */
+#smart-refresh {
+  position: fixed; right: 34px; bottom: 34px; z-index: 150;
+  width: 32px; height: 32px; padding: 0; border: none; border-radius: 50%;
+  background: transparent; box-shadow: none; cursor: pointer;
+  color: var(--muted); opacity: .5;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity .2s, color .2s, background .2s, transform .2s, bottom .25s;
+}
+#smart-refresh svg { display: block; }
+/* 「回到顶部」立绘弹出时, 自动上移给它腾位置 (两者是兄弟节点, 用相邻选择器, 无需 JS) */
+#to-top.show ~ #smart-refresh { bottom: 116px; }
+#smart-refresh:hover { opacity: 1; color: var(--accent); background: rgba(53,182,166,.10); }
+#smart-refresh:active { transform: scale(.92); }
+#smart-refresh[disabled] { opacity: .45; cursor: progress; }
+#smart-refresh.spin svg { animation: smartspin .9s linear infinite; }
+@keyframes smartspin { to { transform: rotate(360deg); } }
+/* 有明确目标(刚改过某作品/某作者) → 图标变实色 + 右上角一个小点, 提示"点我会刷这一块" */
+#smart-refresh.has-target { opacity: .8; color: var(--accent); }
+#smart-refresh.has-target::before {
+  content: ''; position: absolute; top: 5px; right: 5px; width: 5px; height: 5px;
+  border-radius: 50%; background: var(--accent);
+}
+#smart-refresh::after {
+  content: attr(data-tip); position: absolute; right: 42px; top: 50%; transform: translateY(-50%);
+  background: rgba(20,30,28,.88); color: #e8fdfa; font-size: 12px; padding: 4px 10px;
+  border-radius: 999px; white-space: nowrap; opacity: 0; transition: opacity .2s; pointer-events: none;
+}
+#smart-refresh:hover::after { opacity: 1; }
+
+/* ===== 面板 ===== */
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 18px; margin-bottom: 18px;
+}
+.panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.panel-head h2 { font-size: 16px; }
+.panel-actions, .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.status-line { color: var(--muted); margin-bottom: 12px; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 12px; line-height: 1.6; }
+.hint code { background: #eef1f5; padding: 1px 5px; border-radius: 4px; }
+
+/* ===== 备份管理: 对比双图 ===== */
+.bk-compare { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin: 10px 0; }
+.bk-side { flex: 1 1 280px; min-width: 240px; text-align: center; }
+.bk-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.bk-img {
+  max-width: 100%; max-height: 62vh; object-fit: contain;
+  border: 1px solid var(--border); border-radius: 8px; background: #000;
+}
+.field-row { display: flex; gap: 8px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+.field-row input, .field-row select {
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px;
+  outline: none; background: #fff;
+}
+.field-row input { flex: 1; min-width: 200px; }
+.field-row input:focus, .field-row select:focus { border-color: var(--accent); }
+
+/* ===== 可搜索下拉 (作者/标签筛选) ===== */
+.combo { position: relative; }
+.combo input {
+  flex: none; min-width: 180px; width: 180px;
+  padding: 8px 12px 8px 12px; padding-right: 30px;   /* 右侧留出清空小叉叉 */
+  border: 1px solid var(--border); border-radius: 8px;
+  font-size: 14px; outline: none; background: #fff; cursor: text;
+}
+.combo input:focus { border-color: var(--accent); }
+.combo-list {
+  display: none; position: absolute; z-index: 50; top: calc(100% + 2px); left: 0;
+  min-width: 100%; max-width: 320px; max-height: 300px; overflow-y: auto;
+  background: #fff; border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 4px 0;
+}
+.combo-list.open { display: block; }
+.combo-item {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 7px 12px; font-size: 14px; cursor: pointer; white-space: nowrap;
+}
+.combo-item:hover, .combo-item.active { background: var(--accent-soft, #eaf3fe); color: var(--accent); }
+.combo-item .c-count { color: var(--muted); font-size: 12px; flex: 0 0 auto; }
+.combo-item .c-label { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.combo-item .c-alias { font-size: 11px; color: var(--muted); font-weight: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combo-item.all { color: var(--muted); }
+.combo-empty { padding: 8px 12px; font-size: 13px; color: var(--muted); }
+/* 编辑弹窗/批量编辑里的关键词提示容器 (combo-list 是 absolute, 需要相对定位父级) */
+.combo-wrap { position: relative; }
+.combo-wrap > input { width: 100%; box-sizing: border-box; }
+
+/* ===== 作者卡 ===== */
+.author-card {
+  display: flex; align-items: center; gap: 16px; padding: 16px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 16px;
+}
+.author-card img.avatar {
+  width: 64px; height: 64px; border-radius: 50%; object-fit: cover;
+  background: #e8ebef; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--border);
+}
+.author-card .a-name { font-size: 17px; font-weight: 700; }
+.author-card .a-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.author-card .a-bio { color: var(--muted); font-size: 13px; margin-top: 6px; max-width: 560px; }
+/* 作者卡右侧动作区: 关注 + 全部作品加入清单 (2026-09-18) */
+.author-card .a-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.author-card .a-actions .btn { white-space: nowrap; }
+
+/* ===== 作者结果里作品列表的翻批栏 (2026-09-18: 「为什么不是全部作品/不能换一批」) ===== */
+.works-pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; margin: 4px 0 10px; padding: 7px 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+}
+.works-pager.wp-bottom { margin: 10px 0 4px; }
+/* 只有一批: 不留翻批按钮, 只给一行作品数 */
+.works-pager.wp-single {
+  background: transparent; border-style: dashed; padding: 4px 10px; margin-bottom: 8px;
+}
+.works-pager .wp-info { font-size: 12px; color: var(--muted); }
+.works-pager .wp-info b { color: var(--text); }
+.works-pager .wp-btns { display: flex; gap: 6px; }
+
+/* 「关键词结果 → 作者详情」顶部的返回条 (2026-09-21): 只有从关键词结果点进来的详情页才有,
+   用强调色左边框区分于普通信息条, 让"能回去"一眼可见 */
+.back-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 10px; padding: 7px 12px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 8px;
+}
+.back-bar .hint { font-size: 12px; }
+
+/* ===== 作品网格 ===== */
+/* 图库结果容器需相对定位, 作为拖拽框选矩形的定位基准 */
+#lib-result { position: relative; }
+.works-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+/* 拖拽框选矩形: 半透明蓝, 跟随鼠标拖动 */
+.lib-boxsel {
+  position: absolute; z-index: 60; pointer-events: none;
+  border: 1.5px solid rgba(25, 118, 210, .75);
+  background: rgba(25, 118, 210, .13);
+  border-radius: 4px;
+  display: none;
+}
+/* 拖动过程中高亮命中卡片 */
+.lib-boxsel-active .work-card.box-hit { outline: 2px solid var(--accent); outline-offset: 1px; }
+.work-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; transition: transform .1s, box-shadow .1s;
+}
+.work-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.1); }
+.work-card .thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; background: #e8ebef; cursor: pointer; }
+/* 安全模式 R18 打码: 缩略图/大图模糊 + 🔞 徽标 */
+.blur-r18 { filter: blur(14px) brightness(.7); }
+.r18-flag {
+  position: absolute; top: 6px; right: 6px; z-index: 5;
+  background: rgba(20,20,28,.72); color: #ffd54f; font-size: 15px;
+  padding: 2px 7px; border-radius: 999px; border: 1px solid rgba(255,213,79,.5);
+  pointer-events: none;
+}
+.work-card { position: relative; }
+.artwork-thumb-wrap { position: relative; }
+.thumb.blur-r18 { filter: blur(14px) brightness(.7); }
+.lightbox-reveal {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+  z-index: 5; padding: 12px 26px; font-size: 15px; border-radius: 999px;
+  border: none; cursor: pointer; color: #fff;
+  background: rgba(80,60,0,.75); box-shadow: 0 4px 20px rgba(0,0,0,.4);
+}
+.lightbox-reveal:hover { background: rgba(110,85,0,.85); }
+.lightbox-img-wrap { position: relative; }
+.work-card .w-body { padding: 10px 12px 12px; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.work-card .w-title { font-size: 13px; font-weight: 600; line-height: 1.35; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 35px; }
+.work-card .w-author { font-size: 12px; color: var(--accent); cursor: pointer; }
+.work-card .w-meta { font-size: 12px; color: var(--muted); }
+.work-card .w-file { font-size: 11px; color: var(--muted); opacity: .85; }
+.work-card .w-tags { display: flex; flex-wrap: wrap; gap: 4px; min-height: 16px; }
+.work-card .tag {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: #eef4fb; color: var(--accent);
+}
+.work-card .w-actions { display: flex; gap: 5px; margin-top: 8px; align-items: stretch; }
+/* 「加入清单」可收缩 (min-width:0 + 省略号), 保证极端窄卡片也不溢出 */
+.work-card .w-actions .btn { flex: 1 1 auto; min-width: 0; padding: 6px 6px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+/* 图标按钮 (编辑/标签/删除): 固定 32px 窄宽度, 彩色 emoji 14px 居中, 总宽受控不挤出卡片 */
+.work-card .w-actions .btn.ghost.icon-btn,
+.work-card .w-actions .btn.danger.icon-btn { flex: 0 0 32px; padding: 6px 0; font-size: 14px; line-height: 1.2; }
+/* 图库作品卡: 4 个图标按钮(👁️✏️🏷️🗑️) **2×2 田字**竖排在右, 主按钮(加入清单/已入库/
+   补下缺失页)占满左侧剩余宽度 —— 旧版 5 个按钮一字排开把主按钮文字挤扁  */
+.work-card .w-actions.has-icons .w-icon-grid {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, 32px);
+  gap: 5px;
+}
+/* 主按钮(直接子元素)跟着 2×2 图标块一起撑满整块高度, 左右两侧等高成一块
+   (字号/字重由下方 .cart-main 统一控制, 此处不再单独设 font-size 以免盖掉它) */
+.work-card .w-actions.has-icons { align-items: stretch; }
+.work-card .w-actions.has-icons .w-icon-grid .btn {
+  flex: none; width: 32px; padding: 5px 0; font-size: 14px; line-height: 1.2;
+}
+/* 👁️ 已处于「仅查看该作品」时按钮高亮 (active 类原本没有样式) */
+.work-card .w-actions .btn.icon-btn.active {
+  background: #e3f0fd; border-color: #9ecbf3; color: var(--accent);
+}
+/* 卡片主操作按钮 (🔎 搜索来源 / ✅ 已入库 / 🧩 补全页数 / ➕ 加入清单 / ⏳ 已在下载列表):
+   加粗加大 + 胶囊圆角, 与右侧田字图标块形成明显主次。
+   选择器用 4 个类(.btn.cart-main)以压过上面的 .work-card .w-actions .btn 基础规则。 */
+.work-card .w-actions .btn.cart-main {
+  font-size: 14px; font-weight: 700; letter-spacing: .3px;
+  border-radius: 999px; padding: 6px 12px;
+}
+
+/* 单作品大卡 (artwork 类型) */
+.artwork-big { display: flex; gap: 18px; flex-wrap: wrap; }
+.artwork-big .thumb { width: 340px; max-width: 100%; aspect-ratio: 1/1; object-fit: cover;
+  border-radius: var(--radius); background: #e8ebef; cursor: zoom-in; }
+/* 大卡里的标签: .w-tags / .tag 的样式原本只写在 .work-card 作用域里 (见上面 350-354 行),
+   而按作品 ID 直查的结果卡用的是 .artwork-big —— 拿不到那条规则, 既没有胶囊外观
+   也没有 gap, 标签全挤成一坨。这里补同款作用域。 */
+.artwork-big .w-tags { display: flex; flex-wrap: wrap; gap: 4px; min-height: 16px; }
+.artwork-big .tag {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: #eef4fb; color: var(--accent);
+}
+
+/* ===== 表格 ===== */
+.table-wrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th, .table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+.table th { color: var(--muted); font-weight: 600; background: #f7f9fb; white-space: nowrap; }
+.table tbody tr:hover { background: #f7f9fb; }
+.cell-progress { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* 图库列表视图 */
+.lib-list .cell-thumb { width: 46px; padding: 4px 6px 4px 10px; }
+.lib-list .cell-thumb .thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px;
+  background: #e8ebef; cursor: pointer; display: block; }
+.lib-list .mono { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+.lib-list .w-title { font-weight: 600; max-width: 320px; }
+.lib-list .w-author { color: var(--accent); cursor: pointer; white-space: nowrap; }
+.lib-list .cell-tags { max-width: 280px; }
+.lib-list .cell-tags .tag {
+  display: inline-block; font-size: 11px; padding: 1px 7px; margin: 1px 3px 1px 0;
+  border-radius: 999px; background: #eef4fb; color: var(--accent);
+}
+.lib-list .cell-ops { white-space: nowrap; }
+
+/* 图库视图切换 */
+.view-toggle { display: inline-flex; gap: 4px; margin-left: auto; }
+.view-toggle .view-btn { padding: 6px 10px; font-size: 12px; }
+.view-toggle .view-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.tag-state { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.tag-state.pending { background: #eef1f5; color: var(--muted); }
+.tag-state.running { background: #e3f0fd; color: var(--accent); }
+.tag-state.done    { background: #e7f5ea; color: var(--success); }
+.tag-state.failed  { background: #fdecea; color: var(--error); }
+.tag-state.ok      { background: #e7f5ea; color: var(--success); }
+
+/* ===== 进度条 ===== */
+.progress-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.progress-bar {
+  flex: 1; height: 8px; background: #e8ebef; border-radius: 999px; overflow: hidden;
+}
+.progress-bar > div {
+  height: 100%; width: 0; background: var(--accent); border-radius: 999px;
+  transition: width .2s;
+}
+#dl-progress-text { font-size: 12px; color: var(--muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+
+/* ===== 图库统计卡 ===== */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.stat-card {
+  background: #f7f9fb; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; text-align: center;
+}
+.stat-card .num { font-size: 26px; font-weight: 700; color: var(--accent); font-family: "Segoe UI"; }
+.stat-card .lbl { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+/* ===== 📊 统计页: 分布条形 + 画师明细 ===== */
+.stats-sec { margin: 18px 0 10px; font-size: 14px; color: var(--fg); border-left: 3px solid var(--accent); padding-left: 8px; }
+.stats-bars { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #fbfcfe; }
+.bar-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.bar-label { flex: 0 0 110px; text-align: right; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-track { flex: 1 1 auto; height: 14px; background: #eef1f5; border-radius: 999px; overflow: hidden; min-width: 0; }
+.bar-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
+.bar-num { flex: 0 0 auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+/* 作者存续状态徽标: 作者管理页 + 图库卡片/列表 (2026-09-19 起图库卡片也显示)。
+   图库这边以前拿不到 authors.status, 所以卡片上从来没有这个标签 —— 不是被改掉的。
+   这里补一层基础胶囊样式: 列表视图的 td 里没有 .work-card .tag 那条规则可用。 */
+.tag.auth-status {
+  display: inline-block; font-size: 11px; line-height: 1.7;
+  padding: 1px 7px; border-radius: 999px; white-space: nowrap; vertical-align: middle;
+}
+.work-card .w-author .tag.auth-status { margin-left: 5px; }
+.tag.auth-status.alive { background: #e8f8ee; color: #1e8449; border: 1px solid #bfe8cf; }
+.tag.auth-status.gone { background: #f0f0f0; color: #7f8c8d; border: 1px solid #dcdcdc; }
+#stats-authors .w-author { cursor: pointer; }
+#stats-authors .c-alias { font-size: 11px; color: var(--muted); }
+
+/* ===== 设置卡 ===== */
+/* 两列卡片。必须写 minmax(0,1fr) 而不是 1fr —— 1fr = minmax(auto,1fr), 列宽下限是
+   内容的 min-content: 操作记录里一条超长的「动作/详情」就能把整列撑到远超 50%,
+   把同一行的「体检与审批」挤到很右边很离谱的位置。 */
+.card-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 900px) { .card-row { grid-template-columns: minmax(0, 1fr); } }
+.card-row > .card.mini { min-width: 0; }   /* 同上: 网格项默认 min-width:auto 也会顶破列宽 */
+.card.mini { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+.card.mini h3 { font-size: 14px; margin-bottom: 10px; }
+/* 分组标题 : 每类一张小标题 + 一组卡片, 卡片行的
+   行间距交给 .set-group, 免得每行都手写 margin-top 还各写各的。 */
+.set-group { margin-bottom: 20px; }
+.set-group:last-child { margin-bottom: 0; }
+.set-group > h4 {
+  font-size: 12px; font-weight: 700; letter-spacing: .08em;
+  color: var(--muted); margin: 0 0 8px;
+}
+.log-panel {
+  height: 260px; overflow-y: auto; background: #12161c; color: #d8e0ea;
+  border-radius: 8px; padding: 10px; font-family: Consolas, "Courier New", monospace;
+  font-size: 12px; line-height: 1.6;
+}
+.log-panel .log-empty { color: #5a6570; }
+.log-panel .warn { color: #f9a825; }
+.log-panel .error { color: #ff8a80; }
+
+/* ===== 设置页 · 操作记录 (审计) ===== */
+.op-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.op-list {
+  height: 260px; overflow: auto; background: #f7f9fb; border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px; font-size: 12px; margin-top: 8px;
+}
+.op-list .log-empty { color: #8a949e; padding: 6px; }
+.op-item {
+  display: flex; align-items: baseline; gap: 8px; padding: 5px 6px;
+  border-bottom: 1px dashed #e6ebf0; line-height: 1.5;
+  flex-wrap: wrap;      /* 徽标/时间/动作/详情 太宽时换行, 不再把整列顶宽 (2026-09-18) */
+}
+.op-item:last-child { border-bottom: none; }
+.op-badge {
+  flex: none; font-size: 11px; padding: 1px 7px; border-radius: 10px;
+  background: #eef1f5; color: var(--text); white-space: nowrap;
+}
+.op-badge.add { background: #e6f7ee; color: #1e8e4e; }
+.op-badge.upd { background: #e8f1fd; color: #1a68c8; }
+.op-badge.del { background: #fdecea; color: #c0392b; }
+.op-time { flex: none; color: #8a949e; font-family: Consolas, "Courier New", monospace; }
+.op-act { flex: none; color: var(--text); font-weight: 600; }
+.op-detail {
+  flex: 1 1 auto; min-width: 0;
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.op-ids { flex: none; display: inline-flex; gap: 4px; flex-wrap: wrap; }
+
+/* 内部主键小灰字标签 (ext_xxx / merged_xxx): 不抢眼, 但可点去找该作品 */
+.id-chip {
+  display: inline-block; font-family: Consolas, "Courier New", monospace; font-size: 11px;
+  padding: 1px 6px; border-radius: 8px; background: #eef1f5; color: #7b8794;
+  cursor: pointer; white-space: nowrap;
+}
+.id-chip:hover { background: #dfe6ee; color: #445; }
+
+/* ===== 自检审批窗口 · 可疑项逐条处理按钮 ===== */
+.health-list li .sus-acts {
+  margin-left: 8px; display: inline-flex; align-items: center; gap: 6px; vertical-align: middle;
+}
+.health-list li .sus-acts .btn { padding: 2px 8px; font-size: 11px; }
+
+/* ===== 消息提示 ===== */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: #32383f; color: #fff; padding: 10px 20px; border-radius: 8px;
+  font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.25); z-index: 99;
+  opacity: 0; transition: opacity .25s; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.toast.err { background: var(--error); }
+.toast.ok { background: var(--success); }
+/* info: 中性信息 (已在库/已在下载列表) —— 与「成功新增并开始下载」的绿色区分开 */
+.toast.info { background: var(--accent-hover); }
+
+/* ===== 大图预览 (Lightbox) ===== */
+.lightbox {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+}
+.lightbox-bg {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.85);
+  /* 刻意不用 backdrop-filter: 该模糊合成成本极高, 大图显示时任何合成器变动
+     都会触发整层重光栅 → 撕裂横条/闪烁 */
+}
+.lightbox-wrap {
+  position: relative; z-index: 1;
+  max-width: 92vw; max-height: 94vh;
+  display: flex; flex-direction: column; align-items: center;
+  /* 无开场动画: 半透明叠加半绘制的大图正是「割裂横条」的来源, 让内容一次性全不透明出现 */
+}
+.lightbox-close {
+  position: absolute; top: -40px; right: 0;
+  width: 36px; height: 36px; border: none; border-radius: 50%;
+  background: rgba(255,255,255,.15); color: #fff;
+  font-size: 20px; cursor: pointer; display: flex;
+  align-items: center; justify-content: center;
+  transition: background .15s;
+}
+.lightbox-close:hover { background: rgba(255,255,255,.3); }
+.lightbox-img-wrap {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  max-width: 92vw; max-height: 85vh;
+  /* 尺寸由 JS 按图片自然比例显式设定 (叠层 absolute 不撑开父容器),
+     保证缩略图/原图/翻页换层时容器零变化 → 无布局跳变、无闪烁 */
+  min-width: 30vw; min-height: 40vh;
+}
+/* 双叠层: 新图永远先在「隐藏层」加载+解码完成, 才瞬时切换可见性(无透明度过渡,
+   避免半透明叠加半绘制大图 = 撕裂); translateZ(0) 把每层固定为独立合成层,
+   兄弟元素(按钮 hover 等)重绘不再连累大图重新光栅化。 */
+.lightbox-img.lb-layer {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; border-radius: 8px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.5);
+  opacity: 0; transform: translateZ(0);
+  will-change: transform;
+}
+.lightbox-img.lb-layer.show { opacity: 1; }
+/* 图未就绪时的加载微光 (图渲染后由 .lightbox-img 盖住) */
+.lb-spinner {
+  position: absolute; width: 44px; height: 44px;
+  border: 3px solid rgba(255,255,255,.22);
+  border-top-color: #7fe9dd; border-radius: 50%;
+  animation: lb-spin .8s linear infinite;
+  pointer-events: none;
+}
+@keyframes lb-spin { to { transform: rotate(360deg); } }
+.lightbox-info {
+  display: flex; gap: 16px; padding: 12px 0 0;
+  color: #ccc; font-size: 13px; max-width: 100%;
+}
+.lightbox-info .lb-title { font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lightbox-info .lb-meta { color: #aaa; white-space: nowrap; }
+/* 尺寸/大小、页码 是翻页时唯一会变的文字: 固定最小宽度 + 等宽数字, 位数变化
+   ("9 / 12"→"10 / 12"、"750 KB"→"1.4 MB") 不再把整行文字一起推来推去
+。 */
+.lightbox-info .lb-file { color: #aaa; white-space: nowrap;
+  min-width: 18ch; font-variant-numeric: tabular-nums; }
+.lightbox-info .lb-nav { color: #8fd8d0; font-weight: 600; white-space: nowrap;
+  min-width: 7ch; text-align: right; font-variant-numeric: tabular-nums; }
+/* Lightbox 左右翻页按钮: 固定在视口左右两端, 不随图片大小移动
+。
+   原来是 absolute + left/right:-64px, 定位基准是 .lightbox-wrap —— 而它的宽度由
+   最宽的子元素决定, 也就是 JS 按图片比例设定的 .lightbox-img-wrap, 于是竖图把两个
+   按钮拽向中间、宽图又推到很外面。改成 fixed 后锚在视口边缘, 与图片尺寸无关。 */
+.lightbox-prev, .lightbox-next {
+  position: fixed; top: 50%; transform: translateY(-50%);
+  z-index: 2; width: 44px; height: 44px; border: none; border-radius: 50%;
+  background: rgba(20,40,38,.55); color: #e8fdfa;
+  font-size: 26px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s;
+}
+.lightbox-prev { left: 24px; }
+.lightbox-next { right: 24px; }
+/* hover 只换背景色, 不做 transform 动画 —— transform 变化会重建合成层,
+   触发相邻大图重新光栅化 → 闪烁 */
+.lightbox-prev:hover, .lightbox-next:hover { background: rgba(20,60,56,.85); }
+@media (max-width: 900px) { .lightbox-prev { left: 8px; } .lightbox-next { right: 8px; } }
+/* 右下角「上个作品 / 下个作品」按钮组: 跨卡片浏览入口。
+   fixed 锚在视口右下角, 与图片尺寸无关 (和上面左右翻页按钮同一个理由);
+   z-index 高于翻页按钮, 但仍在弹窗内部, 不会被大图盖住。
+   两个按钮一组: 只给「下一个」的话想回头只能从头绕一圈。 */
+.lightbox-nav-items {
+  position: fixed; right: 24px; bottom: 24px; z-index: 3;
+  display: flex; gap: 8px; align-items: center;
+}
+.lightbox-nav-items button {
+  padding: 9px 18px; border: 1px solid rgba(143,216,208,.45); border-radius: 999px;
+  background: rgba(20,40,38,.72); color: #e8fdfa;
+  font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: background .15s, border-color .15s;
+}
+.lightbox-nav-items button:hover { background: rgba(20,70,64,.9); border-color: #8fd8d0; }
+@media (max-width: 900px) {
+  .lightbox-nav-items { right: 8px; bottom: 12px; gap: 6px; }
+  .lightbox-nav-items button { padding: 7px 13px; font-size: 12px; }
+}
+/* Lightbox 内「↔ 调整页序」入口按钮 + 底部页序条 */
+.lb-reorder-btn {
+  border: 1px solid rgba(143,216,208,.5); background: rgba(20,60,56,.35);
+  color: #bdeee7; border-radius: 7px; padding: 2px 10px; font-size: 12px;
+  cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s;
+}
+.lb-reorder-btn:hover { background: rgba(20,80,74,.7); border-color: #8fd8d0; }
+.lb-strip {
+  width: 92vw; margin-top: 12px; padding: 10px 12px;
+  background: rgba(18,30,29,.92); border: 1px solid rgba(143,216,208,.25);
+  border-radius: 10px; display: flex; flex-direction: column; gap: 8px;
+}
+.lb-strip.hidden { display: none; }
+.lb-strip-hint { color: #9fcac4; font-size: 12px; }
+.lb-strip-list {
+  display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px;
+}
+.lb-strip-list.busy { opacity: .55; pointer-events: none; }
+.lb-strip-item {
+  flex: 0 0 auto; width: 108px; display: flex; flex-direction: column;
+  align-items: center; gap: 4px; padding: 6px;
+  border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: rgba(255,255,255,.04);
+}
+.lb-strip-item.cur { border-color: #8fd8d0; box-shadow: 0 0 0 1px #8fd8d0 inset; }
+/* 换序后闪一下刚动过的格子: 页序条上的「第 N 张 · pM」是按位置生成的, 换完文字一个字都不变
+   (页码又被压实成 0..n-1), 不闪用户会以为那个按钮只是"左右翻页"  */
+.lb-strip-item.flash {
+  outline: 2px solid #ffd166; outline-offset: 2px;
+  animation: stripFlash 1.2s ease-out 1;
+}
+@keyframes stripFlash {
+  0% { background: rgba(255,209,102,.4); }
+  100% { background: rgba(255,255,255,.04); }
+}
+.lb-strip-thumb {
+  width: 96px; height: 96px; object-fit: cover; border-radius: 6px;
+  background: rgba(255,255,255,.08);
+}
+.lb-strip-meta { color: #cfe9e5; font-size: 11px; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
+.lb-strip-tag { color: #20302e; background: #ffd166; border-radius: 4px; padding: 0 4px; font-size: 10px; }
+.lb-strip-ops { display: flex; gap: 6px; }
+.lb-strip-ops button {
+  width: 34px; height: 24px; border: none; border-radius: 6px; cursor: pointer;
+  background: rgba(143,216,208,.2); color: #d8f7f2; font-size: 12px;
+}
+.lb-strip-ops button:hover:not(:disabled) { background: rgba(143,216,208,.45); }
+.lb-strip-ops button:disabled { opacity: .3; cursor: default; }
+/* 「↳ 填 pN」: 把附加页填进空位 (比 ◀▶ 宽, 用暖色以示"这是会改页号的动作") */
+.lb-strip-ops button[data-act="fill"] {
+  width: auto; padding: 0 8px;
+  background: rgba(255,209,102,.22); color: #ffe6a8;
+}
+.lb-strip-ops button[data-act="fill"]:hover { background: rgba(255,209,102,.45); }
+/* 页序条里的「空位」提示: 原网页该有、本地却缺的那一页 (被删了/还没补) */
+.lb-strip-gap {
+  flex: 0 0 auto; align-self: center; padding: 8px 12px; border-radius: 8px;
+  border: 1px dashed rgba(255,209,102,.45); color: #e8c777; font-size: 12px;
+  background: rgba(255,209,102,.06); white-space: nowrap;
+}
+.lb-strip-done {
+  align-self: flex-end; border: none; border-radius: 7px; padding: 5px 18px;
+  background: #2f8f83; color: #fff; font-size: 13px; cursor: pointer;
+}
+.lb-strip-done:hover { background: #27756b; }
+/* 作品卡片「原 N 页 · 库内哪几张」行 */
+.work-card .w-pages { font-size: 11px; color: var(--accent, #26a69a); line-height: 1.4; }
+.lib-list td .w-pages { font-size: 12px; color: var(--muted); }
+.lib-list td.cell-file { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* ===== 图库管理: 筛选栏 + 批量操作 ===== */
+.lib-filters select { max-width: 150px; }
+.lib-filters { align-items: center; gap: 6px 8px; }
+/* 操作行: 条数靠左 + 状态筛选/批量按钮靠右, 与筛选控件分行; 窄窗口允许换行 */
+.lib-ops-row { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin-top: 6px; }
+/* 批量按钮组: 靠右。三个状态筛选(缺元数据/缺失文件/已失效)也挂在这一组最左边 ——
+   以前它们挤在筛选行末尾, 那行控件太多被顶到下一行(用户 2026-09-20 报)。
+   flex-wrap: 组内按钮多, 窄窗口整组会溢出, 允许内部换行并保持右对齐。 */
+.lib-batch-group { display: flex; align-items: center; gap: 6px; margin-left: auto;
+  flex-wrap: wrap; justify-content: flex-end; }
+/* 筛选行按钮统一压紧, 避免控件过多被挤到下一行/孤立换行 */
+.lib-filters .btn { padding: 7px 10px; font-size: 13px; flex: 0 0 auto; }
+.lib-filters .btn.icon-toggle { padding: 7px 8px; }
+.lib-filters .combo input { min-width: 150px; }
+.lib-filters .lib-check {
+  display: inline-flex; align-items: center;
+  padding: 6px 12px 6px 10px;
+  border: 1px solid var(--border); background: #fff;
+  border-radius: 8px;
+  font-size: 13px; color: var(--text); cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.lib-filters .lib-check:hover { border-color: var(--accent); background: #f0f6fd; }
+.lib-filters .lib-check input[type="checkbox"] {
+  width: 16px; height: 16px; margin: 0 6px 0 0; padding: 0;
+  accent-color: var(--accent); flex-shrink: 0;
+  cursor: pointer;
+}
+.lib-filters .lib-spacer { flex: 1; min-width: 8px; }
+/* 「共 N 条 · 第 x/y 页」: 操作行左端, 行内垂直居中 */
+#lib-total { margin: 0; align-self: center; white-space: nowrap; }
+
+/* 卡片复选框 (网格/列表通用) */
+.card-sel { position: absolute; top: 8px; left: 8px; z-index: 5; background: rgba(255,255,255,.85);
+  border-radius: 6px; padding: 2px; box-shadow: 0 1px 4px rgba(0,0,0,.15); line-height: 1; }
+.card-sel input { width: 16px; height: 16px; cursor: pointer; margin: 0; }
+.work-card { position: relative; }
+.lib-list .cell-thumb { position: relative; }
+.lib-list .cell-thumb .card-sel { position: absolute; top: 4px; left: 4px; }
+
+/* ===== 图库管理: 弹窗 ===== */
+.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 200;
+  display: flex; align-items: center; justify-content: center; }
+.modal-box { background: #fff; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,.3);
+  width: min(440px, 92vw); max-height: 82vh; overflow-y: auto; padding: 18px; }
+/* 大号弹窗: 一键整理预览 / 来源管理等表格类内容用 */
+.modal-box.modal-lg { width: min(900px, 94vw); max-height: 90vh; }
+.modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.modal-head h3 { font-size: 15px; }
+.modal-field { margin-bottom: 12px; }
+.modal-field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.modal-field input, .modal-field select {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+  font-size: 14px; outline: none; box-sizing: border-box;
+}
+.modal-field input:focus, .modal-field select:focus { border-color: var(--accent); }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+/* 批量编辑弹窗: 每字段勾选行 */
+.be-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.be-row > label { flex: none; display: flex; align-items: center; gap: 6px; font-size: 14px; min-width: 96px; }
+.be-row input[type="text"], .be-row select {
+  flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+  font-size: 14px; outline: none; box-sizing: border-box;
+}
+.be-row .be-ctl:disabled { background: #f5f6f8; color: var(--muted); cursor: not-allowed; }
+.be-row.be-col { flex-direction: column; align-items: stretch; }
+.be-row.be-col > label { min-width: 0; margin-bottom: 6px; }
+.be-tagmode { display: flex; gap: 16px; margin-top: 6px; font-size: 13px; color: var(--muted); }
+.be-tagmode label { display: flex; align-items: center; gap: 4px; }
+
+/* 标签编辑器 */
+.tag-editor { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; min-height: 28px; }
+.tag.big { display: inline-flex; align-items: center; gap: 4px; font-size: 13px;
+  padding: 3px 6px 3px 10px; border-radius: 999px; background: #eef4fb; color: var(--accent); }
+.tag.big .tag-x { border: none; background: transparent; color: #8892a0; cursor: pointer;
+  font-size: 11px; padding: 0 2px; line-height: 1; }
+.tag.big .tag-x:hover { color: var(--error); }
+
+/* ===== 查询: 作品/作者 双子页 ===== */
+.search-subtabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.sstab { padding: 7px 16px; font-size: 13px; border: 1px solid var(--border);
+  border-radius: 999px; background: #fff; color: var(--text); cursor: pointer;
+  transition: all .15s; }
+.sstab:hover { border-color: var(--accent); color: var(--accent); }
+.sstab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ===== 下载任务独立页 ===== */
+.task-filters { display: inline-flex; gap: 6px; }
+.filter-btn { padding: 5px 12px; font-size: 12px; border-radius: 999px; }
+.filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.th-thumb { width: 46px; }
+#cart-table td { vertical-align: middle; }
+#cart-table .cell-thumb { width: 46px; padding: 4px 6px 4px 8px; }
+.thumb-sm { width: 36px; height: 36px; object-fit: cover; border-radius: 6px;
+  background: #e8ebef; display: inline-block; }
+.thumb-sm.placeholder { display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; color: #9aa4b2; background: #eef1f5; }
+/* 文件缺失缩略图占位: 明确提示「哪张图缺失」, 而不是空白 */
+.thumb-missing { display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; background: #f4f1ec; color: #c0392b; border: 1px dashed #d6b8b0;
+  font-size: 13px; font-weight: 700; }
+.thumb-missing span { font-size: 11px; font-weight: 500; color: #a5837b; }
+.work-card .thumb-missing { width: 100%; aspect-ratio: 1/1; }
+.lib-list .cell-thumb .thumb-missing { width: 40px; height: 40px; border-radius: 6px; }
+#cart-table .cell-ops { white-space: nowrap; text-align: right; }
+#cart-table .mono { font-size: 12px; color: var(--muted); }
+/* 进度列固定列宽 + 等宽数字: 让「45% (3/7)…」这类实时文本位数变化时不拖动列宽,
+   避免 auto 表格布局因内容宽度变化整表重排抖动 */
+#cart-table .cell-progress {
+  width: 150px; min-width: 150px; max-width: 150px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted);
+}
+/* 运行中那一栏的「进行中…」也是动态控件, 给状态列一个稳定最小宽度防止微抖 */
+#cart-table .cell-status { min-width: 84px; white-space: nowrap; }
+
+/* ===== 图库 ↔ 磁盘对账: 缺失/空目录/损坏 健康条 ===== */
+.health-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; margin: 6px 0 10px; border: 1px solid var(--border);
+  border-radius: 10px; background: #fbfcfe; font-size: 13px; }
+.health-row .lib-sync-line { color: var(--muted); margin-right: 4px; }
+.health-badge { display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+.health-badge.miss { background: #fdecea; color: #c0392b; border: 1px solid #f5c6c0; }
+
+/* ===== 图库分页栏 (顶部/底部): 首页/上一页/页码输入/下一页/尾页 ===== */
+.lib-pager { display: flex; justify-content: center; padding: 8px 0 10px; }
+.lib-pager:not(:empty) { border-top: 1px solid var(--border); margin-top: 8px; }
+#lib-pager-bottom:not(:empty) { border-top: none; margin-top: 0; }
+.pager-inner { display: flex; align-items: center; gap: 6px; }
+.pager-inner .btn { padding: 4px 10px; font-size: 14px; line-height: 1; }
+.pager-inner .btn:disabled { opacity: .4; cursor: not-allowed; }
+.pager-info { display: inline-flex; align-items: center; gap: 4px;
+  font-size: 13px; color: var(--muted); padding: 0 4px; }
+.pager-info .lib-page-input { width: 52px; padding: 3px 6px; text-align: center;
+  font-size: 13px; border: 1px solid var(--border); border-radius: 6px; }
+.pager-info .lib-page-input:focus { outline: none; border-color: var(--accent); }
+.health-badge.empty { background: #fff7e0; color: #b98a00; border: 1px solid #f2dc9a; }
+.health-badge.bad { background: #f6ecfb; color: #8e44ad; border: 1px solid #e2c5f2; }
+.health-row .btn { padding: 3px 10px; font-size: 12px; }
+
+/* 图库卡片/列表: 缺失文件高亮 */
+.work-card.is-missing { border-color: var(--error); box-shadow: 0 0 0 1px var(--error) inset; }
+.table.lib-list tr.is-missing { background: #fdf6f6; }
+
+/* 下载任务表: 任务名/作者分列, 防挤 */
+#cart-table .task-title { max-width: 260px; white-space: normal; word-break: break-all; line-height: 1.35; }
+#cart-table .task-author { max-width: 130px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 反搜页: 待反搜/结果缩略图网格 */
+.rev-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin: 10px 0; }
+.rev-cell { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; display: flex; flex-direction: column; }
+.rev-cell img { width: 100%; height: 120px; object-fit: cover; display: block; background: #f0f2f5; }
+.rev-cell .rev-cap { padding: 6px 8px; font-size: 12px; line-height: 1.3; }
+.rev-cell .rev-cap .rev-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.rev-cell.ok { border-color: #b7dfc0; }
+.rev-cell.ok .rev-cap { color: var(--success); }
+.rev-cell.fail { border-color: #f5c6c0; }
+.rev-cell.fail .rev-cap { color: var(--error); }
+.rev-section-title { font-size: 14px; font-weight: 600; margin: 14px 0 4px; }
+.rev-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+.rev-cap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rev-sub { padding: 0 8px 6px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rev-sub.err { color: var(--error); }
+.rev-noimg { height: 120px; display: flex; align-items: center; justify-content: center; font-size: 32px; background: #f0f2f5; color: #c3c9d1; }
+.rev-pick-label { position: absolute; margin: 6px; padding: 2px 8px; background: rgba(255,255,255,.92); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; cursor: pointer; user-select: none; }
+.rev-cell { position: relative; }
+/* 反搜收件箱里的单格操作: 「📥 入库」「🗑️ 丢弃」—— 识别不出来的图的出路 (2026-09-18) */
+.rev-cell-ops { display: flex; gap: 6px; padding: 0 8px 8px; }
+.rev-cell-ops .btn.mini { flex: 1; padding: 4px 6px; font-size: 12px; }
+/* 「未找到」= 上次反搜没命中、被挪进 not_found/ 的图: 用暖色描边 + 角标让它跳出来, 
+   否则用户不知道这些图为什么还在 (以前它们直接从列表里消失, 更糟) */
+.rev-cell.is-nf { border-color: #e6c07b; background: #fffdf6; }
+.rev-cell .rev-nf {
+  position: absolute; top: 6px; right: 6px; background: #b8860b; color: #fff;
+  font-size: 11px; padding: 1px 6px; border-radius: 999px;
+}
+.rev-check-all { font-size: 13px; font-weight: 400; margin-left: 10px; cursor: pointer; user-select: none; }
+.ok-text { color: var(--success); }
+.err-text { color: var(--error); }
+.warn-text { color: #b26a00; }
+.muted { color: var(--muted); font-weight: 400; }
+/* 作者管理表内图标按钮 + 详情链接 */
+.table .btn.icon-btn { padding: 4px 7px; min-width: 30px; font-size: 13px; }
+.auth-links a { color: var(--accent); text-decoration: none; margin-right: 10px; white-space: nowrap; }
+.auth-links a:hover { text-decoration: underline; }
+/* 反搜信任级别徽标 */
+.rev-sub.trust-hash { color: var(--success); font-weight: 600; }
+.rev-sub.trust-ok { color: var(--success); }
+.rev-sub.trust-warn { color: #b26a00; }
+.rev-cell.conflict { border-color: #f0c987; background: #fffaf0; }
+
+/* ===== 反搜批次队列可视化 (进度条 + 批次卡片) ===== */
+.rev-progress { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 10px; background: #fafbfc; }
+.rev-batches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.rq-batch { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+  background: #fff; min-width: 90px; }
+.rq-batch.done { border-color: #b7dfc0; }
+.rq-batch.now { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.rq-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; white-space: nowrap; }
+.rq-dots { display: flex; flex-wrap: wrap; gap: 3px; }
+.rq-dot { width: 10px; height: 10px; border-radius: 3px; background: #e8ebef; }
+.rq-dot.ok { background: #52c41a; }
+.rq-dot.now { background: var(--accent); animation: rq-blink 1s infinite; }
+@keyframes rq-blink { 50% { opacity: .4; } }
+
+/* ===== 🧹 壁纸副本清理弹窗 (2026-09-24) ===== */
+.dupe-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.dupe-table th, .dupe-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.dupe-table th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+.dupe-table td:first-child { text-align: center; }
+.dupe-name { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dupe-title { font-size: 12px; }
+
+/* ===== 一键整理预览弹窗 ===== */
+.tidy-table-wrap { max-height: 58vh; overflow: auto; margin: 8px 0; border: 1px solid var(--border); border-radius: 10px; }
+.tidy-table-wrap table { margin: 0; }
+.tidy-table-wrap td { vertical-align: top; }
+.tidy-from, .tidy-to { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
+.btn.mini { padding: 3px 8px; font-size: 11px; margin: 0 8px 6px; }
+/* 逐项勾选 + 打开位置 */
+.tidy-chk-cell { width: 30px; text-align: center; vertical-align: middle; }
+.tidy-chk-cell input { cursor: pointer; }
+.tidy-from { display: flex; align-items: center; gap: 6px; }
+.tidy-path-text { overflow: hidden; text-overflow: ellipsis; }
+.tidy-open {
+  flex: 0 0 auto; border: 1px solid var(--border); background: var(--bg2);
+  border-radius: 6px; padding: 1px 6px; cursor: pointer; font-size: 12px; line-height: 1.5;
+}
+.tidy-open:hover { background: var(--accent); color: #fff; }
+.tidy-selall-label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; margin-right: auto; }
+/* 顶部计数摘要 + 「❔ 说明」折叠面板 */
+.tidy-sum { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.help-toggle {
+  flex: 0 0 auto; margin-right: 8px; padding: 2px 10px; font-size: 12px;
+  border: 1px solid var(--border); background: #fff; color: var(--accent);
+  border-radius: 999px; cursor: pointer;
+}
+.help-toggle:hover { background: #eaf3fe; }
+.tidy-help {
+  margin: 8px 0 10px; padding: 10px 14px; font-size: 13px; line-height: 1.65;
+  background: #f7f9fc; border: 1px solid var(--border); border-radius: 10px;
+}
+.tidy-help ul { margin: 4px 0 0; padding-left: 20px; }
+.tidy-help ul ul { margin: 2px 0 0; padding-left: 18px; }
+.tidy-help li { margin: 3px 0; }
+.tidy-help .doc-title { font-weight: 600; }
+.tidy-help .doc-note { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.tidy-help code { background: #eef1f5; padding: 1px 5px; border-radius: 4px; }
+/* 「待确认 · 作者归属存疑」行内的逐条处理按钮 */
+.tidy-claim { display: flex; gap: 6px; margin-top: 6px; }
+.tidy-claim .btn.mini { margin: 0; }
+
+/* ===== 顶栏: 账户头像按钮 + 下拉菜单 ===== */
+.account-wrap { position: relative; display: flex; align-items: center; gap: 8px; }
+.account-btn {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 12px 5px 6px; border: 1px solid var(--border); border-radius: 999px;
+  background: #fff; cursor: pointer; font-size: 13px; color: var(--text);
+  transition: border-color .15s, box-shadow .15s;
+}
+.account-btn:hover { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(25,118,210,.10); }
+.account-avatar {
+  width: 28px; height: 28px; border-radius: 50%; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 15px;
+  background: #eef1f5;
+}
+.account-avatar.ok  { background: #e7f5ea; }
+.account-avatar.off { background: #fdf3e0; }
+.account-caret { color: var(--muted); font-size: 11px; }
+
+/* 顶栏退出按钮: 圆形图标, 与 account-btn 同体系, hover 微转红色提示破坏性 */
+.quit-btn {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 1px solid var(--border); background: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; color: #5f6b7a; /* 图标用中性色, 比纯黑更配浅色栏 */
+  transition: border-color .15s, color .15s, box-shadow .15s, background .15s, transform .1s;
+}
+.quit-btn:hover {
+  border-color: var(--error); color: var(--error);
+  box-shadow: 0 0 0 3px rgba(220, 53, 69, .12);
+  background: #fff7f7;
+}
+.quit-icon { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+.quit-btn:active { transform: scale(.92); }
+.account-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; min-width: 220px;
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(20,30,50,.16); padding: 6px; z-index: 1000;
+}
+.account-menu .menu-item {
+  display: block; width: 100%; text-align: left; padding: 9px 12px;
+  border: none; background: none; border-radius: 8px; font-size: 13px;
+  cursor: pointer; color: var(--text); white-space: nowrap;
+}
+.account-menu .menu-item:hover:not(.disabled) { background: #f0f4fa; }
+.account-menu .menu-item.accent { color: var(--accent); font-weight: 600; }
+.account-menu .menu-item.danger { color: var(--error); }
+.account-menu .menu-item.disabled {
+  color: var(--muted); cursor: default; font-size: 12px;
+  display: flex; align-items: center; gap: 7px;
+}
+.account-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.account-dot.ok { background: var(--success); }
+.account-dot.off { background: #d9a441; }
+/* 顶栏头像里嵌真实头像图时裁成圆形 */
+.account-avatar img, .ac-avatar img {
+  width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block;
+}
+
+/* ===== 设置页账户卡片 ===== */
+.account-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px; border: 1px solid var(--border); border-radius: 12px;
+  background: linear-gradient(135deg, #f7faff 0%, #eef4fb 100%);
+  margin-bottom: 12px;
+}
+.ac-avatar {
+  width: 56px; height: 56px; flex: 0 0 56px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 28px; background: #eef1f5; border: 2px solid #fff;
+  box-shadow: 0 2px 8px rgba(20,30,50,.12); overflow: hidden;
+}
+.ac-avatar.ok  { background: #e7f5ea; }
+.ac-avatar.off { background: #fdf3e0; }
+.ac-info { min-width: 0; }
+.ac-name { font-size: 16px; font-weight: 700; color: var(--text); }
+.ac-status { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+/* ===== 自检报告分组 ===== */
+.health-group {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; margin: 10px 0; background: #fcfdff;
+}
+.health-group-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.health-group .health-list { max-height: 220px; overflow-y: auto; margin-bottom: 6px; }
+
+/* ===== 🩺 体检面板 (2026-09-16): 每项单独运行 + x/y 详细进度 ===== */
+/* 大号弹窗里单列会把行拉得又长又空 (标题和「▶ 运行」之间空半屏) → 宽屏自动排两列,
+   窄屏 (每列放不下 ~340px) 自动退回单列, 不用媒体查询 */
+.chk-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 8px; margin: 10px 0;
+}
+.chk-item {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 12px; background: #fcfdff;
+}
+.chk-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.chk-head b { font-size: 13.5px; }
+.chk-head .btn { padding: 3px 10px; font-size: 12px; }
+.chk-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.chk-last { font-size: 12px; margin-top: 4px; word-break: break-all; }
+.chk-ok { color: #1e8e3e; }
+.chk-err { color: var(--error); }
+.check-progress { margin: 8px 0; font-size: 12.5px; color: var(--text); }
+.check-bar {
+  height: 6px; border-radius: 999px; background: #e8edf3;
+  overflow: hidden; margin-top: 4px;
+}
+.check-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px;
+  transition: width .4s; }
+
+/* ===== 作者「来源链接」编辑行 (可多条, 2026-09-16): 输入框 + 站点/账号标签 + 删除 ===== */
+.auth-url-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+}
+.auth-url-row .auth-url-input { flex: 1 1 auto; min-width: 0; }
+.auth-url-tag {
+  flex: 0 0 auto; font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+  background: #eef1f5; color: var(--muted); white-space: nowrap;
+}
+.auth-url-tag.ok { background: #e8f5ec; color: #1e8e3e; border: 1px solid #bfe3cb; }
+.auth-links a { color: var(--accent); }
+
+/* tab 上的购物车角标 */
+.tab { position: relative; }
+.tab .badge { top: 2px; right: -10px; }
+
+/* ===== 图标式 toggle 按钮 (替代复选框) ===== */
+.btn.icon-toggle {
+  background: #eef1f5; color: var(--muted);
+  padding: 6px 12px; font-size: 12.5px; border-radius: 8px;
+  border: 1px solid transparent;
+}
+.btn.icon-toggle:hover { background: #e2e7ed; color: var(--text); }
+.btn.icon-toggle.active {
+  background: #e3f0fd; color: var(--accent); border-color: #9ecbf3;
+  font-weight: 600;
+}
+
+/* ===== 🪄 认领散落页 预览弹窗 ===== */
+.claim-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 46vh; overflow-y: auto; margin: 4px 0;
+}
+.claim-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 7px 10px; border: 1px solid #e3e7ec; border-radius: 8px;
+  background: #fafbfc; font-size: 13px; line-height: 1.5;
+}
+.claim-row:hover { background: #f3f7fb; }
+.claim-row input[type="checkbox"] { margin-top: 3px; }
+.claim-row.claim-mixed { background: #fdf6ec; border-color: #f0d9b0; }
+.tidy-claim-section { margin: 10px 0 4px; }
+.tidy-sep { border: none; border-top: 1px dashed #d4dae1; margin: 12px 0; }
+
+/* ===== 👁️ 仅查看该作品 特殊筛选横幅 ===== */
+.lib-only-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0; padding: 9px 12px;
+  border: 1px solid #9ecbf3; border-left: 4px solid var(--accent);
+  border-radius: 8px; background: #eaf4fe;
+  font-size: 13px; color: #1a4a73;
+}
+.lib-only-banner .only-banner-txt { line-height: 1.6; }
+/* display:flex 会盖掉 [hidden] 的浏览器默认 display:none, 必须显式关掉,
+   否则撤销后残留一条 20px 空蓝条 (2026-09-16 浏览器实测发现) */
+.lib-only-banner[hidden] { display: none; }
+/* 撤销定位后的短暂高亮闪烁 */
+.lib-flash {
+  animation: libFlash 0.8s ease-in-out 3;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ===== 🗑 回收站页 (2026-09-17) ===== */
+/* 缩略图: 文件已搬进 data_root/trash/, 走 /api/local-img?root=trash 直读 */
+.trash-thumb {
+  width: 46px; height: 46px; object-fit: cover;
+  border-radius: 4px; background: #f2f3f5; display: block;
+}
+/* 回收站角标不是"报错": 用中性灰而不是红色, 免得用户瞥一眼就以为出事了 */
+#trash-badge { background: #8d93a0; }
+/* 作品 / 单张图片 两个粒度切换: 选中的那个必须一眼看出来 */
+.trash-kind.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ===== 📜 运行日志查看 (2026-09-17; 2026-09-27 从「活动现场」改名) ===== */
+/* 等宽 + 可滚动: 一行一条, 好按时间/类别肉眼扫; 不换行以便保持"一行一条"的观感 */
+.activity-log {
+  margin: 0; max-height: 60vh; overflow: auto; white-space: pre;
+  font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.5;
+  background: #1e2126; color: #d7dae0; padding: 10px 12px; border-radius: 6px;
+}
+
+/* ===== 🔁 体检「⑥ 复检报告」结论块 (2026-09-18) ===== */
+/* 让"清掉了哪些已解决 / 哪些变了 / 哪些没复检"从正文里跳出来, 一眼看得到 */
+.chk-recheck-box {
+  border: 1px solid var(--line, #e3e6ea);
+  border-left: 3px solid var(--accent, #2d8cdc);
+  border-radius: 6px; padding: 8px 10px; margin: 8px 0;
+  background: rgba(45, 140, 220, .05);
+}
+.chk-recheck-box .health-list { margin: 4px 0 8px; }
+.chk-recheck-box s { color: #8d93a0; }
+
+/* 体检: 统计徽标行 + 分节标题「标题 · 说明 · 计数」三段式 + 折叠说明
+   (原来判据/复检/口径全塞进正文长句, 堆在一起读不动 —— 2026-09-27 ) */
+.chk-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.chk-stats-time { font-size: 12px; color: var(--muted); }
+.chk-sec { display: flex; align-items: baseline; gap: 8px; }
+.chk-sec-note { font-size: 12px; font-weight: 400; color: var(--muted); }
+.chk-sec-num { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--muted); }
+.chk-recheck-head { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.chk-help { margin-top: 12px; }
+.chk-help > summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+.chk-help .hint { margin-top: 6px; }
+
+@keyframes libFlash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(45, 140, 220, 0); }
+  50% { box-shadow: 0 0 0 6px rgba(45, 140, 220, 0.35); }
+}
+
+/* 图库: 实际磁盘路径 (文件管理器式, 点击打开所在文件夹) */
+.w-path, .cell-path {
+  font-family: Consolas, "Courier New", monospace; font-size: 11px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; border-radius: 6px; padding: 3px 6px;
+  background: #f4f6f8; margin-top: 6px; transition: background .15s, color .15s;
+  max-width: 100%; direction: rtl; text-align: left;  /* 长路径截断时保留文件名部分 */
+}
+.w-path:hover, .cell-path:hover { background: #e3f0fc; color: var(--accent); }
+.w-path.none, .cell-path.none { cursor: default; color: #b91c1c; background: #fdf0ef; }
+.w-path.none:hover, .cell-path.none:hover { background: #fdf0ef; color: #b91c1c; }
+.cell-path { margin-top: 0; max-width: 260px; }
+/* 卡片底部的「📁 路径」行贴底: 各卡片的路径/操作行因此横向对齐 ——
+   否则没有标签行或没有「🔗 原网页」按钮的卡片, 下面的路径行会往上贴  */
+.work-card .w-path { margin-top: auto; }
+.tag.missing { background: #fdecea; color: #c0392b; border: 1px solid #f5c6c0; }
+/* 「原作品已失效」徽标 (数据库 deleted_at 字段, pixiv 404 时自动记录) */
+.tag.deleted { background: #f1f3f5; color: #6b7280; border: 1px solid #d7dbe0; }
+.tag.deleted::before { content: none; }
+/* 反搜作者名来源徽标: 读自源网页(权威) / 第三方索引快照(可能过时) */
+.tag.ok  { background: #e7f5ea; color: var(--success); border: 1px solid #bfe8cf; }
+.tag.idx { background: #fdf3e0; color: #b7791f; border: 1px solid #f0dcb0; }
+
+/* 原网页直达按钮 (本地路径上方): 整行小按钮, 不挤占卡片宽度 */
+.work-card .w-link { margin-top: 6px; }
+.work-card .w-link .btn { width: 100%; padding: 3px 8px; font-size: 11px; }
+
+/* 健康检查面板清单 */
+.health-list { margin: 6px 0 12px; padding-left: 0; list-style: none; }
+.health-list li { font-size: 12px; color: var(--muted); padding: 2px 0;
+  font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+.health-list .chip { margin: 0 4px 4px 0; }
+
+/* 统计页: 分布图两列布局 (纯统计, 明细在作者管理页) */
+.stats-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.stats-cols .stats-sec { margin: 8px 0; }
+.stats-cols .stats-bars { min-height: 90px; }
+
+/* 作者管理页: 表头可点击排序 + 来源徽标 + 编辑弹窗 */
+.lib-list th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.lib-list th.sortable:hover { color: var(--accent); }
+.lib-list .src-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: #eef2f7; color: #5d6b7a; border: 1px solid #dbe2ea; margin: 1px 2px 1px 0; }
+/* 同名不同身份提示 (本地作者 local_xxx vs 真 pixiv 作者): 用户 2026-09-18 报「两条记录」 */
+.c-warn { margin-top: 4px; font-size: 11px; color: #8a6d1f; background: #fff8e1;
+  border: 1px solid #f0d68a; border-radius: 6px; padding: 3px 6px;
+  display: inline-flex; align-items: center; gap: 6px; max-width: 420px; }
+.c-warn .btn { padding: 2px 7px; font-size: 11px; margin: 0; white-space: nowrap; }
+.lib-edit-form { display: flex; flex-direction: column; gap: 12px; }
+.lib-edit-form label { display: flex; flex-direction: column; gap: 5px;
+  font-size: 13px; color: var(--muted); font-weight: 600; }
+.lib-edit-form input[type="text"], .lib-edit-form select, .lib-edit-form textarea {
+  font-size: 14px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; font-weight: 400; width: 100%; box-sizing: border-box; }
+.lib-edit-form textarea { font-family: inherit; resize: vertical; }
+
+/* ===== 🖼 当前壁纸信息窗 (2026-09-24) ===== */
+/* 桌面幻灯片播到哪张 → 当场告诉你是谁画的 / 库内哪一页 / 有没有更高清的一版。
+   只读展示: 高对比、字号小、一行一结论, 不抢图库正文的注意力。 */
+.wall-card {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 10px; background: #f8fbfe; padding: 8px 10px; margin-bottom: 12px;
+}
+.wall-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wall-head .lib-spacer { flex: 1; min-width: 8px; }
+.wall-title { font-weight: 700; font-size: 13px; }
+.wall-name {
+  font-family: Consolas, "Courier New", monospace; font-size: 11px; color: var(--muted);
+  max-width: 42ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wall-badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.wall-badge.ok   { background: #e7f5ea; color: var(--success); border: 1px solid #bfe8cf; }
+.wall-badge.warn { background: #fdf3e0; color: #b7791f;      border: 1px solid #f0dcb0; }
+.wall-badge.bad  { background: #fdecea; color: var(--error);  border: 1px solid #f5c6c0; }
+.wall-body { display: flex; gap: 12px; margin-top: 8px; align-items: flex-start; }
+.wall-card.folded .wall-body { display: none; }
+.wall-thumb {
+  width: 190px; height: 108px; object-fit: contain; background: #0e1014;
+  border-radius: 6px; cursor: zoom-in; flex: 0 0 auto;
+}
+.wall-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.wall-line { font-size: 13px; line-height: 1.5; word-break: break-all; }
+.wall-line.muted { color: var(--muted); font-size: 12px; }
+@media (max-width: 720px) {
+  .wall-body { flex-direction: column; }
+  .wall-thumb { width: 100%; height: 160px; }
+}
+
+

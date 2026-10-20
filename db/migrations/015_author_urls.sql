@@ -1,0 +1,21 @@
+-- UP:
+-- =============================================================
+-- 作者「来源链接」可多条 :
+--   authors.urls_json = JSON 数组, 形如
+--   [{"site":"pixiv","url":"https://www.pixiv.net/users/123","handle":"123","label":"Pixiv 插画站"},
+--    {"site":"twitter","url":"https://x.com/foo","handle":"foo","label":"X / Twitter"}]
+--
+-- 为什么新开一列: 原来 authors 表只有 pixiv_url / twitter 各存一条, 而画师通常同时在
+-- X / bilibili / GGAC / danbooru / ArtStation 等多个站发布作品 —— 需要"多来源链接"。
+-- 链接不只是记录: 保存时由 web 层识别出 site/handle, 用于
+--   ① 回填该作者名下「来源=该站点但没记账号」作品的 source_author (归档子夹/显示随之正确);
+--   ② pixiv 主页链接 → 一键把本地作者绑定成真正的 pixiv 作者 (作品迁移+夹名同步);
+--   ③ 作者管理按链接/账号搜索; ④ 🌐 按钮打开第一条链接。
+-- 旧两列**保留并继续同步**(编辑保存时每站取第一条回填), 读时与 urls_json 合并,
+-- 所以老数据不用迁移、既有读者(🌐 主页按钮 / 作者详情)也不受影响。
+-- =============================================================
+ALTER TABLE authors ADD COLUMN urls_json TEXT;
+
+-- DOWN:
+-- 回滚 v015 手工执行:
+--   ALTER TABLE authors DROP COLUMN urls_json;
