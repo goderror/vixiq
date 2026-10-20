@@ -1507,6 +1507,64 @@ def http_fetch_illust(session, artwork_id: str, *, timeout: float = 15.0) -> Art
     return info
 
 
+def http_fetch_illust_pages(session, artwork_id: str,
+                            *, timeout: float = 15.0) -> "list[dict]":
+    """urllib 直连 ajax 作品**分页列表** → 每页 dict (只读, 不起浏览器)。
+
+    查询页「大图预览 + 按页下载」用 : 之前只有 `_parse_pages_body`
+    拿到 `(page_num, original, ext)`, 且它内联在 `Crawler._download_http` 里 —— 只读场景
+    不该为了拿几条 URL 去唤起下载器, 所以抽这个独立函数。
+
+    headers/cookies/Referer 与 `http_fetch_illust` 同一套 (否则 R18 / 受限作品拿不到)。
+    返回: `{page_num, original, regular, small, thumb, width, height}` ——
+    `original` = 原图, `regular` = 低清版 (弹窗默认先显示它)。
+    错误映射沿用既有约定: 401/403 → PermissionError; 404 → ArtworkNotFoundError;
+    空 body → RuntimeError。不加页级缓存 (与搜索同一防风控口径)。"""
+    import json as _json
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
+    url = f"https://www.pixiv.net/ajax/illust/{artwork_id}/pages?lang=zh"
+    try:
+        with urlopen(Request(url, headers=session["headers"]), timeout=timeout) as r:
+            data = _json.loads(r.read().decode("utf-8", "replace"))
+    except HTTPError as e:
+        if e.code in (401, 403):
+            raise PermissionError(f"pixiv 登录态失效 (HTTP {e.code})")
+        if e.code == 404:
+            raise ArtworkNotFoundError(f"作品 {artwork_id} 不存在或被删除")
+        raise RuntimeError(f"pages ajax HTTP {e.code}")
+    if data.get("error"):
+        msg = str(data.get("message") or "")
+        low = msg.lower()
+        if "not found" in low or "存在" in msg or "見つかり" in msg:
+            raise ArtworkNotFoundError(f"作品 {artwork_id} 不存在或被删除")
+        raise RuntimeError(f"ajax 错误: {msg[:80]}")
+    body = data.get("body") or []
+    if not isinstance(body, list) or not body:
+        raise RuntimeError("pages 接口未返回任何图片链接")
+    out: "list[dict]" = []
+    for i, p in enumerate(body):
+        p = p or {}
+        urls = p.get("urls") or {}
+        original = str(urls.get("original") or "")
+        if not original:
+            continue
+        m = re.search(r"_p(\d+)\.(jpg|jpeg|png|gif|webp)(?:\?|$)", original, re.I)
+        pn = int(m.group(1)) if m else i
+        out.append({
+            "page_num": pn,
+            "original": original,
+            "regular": str(urls.get("regular") or "") or original,
+            "small": str(urls.get("small") or ""),
+            "thumb": str(urls.get("thumb") or ""),
+            "width": int(p.get("width") or 0),
+            "height": int(p.get("height") or 0),
+        })
+    if not out:
+        raise RuntimeError("pages 接口未返回任何图片链接")
+    return out
+
+
 # =============================================================
 # 网页端「写操作」: 收藏(♡ 红心) / 关注 
 #

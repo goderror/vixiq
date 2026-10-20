@@ -179,6 +179,31 @@ def _make_abort(db: PixivDatabase, item_id: int):
     return _cb
 
 
+def _only_pages_of(it: dict) -> "set | None":
+    """队列项 pages 列 → 只下哪几页的集合; NULL/空/坏数据一律当「整部」(返回 None)。
+
+    按页下载 (2026-10-20): pages 存 JSON 数组字符串 ("[0, 3]")。解析失败不报错而是退回
+    整部 —— 队列项是用户能看见的历史数据, 一条脏值不该让整个任务失败。"""
+    raw = it.get('pages')
+    if not raw:
+        return None
+    try:
+        lst = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(lst, list):
+        return None
+    out = set()
+    for x in lst:
+        try:
+            n = int(x)
+            if n >= 0:
+                out.add(n)
+        except (TypeError, ValueError):
+            continue
+    return out or None
+
+
 def _run_item(db: PixivDatabase, d: PixivDownloader, it: dict,
               reporter: Reporter, strategy: DownloadStrategy):
     itype = it.get('item_type') or ''
@@ -201,8 +226,13 @@ def _run_item(db: PixivDatabase, d: PixivDownloader, it: dict,
         if not str(aid).isdigit():
             raise ValueError(f"作品 {aid} 非 pixiv 数字 ID, 无法从原站下载")
         page_count = int(it.get('page_count') or 1)
-        # 仅下载本地没有的: 策略先在 db 里跳过的判断
-        if strategy == DownloadStrategy.ONLY_NEW and page_count > 0:
+        # 按页下载 : pages 列 = JSON 数组字符串,
+        # NULL/空 = 整部作品 (老口径, 一字不改)。
+        only = _only_pages_of(it)
+        # 仅下载本地没有的: 策略先在 db 里跳过的判断。
+        # ⚠ 页级任务**必须绕过**这段: 整部已入库的作品点「补某几页」时, 这条件成立会
+        # 被静默跳过 —— 用户点了下载却什么都没发生。
+        if only is None and strategy == DownloadStrategy.ONLY_NEW and page_count > 0:
             info = db.get_work_info(str(aid))
             # info.status 是 int (WSt.DONE=2), 不能用 .value 比较 (PSt/WSt 是 int 常量类)
             if info and info.done and info.total_pages \
@@ -211,12 +241,18 @@ def _run_item(db: PixivDatabase, d: PixivDownloader, it: dict,
                 try: reporter.item_progress(item_id, 1, 1, "已下过")
                 except Exception: pass
                 return
+        if only is not None:
+            reporter.log(f"⬇ 按页下载作品 {aid}: 共 {len(only)} 页 "
+                         f"({', '.join('p' + str(p) for p in sorted(only))})")
         # 作者信息随队列项透传, 下载器直接建「作者名_ID」文件夹, 不再依赖爬 DOM
-        done_cnt, total_cnt = d.download_artwork(
-            str(aid),
-            author_id=it.get('author_id'),
-            author_name=it.get('author_name'),
-            force_overwrite=(strategy == DownloadStrategy.OVERWRITE))
+        # 按页下载 (2026-10-20): pages 只在页级任务才带上 —— 整部的老签名一字不改
+        # (外部的打桩/子类 download_artwork 未必收 pages 形参, 多传一个关键字会炸)。
+        kw = dict(author_id=it.get('author_id'),
+                  author_name=it.get('author_name'),
+                  force_overwrite=(strategy == DownloadStrategy.OVERWRITE))
+        if only is not None:
+            kw['pages'] = only
+        done_cnt, total_cnt = d.download_artwork(str(aid), **kw)
         # 静默「成功」是 2026-09-15 的根因:
         # 未抓到图片时 download_artwork 只 warn 然后 return (0, 0), 不抛异常, 而本函数
         # 只在抛异常时才把队列项标 failed → 任务显示 done, 用户反复点击(实测 109766089

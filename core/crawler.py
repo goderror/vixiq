@@ -460,15 +460,19 @@ class PixivDownloader:
             self.reporter.warn(f"❗ 元数据记录失败: {str(e).splitlines()[0]}")
 
     def download_artwork(self, artwork_id, author_id=None, author_name=None,
-                         force_overwrite: bool = False):
+                         force_overwrite: bool = False, pages=None):
         """下载单个作品。**HTTP 直连优先** (cookies 打 ajax, R18 也能拿到原图),
         无 cookies / 登录态失效 / 网络异常时回退 Selenium 浏览器。
+
+        pages (2026-10-20 按页下载): 只下这几页 (页号 0 起); None = 整部。
+        **页级任务绝不回退浏览器** —— `_download_browser` 不支持页级, 会把未选页也补下。
 
         2026-09-16 实测事故: cookies 本身有效, 但购物车链路从不调用
         load_cookies_and_login, headless 浏览器是**未登录**状态, R18 作品页面不渲染
         任何图片 → 三个任务连续报「登录已失效」。直连通道根本不经过浏览器,
         彻底绕开这个坑; 浏览器兜底也会在导航前先注入 cookies。"""
         artwork_id = str(artwork_id)
+        only = {int(x) for x in pages} if pages else None
         self.reporter.log(
             f"正在下载 → https://www.pixiv.net/artworks/{artwork_id}")
         ctx = self._http_ctx()
@@ -476,7 +480,8 @@ class PixivDownloader:
             try:
                 return self._download_http(
                     artwork_id, ctx, author_id=author_id,
-                    author_name=author_name, force_overwrite=force_overwrite)
+                    author_name=author_name, force_overwrite=force_overwrite,
+                    pages=only)
             except PermissionError as e:
                 self.reporter.warn(f"HTTP 直连登录态失效 ({str(e).splitlines()[0]})，"
                                    "改用浏览器并重新注入 cookies")
@@ -499,6 +504,10 @@ class PixivDownloader:
                     self.db.change_work_status(artwork_id, WSt.ERROR)
                     raise ValueError(f"作品 {artwork_id} 不存在或已删除")
                 self.reporter.warn(f"HTTP 直连下载失败，改用浏览器兜底: {msg}")
+        if only is not None:
+            # 页级任务: 浏览器通道不支持 (见上), 绝不静默改用整部通道。
+            raise RuntimeError(
+                f"作品 {artwork_id} 的按页下载失败, 且按页下载不支持浏览器兜底")
         return self._download_browser(
             artwork_id, author_id=author_id, author_name=author_name,
             force_overwrite=force_overwrite)
@@ -535,9 +544,13 @@ class PixivDownloader:
         return d
 
     def _download_http(self, artwork_id: str, ctx, *, author_id=None,
-                       author_name=None, force_overwrite: bool = False):
+                       author_name=None, force_overwrite: bool = False, pages=None):
         """cookies 直连通道: ajax/illust 取元数据 + ajax/illust/pages 取每页原图直链,
-        urllib + Referer 下载 (与浏览器通道同一套落盘/转PNG/入库逻辑)。"""
+        urllib + Referer 下载 (与浏览器通道同一套落盘/转PNG/入库逻辑)。
+
+        pages (2026-10-20 按页下载): 只下这几页 (页号集合); None = 整部。
+        ⚠ `init_pages` 仍传**远端总页数**: 按选中页数写会把整部作品判成已下完
+        (sync_work_and_pages 会把 0..tp-1 全标 DONE → 图库谎报入库)。"""
         from core.search_client import http_fetch_illust
         info = http_fetch_illust(ctx, artwork_id)   # 403 → PermissionError
         # 动图 (ugoira) 走单独通道: pages 接口只给一张缩过的静态帧图, 下了也不是动图
@@ -549,9 +562,18 @@ class PixivDownloader:
             f"https://www.pixiv.net/ajax/illust/{artwork_id}/pages?lang=zh")
         if data.get("error"):
             raise RuntimeError(f"pages 接口错误: {str(data.get('message'))[:80]}")
-        pages = self._parse_pages_body(data.get("body") or [])
-        if not pages:
+        all_pages = self._parse_pages_body(data.get("body") or [])
+        if not all_pages:
             raise RuntimeError("pages 接口未返回任何图片链接")
+        if pages:
+            only = {int(x) for x in pages}
+            selected = [t for t in all_pages if t[0] in only]
+            if not selected:
+                raise RuntimeError(
+                    f"选中的页 {sorted(only)} 在原网页不存在 (共 {len(all_pages)} 页)")
+            pages = selected
+        else:
+            pages = all_pages
 
         raw_name = str(info.author_name or author_name or "").strip()
         aname = self._clean_author_name(raw_name or "未知画师")

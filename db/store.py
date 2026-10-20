@@ -4612,14 +4612,19 @@ class PixivDatabase:
     def queue_add(self, *, item_type: str, status: str = 'pending',
                   title: Optional[str] = None, author_id=None, author_name=None,
                   artwork_id=None, page_count=None, strategy='only_new',
-                  source_note=None) -> int:
+                  source_note=None, pages=None) -> int:
+        """pages (2026-10-20 按页下载): None = 整部作品 (老口径); 给了则只下这几页,
+        存 JSON 数组字符串 (如 "[0, 3]")。见 db/migrations/020_queue_pages.sql。"""
+        pages_json = None
+        if pages:
+            pages_json = json.dumps(sorted({int(x) for x in pages}))
         cur = self.conn.execute(
             """INSERT INTO download_queue_items
                   (item_type, title, author_id, author_name, artwork_id,
-                   page_count, strategy, status, source_note)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                   page_count, strategy, status, source_note, pages)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (item_type, title, author_id, author_name, artwork_id,
-             page_count, strategy, status, source_note),
+             page_count, strategy, status, source_note, pages_json),
         )
         self.conn.commit()
         return int(cur.lastrowid)

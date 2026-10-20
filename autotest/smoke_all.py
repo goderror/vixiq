@@ -3011,6 +3011,9 @@ def run_suite() -> SuiteResult:
     suite.add("T131", "🚀 启动与托盘开关: LAUNCHER_DEFAULTS 与 default.json 键集一致(默认只开托盘) + 老 user.json 缺节兜底 + save_user_config 深合并不抹掉 web.port/paths + /api/launcher 白名单过滤(丢弃_note/未知键, 全丢则400不写盘) + 设置页开关接线 + 桌面小控件(utils/widget_window.py)三态形状(补回缺口的长条便签 + 人字防滑纹路 + 缩略图/荧光色)/贴边几何/卡片键两套(文字键 3 颗 + 壁纸控制条四颗图标键, 已删「下一张壁纸·复制作品链接·图像溯源」)/main.py 接线护栏 + 「移出壁纸先换桌面再删文件」顺序 + 壁纸夹配置(paths.wallpaper_dir→candidates_dir→/api/wallpaper/dir/pick 原生目录对话框→设置页单按钮) + 没有当前壁纸时从壁纸夹一端起步 + 托盘退出向页面广播 app_quit + 「只在桌面露出来」(WindowFromPoint 爬到 Progman/WorkerW) + 换图随机档(?shuffle=1) + 设置页文案去口语/去冗长 + 网页版「当前壁纸」折叠记忆与🧹清理副本面板 + 只读副本扫描 + 旧的 Edge+wall.html 方案已彻底移除 (离线)", t131_launcher_config_switches)
     suite.add("T132", "✨ 壁纸文案 AI: AI_DEFAULTS 与 default.json 键集一致(默认全关) + 缺节兜底 + ai_ready 四件套 + 提示词含画面线索/库外文件名不当内容 + 两行解析(去标签/序号/引号/书名号/行尾标点 + 硬夹到上限且断在断句点 + 标题一行不裁、氛围句换行塞得进卡片像素预算) + 落盘缓存按「路径+改动时间+大小」且同图只生成一次 + texts_for 只读缓存(轮询那条路一次接口都不许打) + generate_now 同步生成(表单值优先·必带图·点按钮即视为已启用) + 2026-09-27「上传失败」根因(max_tokens 被推理模型烧光)与「测试连接」共用同一套配置口径 + /api/ai 不回密钥原文/活动日志打码/旧的保存接口已删 + 小控件接线(ai_sig 进 info_key 才会刷新, 标题与氛围句 AI 优先本地兜底) (离线, generate 打桩)", t132_ai_text_pipeline)
     suite.add("T133", "🖼 壁纸库生成: 尺寸门槛(宽≥1920 且高≥1080, 显式常量不许问屏幕)与比例门槛(偏离 16:9 ≤10%)分开回话 + 文件名 {作品ID}_p{页码}.{ext} 天然幂等 + 已标记的作品/页与无指纹页不参与 + 文件不在盘上算 missing + 幻灯片播不了的格式不倒进去 + 字节一致的原样复制(不缩放不裁剪, 裁切列留空) + 登记带 file_md5/src_md5/宽高/血缘(LEFT JOIN) + 重复跑新增 0 不翻倍 + 没配壁纸夹一律报错绝不猜 + /api/wallpaper/lib/scan 后台跑 + /api/wallpaper/lib 轮询 (离线)", t133_wallpaper_lib_generate)
+    suite.add("T134", "🚀📁 启动与托盘「立即生效」+ 📁 路径设置(用户: 开关为何要重启才生效 / 数据库路径没有设置选项, 我说的是所有路径 / 双击托盘快速打开图库 / 数据·配置·缓存向正常软件看齐但别占C盘): 除「启动自动开浏览器」外全部存盘即生效(热应用钩子 set_launcher_apply→main._apply_launcher 就地起停托盘/小控件, 心跳守护按代次门控——关了不许再自杀) + auto_open_browser 如实回报 startup_only + /api/paths 三处可改目录(图片目录可填单段相对名或绝对路径, 数据根/临时目录只收绝对路径; 空=回默认, 相对名拒绝400) + 落盘后当场回新落点(不靠带缓存的 paths.data_root) + 占用检测(数据库/图片/缩略图/特征库/临时各回 MB, 目录有上限地数) + /api/paths/temp/clean 一键清临时目录 + /api/paths/pick 复用系统目录对话框(取消不改/失败必回 JSON 不能当取消) + 位置一览含壁纸夹 + 文案只留一句「重启 Vixiq 后生效」不摆理由 (离线)", t134_launcher_hotapply_and_paths)
+    suite.add("T135", "🖼 查询页「按页下载」之一(用户: 点加入清单会整个作品下载, 我希望能分别单个下载 / 双击图片打开大图, 右下角要显示原图和下载该页, 下面还要像调整页序那样的缩略图多选区): 迁移 020 给队列加 pages TEXT(NULL=整部, 向后兼容, 且不塞 strategy——那列被当 DownloadStrategy 枚举解析) + queue_add(pages) 落排序去重 JSON 串 + GET /api/artwork/<id>/pages(未登录 200+need_login 不是401 / low=regular high=original / 合并库内页状态 / 超远端页数的标 is_extra / 不存在404) + POST /api/cart 带 pages 入队且 page_count 仍写远端总页数 (离线)", t135_artwork_pages_api_and_queue_pages)
+    suite.add("T136", "🖼 查询页「按页下载」之二 + 🔍 大图 1:1 放大 + ↔ 图库遮挡修复: _only_pages_of 纯函数(脏数据退回整部) + 引擎页级绕过「整部已下完就跳过」(否则点补某页被静默跳过) + 爬虫只下选中页且页级拒绝回落浏览器通道(它会按URL规律把未选页补齐) + init_pages 仍按远端总页数 + 前端 openRemoteLightbox(默认低清/显示原图/下载该页/🔗原网页, 没有上个下个作品) + 点图 1:1 放大(元素自身撑到自然尺寸 + 拖拽平移, 换页收缩放/同页切原图保留) + 原图只在点按钮后才加载 + 缩略图多选条(全选/已入库灰掉) + 卡片点击不再开原站 + 进调整页序收起那两颗按钮 + 拖拽夹取改用容器实际渲染尺寸 + 放大态图片元素自身撑到自然尺寸 + 缩略图多选条可折叠且跨打开记忆(折叠后大图高度 0.56→0.72, 修「✕ 只露一半 / 缩略图吃掉半屏」+ 放大态视口横向 97vw/竖向按实测行高吃满, 并用 capNorm 兜住「放大反而变小」+ 「点击查看大图」下沉本地图库查看器(同装 setupZoom, ✕ 一起改锚视口, is-remote 死代码已删) + 缩略图条 loading=lazy / 去掉相邻页原图预取 / /api/img 改流式转发带 Cache-Control) (离线静态)", t136_page_download_engine_and_frontend)
     suite.write_report()
     return suite
 
@@ -10280,7 +10283,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20260929a" and _mss.group(1) == "20260929a", \
+    assert _mjs and _mss and _mjs.group(1) == "20261020l" and _mss.group(1) == "20261020l", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10375,7 +10378,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20260929a', html) and _re.search(r'app\.js\?v=20260929a', html), \
+    assert _re.search(r'style\.css\?v=20261020l', html) and _re.search(r'app\.js\?v=20261020l', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10752,7 +10755,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20260929a" in html and "app.js?v=20260929a" in html, \
+        assert "style.css?v=20261020l" in html and "app.js?v=20261020l" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -10848,6 +10851,10 @@ def t128_tray_pure_functions():
     assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_RBUTTONUP) == ("menu",)
     assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_CONTEXTMENU) == ("menu",)
     assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_LBUTTONUP) == ("refresh",)
+    # 2026-10-20 → 双击翻成 open_gallery,
+    # 单击仍是 refresh (双击时 Windows 会补一整套单击消息, 两条都收到是预期)
+    assert tray.WM_LBUTTONDBLCLK == 0x0203
+    assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_LBUTTONDBLCLK) == ("open_gallery",)
     assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, 0x0200) == (), "非点击不动"
     assert tray.handle_tray_message(tray.WM_WALL_CHANGED, 0, 0) == ("wall_changed",)
     assert tray.handle_tray_message(tray.WM_ALREADY_RUNNING, 0, 0) == ("already_running",)
@@ -10939,8 +10946,12 @@ def t129_tray_lifecycle_policy():
     assert "if ln.get(\"tray_enabled\", True):" in src, "托盘默认必须是开"
     assert "if ln.get(\"wall_widget\"):" in src
     assert "should_watch_browser(config)" in src, "心跳守护必须过开关, 不能无条件启动"
-    assert "threading.Thread(target=_heartbeat_watchdog, daemon=True).start()" in src, \
-        "开关为真时仍要能起旧行为"
+    # 2026-10-20: 心跳守护改走 _set_watch_browser (代次门控), 「关页面即退出」开关存盘即生效。
+    # 所以不再裸起线程 —— 起线程这件事挪进了 _set_watch_browser 里 (代次 +1 才算数)。
+    assert "_set_watch_browser(should_watch_browser(config))" in src, \
+        "开关为真时仍要能起 (经 _set_watch_browser 代次门控)"
+    assert "def _set_watch_browser(" in src and "_watchdog_gen" in src, \
+        "守护线程必须认代次, 否则关了开关旧线程还在判退出"
     assert "def _tray_stop()" in src and "_tray_stop()" in src.split("def _cleanup")[1], \
         "退出路径必须摘托盘图标 (否则右下角留幽灵图标)"
     assert "def _quit_from_tray()" in src and "os._exit(0)" in src, "托盘退出要真的结束进程"
@@ -12583,6 +12594,503 @@ def t133_wallpaper_lib_generate() -> None:
         (upaths.user_data, upaths.data_root,
          upaths.config_dir, upaths.user_config_path) = orig
         shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t134_launcher_hotapply_and_paths() -> None:
+    """T134: 🚀 启动与托盘「立即生效」+ 📁 路径设置。
+
+    ① 双击托盘图标 → open_gallery, 单击仍只 refresh;
+    ② 热应用接线: main.py 把 _apply_launcher 交给 server.set_launcher_apply; 心跳守护按
+       **代次**门控 —— 关了之后在跑的那条必须自己收工, 不许再判退出;
+    ③ /api/launcher: 存盘后回调钩子并把逐项结果放进 applied; 启动动作如实回报 startup_only;
+    ④ /api/paths: 读回默认落点 / 空串清除 / 相对路径拒绝 / 绝对路径落盘并回新落点 /
+       只读位置跟着数据目录走 (数据库在数据目录里, 不是 config 旁);
+    ⑤ /api/paths/pick: 复用系统目录对话框 —— 取消不动配置, 弹不出必回 JSON 报错;
+    ⑥ 前端接线: 「📁 路径」卡片 + 位置一览 + 切换设置页时读取;
+       启动与托盘文案不再笼统写「重启后生效」。
+    """
+    import tempfile
+    import shutil
+    import utils.paths as upaths
+    from web import server as wsrv
+    from web.server import create_app
+
+    # ---------- ① 双击打开图库 / 单击仍只刷新 tooltip ----------
+    from utils import tray
+    assert tray.WM_LBUTTONDBLCLK == 0x0203
+    assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_LBUTTONDBLCLK) == ("open_gallery",)
+    assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_LBUTTONUP) == ("refresh",)
+    assert '"open_gallery"' in (PROJECT_ROOT / "utils" / "tray.py").read_text(encoding="utf-8"), \
+        "tray.handle_message 没接 open_gallery 这个动作"
+
+    # ---------- ② 热应用接线 (静态护栏) ----------
+    main_src = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")
+    srv_src = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    assert "def set_launcher_apply(" in srv_src, "server.py 没有热应用钩子"
+    assert "set_launcher_apply(_apply_launcher)" in main_src, "main.py 没把热应用钩子接上"
+    assert "def _apply_launcher(" in main_src and "def _set_watch_browser(" in main_src
+    assert "_watchdog_gen != gen" in main_src, "心跳守护必须认代次, 关了不许再判退出"
+    assert "target=_heartbeat_watchdog, daemon=True" not in main_src, \
+        "心跳守护必须走 _set_watch_browser (代次门控), 不许再直接起线程"
+    assert "_LAUNCHER_STARTUP_ONLY" in main_src and "auto_open_browser" in main_src
+
+    # ⚠ 2026-10-20 :
+    #   根因 = 关开关时调 _tray_stop() → Tray.stop() 原先投 **WM_CLOSE**, 而
+    #   handle_tray_message 把 WM_CLOSE 翻成 ("quit",) → _request_quit → on_quit → 整个进程退出。
+    #   stop() 的语义必须是「只停托盘」, 所以它只能投线程 WM_QUIT, 绝不许再碰 WM_CLOSE/on_quit。
+    tray_src = (PROJECT_ROOT / "utils" / "tray.py").read_text(encoding="utf-8")
+    _stop_blk = tray_src.split("def stop(self)")[1].split("def _run")[0]
+    assert "PostMessageW(self.hwnd, WM_CLOSE" not in tray_src, \
+        "Tray.stop 不许走 WM_CLOSE —— 那是「退出程序」的语义, 关托盘开关会连带退出整个进程"
+    assert "PostThreadMessageW(self._tid, WM_QUIT" in _stop_blk, \
+        "停托盘要投线程 WM_QUIT 让消息循环收工 (finally 里照常摘图标)"
+    assert "self.on_quit" not in _stop_blk and "_request_quit(" not in _stop_blk, \
+        "stop() 不许碰 on_quit / _request_quit (那是「退出程序」, 注释里提到名字不算)"
+    # 而 WM_CLOSE→quit 这条**退出**路径必须保留 (系统关机 / --quit / 右键「退出 Vixiq」都走它)
+    assert tray.handle_tray_message(tray.WM_CLOSE, 0, 0) == ("quit",), "退出路径不许被顺手删掉"
+    assert "PostMessageW(hwnd, WM_CLOSE" in main_src, "--quit 仍要给托盘投 WM_CLOSE"
+    # 关闭分支仍用 _tray_stop (它就是「只停托盘」), 且不许在关托盘时广播 app_quit
+    _off = main_src.split('k == "tray_enabled"')[1].split('elif k == "wall_widget"')[0]
+    assert "_tray_stop()" in _off, "关托盘常驻要调 _tray_stop"
+    assert "app_quit" not in _off and "_cleanup" not in _off, \
+        "关托盘不许连带退出程序 / 广播 app_quit"
+
+    tmp = Path(tempfile.mkdtemp(prefix="t134p_")).resolve()
+    orig = (upaths.user_data, upaths.data_root, upaths.config_dir, upaths.user_config_path)
+    upaths.user_data = lambda rel: (tmp / str(rel))
+    upaths.data_root = lambda: tmp
+    upaths.config_dir = lambda: tmp
+    upaths.user_config_path = lambda: tmp / "user.json"
+    (tmp / "user.json").write_text("{}", encoding="utf-8")
+    saved_hook = wsrv._launcher_apply
+    try:
+        c = create_app().test_client()
+
+        # ---------- ④ 默认态: 没设置重定向时各落点 ----------
+        j = c.get("/api/paths").get_json()
+        assert j["saved"] == {"data_root_override": "", "temp_root_override": "",
+                              "img_subdir": ""}, j["saved"]
+        assert j["defaults"]["img_subdir"] == "img", j["defaults"]
+        eff = j["effective"]
+        assert eff["db"].endswith("pixiv.db"), eff["db"]
+        assert Path(eff["db"]).parent == Path(eff["data_root"]), "数据库要在数据目录里"
+        assert Path(eff["logs"]) == Path(eff["data_root"]) / "logs", eff["logs"]
+        assert Path(eff["thumbs"]) == Path(eff["data_root"]) / "thumbs", eff["thumbs"]
+        assert Path(eff["temp_root"]) == Path(eff["data_root"]) / "temp", eff["temp_root"]
+        assert Path(eff["img"]) == Path(eff["data_root"]) / "img", eff["img"]
+        assert "wallpaper_dir" in j["effective"], "位置一览要带上壁纸夹"
+        assert Path(eff["config_file"]).name == "user.json"
+        assert Path(j["defaults"]["data_root"]).name == "data", j["defaults"]
+        # 占用检测: 五个会长的位置各回一个 MB 数 (不存在 → None, 不许抛)
+        assert set(j["sizes"]) == {"db", "thumbs", "temp", "feature_db", "img"}, j["sizes"]
+
+        # 数据根/临时目录: 相对路径一律拒绝 (否则落点随 CWD 漂); 认不出的键也拒
+        r = c.post("/api/paths", json={"data_root_override": "relative/dir"})
+        assert r.status_code == 400 and r.get_json()["ok"] is False, r.get_json()
+        assert c.post("/api/paths", json={"temp_root_override": "rel"}).status_code == 400
+        assert c.post("/api/paths", json={"nope": "x"}).status_code == 400
+
+        # 绝对路径 → 落盘 + 当场看到新落点 (不必等重启才反映)
+        d2 = tmp / "mydata"
+        r = c.post("/api/paths", json={"data_root_override": str(d2)})
+        j = r.get_json()
+        assert r.status_code == 200 and j["ok"] is True and j["restart_required"] is True, j
+        assert j["saved"]["data_root_override"] == str(d2), j["saved"]
+        assert j["effective"]["data_root"] == str(d2), j["effective"]
+        assert Path(j["effective"]["db"]).parent == d2, "数据库没跟着数据目录走"
+        assert Path(j["effective"]["img"]) == d2 / "img"
+        assert Path(j["effective"]["temp_root"]) == d2 / "temp", "没设临时目录时应跟随数据目录"
+        assert d2.is_dir(), "选了就该把目录建出来 (存个建不出的路径, 下次启动就是一堆报错)"
+        on_disk = json.loads((tmp / "user.json").read_text(encoding="utf-8"))
+        assert on_disk["paths"]["data_root_override"] == str(d2), on_disk
+
+        # 图片目录: 单段相对名 = 数据目录下的子目录 (这是它本来的默认形态 "img")
+        j = c.post("/api/paths", json={"img_subdir": "myimg"}).get_json()
+        assert j["saved"]["img_subdir"] == "myimg", j["saved"]
+        assert Path(j["effective"]["img"]) == d2 / "myimg", j["effective"]
+        assert Path(j["effective"]["img"]).parent == d2, "相对图片名要挂在数据目录下"
+        # 相对名只认单段: "a/b" 语义含糊, ".." 能爬到数据根外面
+        for _bad in ("a/b", "..", "../x"):
+            assert c.post("/api/paths", json={"img_subdir": _bad}).status_code == 400, _bad
+        # 图片目录也接受绝对路径 —— 大图片放非系统盘就是走这条
+        imgs = tmp / "F_img"
+        j = c.post("/api/paths", json={"img_subdir": str(imgs)}).get_json()
+        assert j["effective"]["img"] == str(imgs), j["effective"]
+        assert Path(j["effective"]["img"]).parent != d2, "绝对路径不该再挂在数据目录下"
+        # 清除图片目录 → 回到「数据目录下的 img」
+        j = c.post("/api/paths", json={"img_subdir": ""}).get_json()
+        assert j["saved"]["img_subdir"] == "", j["saved"]
+        assert Path(j["effective"]["img"]) == d2 / "img", j["effective"]
+
+        # 临时目录单独覆盖: 它不再跟随数据目录, 且不该动数据目录
+        t2 = tmp / "mytemp"
+        j = c.post("/api/paths", json={"temp_root_override": str(t2)}).get_json()
+        assert j["effective"]["temp_root"] == str(t2), j["effective"]
+        assert j["effective"]["data_root"] == str(d2), "改临时目录不该动数据目录"
+
+        # 空串 = 清除回默认 (临时目录回到「数据目录下的 temp」)
+        j = c.post("/api/paths", json={"temp_root_override": ""}).get_json()
+        assert j["saved"]["temp_root_override"] == "", j["saved"]
+        assert j["effective"]["temp_root"] == str(d2 / "temp"), j["effective"]
+        assert j["effective"]["data_root"] == str(d2), "清除临时目录不该动数据目录"
+
+        # ---------- ⑤ 选目录: 取消不动配置 / 弹不出必回 JSON ----------
+        from utils import folder_dialog
+        had_pick = hasattr(folder_dialog, "pick_folder")
+        orig_pick = getattr(folder_dialog, "pick_folder", None)
+        try:
+            folder_dialog.pick_folder = lambda *a, **k: None
+            j = c.post("/api/paths/pick", json={"which": "data"}).get_json()
+            assert j["ok"] is False and j.get("cancelled") is True, j
+            assert json.loads((tmp / "user.json").read_text(encoding="utf-8"))[
+                "paths"]["data_root_override"] == str(d2), "选了取消却动了配置"
+            folder_dialog.pick_folder = lambda *a, **k: str(tmp / "picked")
+            j = c.post("/api/paths/pick", json={"which": "data"}).get_json()
+            assert j["ok"] is True and j["saved"]["data_root_override"] == str(tmp / "picked"), j
+            # 图片目录也能从系统对话框里选 (挑非系统盘就靠这个按钮)
+            j = c.post("/api/paths/pick", json={"which": "img"}).get_json()
+            assert j["ok"] is True and j["saved"]["img_subdir"] == str(tmp / "picked"), j
+
+            def _boom(*a, **k):
+                raise RuntimeError("no dialog")
+            folder_dialog.pick_folder = _boom
+            r = c.post("/api/paths/pick", json={"which": "temp"})
+            assert r.status_code == 500 and r.get_json()["ok"] is False, \
+                "弹不出对话框必须是 JSON 报错, 不能让前端把 500 当「取消」把输入框清空"
+        finally:
+            if had_pick:
+                folder_dialog.pick_folder = orig_pick
+            else:
+                delattr(folder_dialog, "pick_folder")
+        assert c.post("/api/paths/pick", json={"which": "nope"}).status_code == 400
+
+        # ---------- ③ /api/launcher: 存盘后热应用 + applied 回传 ----------
+        seen = {}
+
+        def _hook(upd: dict) -> dict:
+            seen.clear()
+            seen.update(upd)
+            return {k: ("startup_only" if k == "auto_open_browser" else "applied") for k in upd}
+
+        wsrv.set_launcher_apply(_hook)
+        j = c.post("/api/launcher", json={"auto_open_browser": True}).get_json()
+        assert seen == {"auto_open_browser": True}, seen
+        assert j["applied"]["auto_open_browser"] == "startup_only", \
+            "启动动作必须如实回报 startup_only (那一刻压根没浏览器可开)"
+        j = c.post("/api/launcher", json={"tray_enabled": False}).get_json()
+        assert j["applied"]["tray_enabled"] == "applied", j
+        assert c.post("/api/launcher", json={"nope": 1}).status_code == 400, "白名单老口径不变"
+        # 没接钩子时开关照存, 只是不热应用 (冒烟/纯 web 场景)
+        wsrv.set_launcher_apply(None)
+        j = c.post("/api/launcher", json={"tray_enabled": True}).get_json()
+        assert j["ok"] is True and j["applied"] is None, j
+
+        # ---------- ④b 一键清临时目录 (会长的缓存放 C 盘也得能一键收回) ----------
+        # 放在最后: 这条真会清 temp_root —— 而 tempfile.mkdtemp 已被 paths 重定向到 temp_root,
+        # 本用例的 tmp 目录就住在里面, 提前跑会把后面要读的 user.json 一起清掉 (踩过一次)。
+        r = c.post("/api/paths/temp/clean")
+        j = r.get_json()
+        assert r.status_code == 200 and j["ok"] is True, j
+        assert "removed" in j and "freed_mb" in j, j
+        assert set(j["sizes"]) == {"db", "thumbs", "temp", "feature_db", "img"}, j["sizes"]
+
+        # ---------- ⑥ 前端接线 ----------
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        for _need in ("loadPaths()", "function paintPaths(", "function pickPathDir(",
+                      "function clearPathDir(", "function cleanTempDir(",
+                      "'/api/paths'", "'/api/paths/pick'", "'/api/paths/temp/clean'",
+                      "const PATH_EDITABLE"):
+            assert _need in js, f"前端少了 {_need}"
+        for _id in ('id="path-img-input"', 'id="path-data-input"', 'id="path-temp-input"',
+                    'id="path-temp-clean"', 'id="path-positions"'):
+            assert _id in html, f"设置页少了 {_id}"
+        # 壁纸夹路径必须在「📁 路径」卡片里 
+        _card = html.split('<h3>📁 路径</h3>', 1)[1].split('</div>\n        <div class="card mini">', 1)[0]
+        assert 'id="wall-dir-input"' in _card and 'onclick="pickWallDir()"' in _card, \
+            "壁纸夹没搬进「📁 路径」卡片"
+        # 「🚀 启动与托盘」不属于「桌面与壁纸」组 —— 它跟壁纸无关, 属程序生命周期
+        _dsk = html.split('<h4>桌面与壁纸</h4>', 1)[1].split('<h4>浏览与下载</h4>', 1)[0]
+        assert 'id="launcher-switches"' not in _dsk, "「启动与托盘」不该挂在「桌面与壁纸」组里"
+        assert '<h4>系统与启动</h4>' in html, "「启动与托盘」缺独立分组"
+        # 启动与托盘那组不许再笼统写「重启后生效」—— 除启动动作外都是存盘即生效
+        _blk = html.split('id="launcher-switches"', 1)[0].rsplit('<div class="card mini">', 1)[-1]
+        assert "重启后生效" not in _blk, "启动与托盘不该再笼统写「重启后生效」"
+        assert "立即生效" in _blk
+        assert "（重启后生效）" not in js, "开关的回执不该再说要重启"
+        assert "（已立即生效）" in js
+        # 关掉托盘后右下角就没退出入口了 —— 顺嘴指一下还能从哪儿退 (否则用户会以为退不掉)
+        assert "之后从页面「退出程序」或 Ctrl+C 退出" in js, "关托盘后要指一下退出入口"
+        # 路径那处确实要重启, 所以只留一句, 不摆理由 (用户: 不用在界面上写理由)
+        _pblk = html.split('id="path-img-input"', 1)[0].rsplit('<h3>📁 路径</h3>', 1)[-1]
+        assert "重启 Vixiq 后生效" in _pblk and "缓存" not in _pblk, _pblk
+    finally:
+        wsrv.set_launcher_apply(saved_hook)
+        (upaths.user_data, upaths.data_root,
+         upaths.config_dir, upaths.user_config_path) = orig
+        shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t135_artwork_pages_api_and_queue_pages() -> None:
+    """T135: 🖼 查询页「按页下载」之一 —— 取页接口 + 队列 pages 列。
+
+    ① 迁移 020 给 download_queue_items 加 pages TEXT (NULL = 整部, 向后兼容),
+       且**不塞进 strategy** (那列被引擎当 DownloadStrategy 枚举解析);
+    ② queue_add(pages=[0,2]) 落成去重排序后的 JSON 串, 不传 = NULL;
+    ③ GET /api/artwork/<id>/pages: 未登录 → **200 + need_login** (前端要能区分
+       「没登录」和「请求失败」) / 登录后 low=regular、high=original + 合并库内页状态
+       + is_extra (超出远端页数的「附加页」); 作品不存在 → 404;
+    ④ POST /api/cart 带 pages 入队成功, 不带 pages 的整部口径一字不改。
+    """
+    import tempfile
+    import shutil
+    import utils.paths as upaths
+    import core.search_client as scl
+    from core.search_client import ArtworkNotFoundError
+    from db.store import PixivDatabase, PSt
+    from web import server as wsrv
+    from web.server import create_app
+
+    # ---------- ① 迁移 + store 接线 (静态) ----------
+    mig = (PROJECT_ROOT / "db" / "migrations" / "020_queue_pages.sql")
+    assert mig.exists(), "缺 020_queue_pages.sql"
+    _txt = mig.read_text(encoding="utf-8")
+    _up = _txt.split("-- UP:")[1].split("-- DOWN:")[0]
+    assert "ALTER TABLE download_queue_items ADD COLUMN pages TEXT" in _up, _up
+    assert "DROP COLUMN pages" in _txt.split("-- DOWN:")[1], "回滚节该给出 DROP"
+    _store = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
+    _qadd = _store.split("def queue_add(")[1].split("def ")[0]
+    assert "pages=None" in _qadd and "pages_json" in _qadd and "json.dumps" in _qadd, _qadd
+    # 页级页数**绝不能**写进 strategy: 引擎按 DownloadStrategy 枚举解析它
+    assert "strategy, status, source_note, pages" in _store, "pages 列要单独一列, 不塞 strategy"
+
+    tmp = Path(tempfile.mkdtemp(prefix="t135p_")).resolve()
+    orig = (upaths.user_data, upaths.data_root)
+    upaths.user_data = lambda rel: (tmp / str(rel))
+    upaths.data_root = lambda: tmp
+    saved_sess = wsrv._pixiv_http_session_module
+    saved_fi, saved_fp = scl.http_fetch_illust, scl.http_fetch_illust_pages
+
+    class _Info:
+        artwork_id = "777001"
+        title = "按页下载测试"
+        author_id = "555"
+        author_name = "测试作者"
+        page_count = 3
+        is_r18 = False
+        illust_type = "illust"
+
+    def _fake_pages(session, aid, **kw):
+        # 4 页: 远端只声明 3 页 → 第 4 页 (pn=3) 必须标 is_extra
+        return [{"page_num": n, "original": f"https://i.pximg.net/x_{n}_p{n}.jpg",
+                 "regular": f"https://i.pximg.net/r_{n}_p{n}.jpg",
+                 "small": "", "thumb": "", "width": 100 + n, "height": 200 + n}
+                for n in range(4)]
+
+    try:
+        # 预置: 777001 已在库, p0 已下载(pn=0), 其余未下载
+        with PixivDatabase() as db:
+            db.init_pages("777001", 3)
+            db.mark_page_status("777001", 0, PSt.DONE, md5="m0")
+
+        # ---------- ③ 未登录 → 200 + need_login (不是 401) ----------
+        # ⚠ 要打桩的是**模块级别名**: create_app 内部另有一个同名局部函数会把闭包里的
+        # 引用劫持掉 (见 web/server.py 里 _pixiv_http_session_module 处的说明)。
+        wsrv._pixiv_http_session_module = lambda: None
+        c = create_app().test_client()
+        r = c.get("/api/artwork/777001/pages")
+        assert r.status_code == 200, ("没登录不该报 401 让前端分不清", r.status_code)
+        assert r.get_json()["status"] == "need_login", r.get_json()
+
+        # ---------- ③ 登录后: low/high + 库内页状态 + is_extra ----------
+        wsrv._pixiv_http_session_module = lambda: {"headers": {}, "cookies": {}}
+        scl.http_fetch_illust = lambda *a, **k: _Info()
+        scl.http_fetch_illust_pages = _fake_pages
+        j = c.get("/api/artwork/777001/pages").get_json()
+        assert j["status"] == "ok" and j["in_library"] is True, j
+        assert j["artwork"]["page_count"] == 3 and j["artwork"]["title"] == "按页下载测试", j["artwork"]
+        assert len(j["pages"]) == 4, j["pages"]
+        p0 = j["pages"][0]
+        assert p0["high"].endswith("x_0_p0.jpg") and p0["low"].endswith("r_0_p0.jpg"), p0
+        assert p0["status"] == PSt.DONE, ("已入库的页要带上库里的页状态", p0)
+        assert j["pages"][1]["status"] == PSt.PLACEHOLDER, j["pages"][1]
+        assert [p["is_extra"] for p in j["pages"]] == [False, False, False, True], \
+            "超出远端 page_count 的页要标 is_extra"
+        # 作品不存在 → 404
+        def _nf(*a, **k):
+            raise ArtworkNotFoundError("作品不存在")
+        scl.http_fetch_illust = _nf
+        assert c.get("/api/artwork/777001/pages").status_code == 404
+        scl.http_fetch_illust = lambda *a, **k: _Info()
+
+        # ---------- ④ POST /api/cart: 带 pages 入队 ----------
+        r = c.post("/api/cart", json={"item_type": "artwork", "artwork_id": "777002",
+                                      "title": "#777002 按页", "page_count": 4,
+                                      "author_id": "555", "author_name": "测试作者",
+                                      "pages": [2, 0, 0]})
+        assert r.status_code == 200 and r.get_json()["reason"] == "added", r.get_json()
+        # 不带 pages = 整部 (向后兼容)
+        r = c.post("/api/cart", json={"item_type": "artwork", "artwork_id": "777003",
+                                      "title": "#777003 整部", "page_count": 4})
+        assert r.get_json()["reason"] == "added", r.get_json()
+        with PixivDatabase() as db:
+            rows = {str(x.get("artwork_id")): x.get("pages") for x in db.queue_list()}
+            assert rows["777002"] == "[0, 2]", ("页号要排序去重后存成 JSON 串", rows)
+            assert rows["777003"] is None, ("不带 pages 就是整部, 必须是 NULL", rows)
+            # page_count 仍是远端总页数 (不是选中页数), 否则整部会被判成已下完
+            _it = [x for x in db.queue_list() if str(x.get("artwork_id")) == "777002"][0]
+            assert int(_it["page_count"]) == 4, _it
+            _w = db.get_work_info("777002")
+            assert int(_w.total_pages) == 4, ("作品总页数必须是远端总页数", _w.total_pages)
+    finally:
+        wsrv._pixiv_http_session_module = saved_sess
+        scl.http_fetch_illust, scl.http_fetch_illust_pages = saved_fi, saved_fp
+        (upaths.user_data, upaths.data_root) = orig
+        shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t136_page_download_engine_and_frontend() -> None:
+    """T136: 🖼 查询页「按页下载」之二 —— 引擎/爬虫页级 + 前端远程大图 + 遮挡修复。
+
+    ① `_only_pages_of` 纯函数 (NULL/脏数据 → 整部);
+    ② 引擎: 页级任务**绕过**「整部已下完就跳过」那段 (否则点「补某页」被静默跳过),
+       并把 only 传给 download_artwork;
+    ③ 爬虫: 只下选中页 + 页级**拒绝回落浏览器通道** (浏览器通道会按 URL 规律把未选页也补齐);
+       init_pages 仍按**远端总页数**写 (关键: 否则整部被判成已下完 → 图库谎报入库);
+    ④ 前端: openRemoteLightbox + 缩略图多选条 + 「显示原图/下载该页/🔗 原网页」,
+       查询页卡片点击**不再** window.open 原站;
+    ⑤ 「调整页序」时收起「上个作品/下个作品」, 不再遮住「完成」按钮。
+    """
+    from core.download_engine import _only_pages_of
+    eng = (PROJECT_ROOT / "core" / "download_engine.py").read_text(encoding="utf-8")
+    craw = (PROJECT_ROOT / "core" / "crawler.py").read_text(encoding="utf-8")
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+
+    # ---------- ① 纯函数 ----------
+    assert _only_pages_of({}) is None and _only_pages_of({"pages": None}) is None
+    assert _only_pages_of({"pages": ""}) is None
+    assert _only_pages_of({"pages": "junk"}) is None, "脏数据退回整部, 不许让任务炸掉"
+    assert _only_pages_of({"pages": "[]"}) is None
+    assert _only_pages_of({"pages": "[0, 2]"}) == {0, 2}
+    assert _only_pages_of({"pages": '["1", -5]'}) == {1}, "负页码要丢掉"
+
+    # ---------- ② 引擎接线 ----------
+    _run = eng.split("def _run_item(")[1]
+    assert "only = _only_pages_of(it)" in _run, "引擎没解析 pages 列"
+    assert "if only is None and strategy == DownloadStrategy.ONLY_NEW" in _run, \
+        "页级任务必须绕过「整部已下完就跳过」那段"
+    assert "kw['pages'] = only" in _run, \
+        "页级页码要只在页级任务时才带上 —— 整部的老签名不能多收一个关键字"
+
+    # ---------- ③ 爬虫 ----------
+    assert "def download_artwork(self, artwork_id, author_id=None, author_name=None," \
+           "\n                         force_overwrite: bool = False, pages=None)" in craw, \
+        "download_artwork 缺 pages 形参"
+    assert "if t[0] in only" in craw, "没按选中页过滤"
+    assert "按页下载不支持浏览器兜底" in craw, \
+        "页级失败绝不能回落浏览器通道 (它会按 URL 规律把未选页也补齐)"
+    assert "init_pages(artwork_id, info.page_count)" in craw, \
+        "init_pages 必须按远端总页数写 —— 写选中页数会让整部作品被判成已下完"
+    # 服务端: page_count 透传的仍是远端总页数, 且只有作品项认 pages
+    assert 'pages=(data.get("pages") if item_type == "artwork" else None)' in srv, srv[:0]
+
+    # ---------- ④ 前端远程大图 ----------
+    assert "window.openRemoteLightbox = async function" in js, "缺远程大图弹窗"
+    for _need in ("lb-remote-strip", "🖼️ 显示原图", "⬇ 下载该页", "⬇ 下载选中页",
+                  "lb-remote-src", "🔗 原网页", "'/api/artwork/'", "lb-remote-all"):
+        assert _need in js, f"前端少了 {_need}"
+    assert "'pages': nums" not in js and "pages: nums" in js, "页号要随请求带上"
+    # 查询页卡片点击**不许**再开原站新标签页 (否则「又弹大图又开标签页」)
+    _clk = js.split("搜索页作品卡点击")[1].split("$$('.tab')")[0]
+    assert "window.openRemoteLightbox(card)" in _clk
+    assert "window.open(url" not in _clk and "window.open(url," not in _clk, _clk
+    # 卡片带上作品 ID (大图弹窗靠它取页)
+    assert 'data-aid="${esc(w.artwork_id)}"' in js, "卡片少了 data-aid"
+    # R18 安全模式: 远程低清与缩略图都必须先过打码这一关
+    assert "safemode && isR18 && !pg._reveal" in js, "远程大图没走安全模式占位"
+    # ---------- ④′ 点击放大 1:1 · 两个弹窗共用一支 + 「不点就不取原图」----------
+    # : 弹窗里大图按容器缩放, master1200 与 img-original 都远超容器,
+    # 肉眼一样 —— 只有 1:1 渲染才比得出。放大只重排**已加载**的那张, 不顺手去取原图。
+    # 2026-10-20 用户追加: 「关于点击查看大图的优化也应该适用到本地图库里面, 包括刚才那个关闭叉叉」
+    assert js.count("z = setupZoom(lb, wrap, lay,") == 2, \
+        "放大/平移要抽成一支 setupZoom, 本地图库查看器与远程大图弹窗各装一份"
+    assert js.count('<span class="lb-zoom-hint"></span>') == 2, "两个弹窗都要有放大提示的位置"
+    assert js.count("z.teardown()") == 3, "两个弹窗关闭时都要摘掉 window 上的鼠标监听 (本地点上/点Esc)"
+    assert "zoomTo(!zoom)" in js, "点图片没有切换放大"
+    assert "setBlocked: (b) => {" in js and "blocked && zoom" in js, \
+        "没有「禁放大」这支 (打码页 / 没有图: 占位图 1:1 只会露出一块小矩形)"
+    # 放大态必须把**图片元素自身**撑到自然尺寸 —— 只给 object-fit:none 是不够的: 元素盒子仍是容器
+    # 尺寸, 裁剪窗口锚在元素盒子上, translate 只是在拖一个方块。
+    _zrule = css.split(".lightbox-img-wrap.is-zoom .lightbox-img.lb-layer {")[1].split("}")[0]
+    assert "width: auto" in _zrule and "height: auto" in _zrule, \
+        "放大态没把元素尺寸放开 (元素仍 100%/100% → 拖动只是拖方块, 翻不出图的其余区域)"
+    assert "left: 50%" in _zrule and "top: 50%" in _zrule \
+        and "right: auto" in _zrule and "bottom: auto" in _zrule, \
+        "基类 inset:0 会拉伸元素, 放大态要把它改回 left/top 定位"
+    assert "translate(-50%, -50%) translate(" in js, "元素居中(-50%,-50%)必须与平移量叠加"
+    assert ".lightbox-img-wrap.is-zoom" in css and ".lightbox.is-remote" not in css, \
+        "放大样式不许只挂远程弹窗 —— 需求两个弹窗都生效"
+    assert "lightbox is-remote" not in js, "两个弹窗同用一种样式, is-remote 已成死代码"
+    assert "clampAxis" in js and "panFrom" in js, "放大后没有拖拽平移"
+    assert "if (hiOn) swapLayer(f" in js, "原图要**只在**点「显示原图」后才加载 (默认低清, 省流量)"
+    # ---------- ④″ 放大后真的拖得动 + 放大态吃满可用空间 ----------
+    # 夹取必须用容器的实际渲染尺寸: curNw/curNh 存的是图片**自然尺寸**, 拿它当视口算出的上限
+    # (自然-自然)/2 = 0, 平移量恒被夹成 0 → 拖不动。
+    assert "clampAxis(panFrom.ox + dx, wrap.clientWidth, nw)" in js, \
+        "平移夹取要用容器实际宽度 (curNw 是自然尺寸, 拿它当视口算出的上限恒为 0)"
+    assert "clampAxis(panFrom.oy + dy, wrap.clientHeight, nh)" in js, "纵向同理"
+    assert "clampAxis(zx, wrap.clientWidth, nw)" in js, \
+        "窗口尺寸变化时, 放大态的平移量要按新视口重新夹一遍 (旧上限会失效)"
+    # 放大态额度: **取景窗直接铺满可用区域**, 不再跟图片比例走 —— 2026-10-20 用户:
+    #。
+    # 两处弹窗都要: 横向满 98vw; 竖向用**实测**行高扣掉下方 ✕/‹›/信息行/缩略条的空间。
+    assert js.count("wrap.style.width = Math.max(1, Math.round(window.innerWidth * 0.98)) + 'px';") == 2, \
+        "放大态取景窗没铺满屏幕横向 (本地查看器 + 远程弹窗两处都要)"
+    assert js.count("if (zin) {") == 2, "两处 sizeWrap 都要有「放大态铺满」这一支"
+    assert js.count("const r = Math.min(window.innerWidth * 0.92 / nw, capNorm / nh, 1);") == 2, \
+        "常态仍要按图片比例 contain 适配 (铺满只属于放大态)"
+    assert "Math.max(capNorm, window.innerHeight * 0.94 - infoH - stripH - 10)" in js, \
+        "放大态没把竖向额度放出去, 或没用 capNorm 兜住「放大反而变小」"
+    assert "window.innerHeight * (folded ? 0.72 : 0.56)" in js, "远端常态额度被改掉了"
+    assert "window.innerHeight * 0.85" in js, "本地查看器的常态额度被改掉了"
+    assert ".lightbox.is-zoom .lightbox-wrap { max-width: 99vw; max-height: 99vh; }" in css, \
+        "放大态要放开 wrap 的 92vw / 94vh 上限 (max-* 会盖住 JS 设的 inline 尺寸)"
+    assert ".lightbox.is-zoom .lightbox-img-wrap { max-width: 99vw; max-height: 97vh; }" in css, \
+        "放大态要放开取景窗自身的 92vw / 85vh 上限"
+    assert "sizeWrapFn();" in js, "切换放大后没有跟着重排大图尺寸"
+    _close_rule = css.split(".lightbox-close {")[1].split("}")[0]
+    assert "position: fixed" in _close_rule and "top: 18px" in _close_rule, \
+        "✕ 要锚在视口上 (原来 top:-40px 挂在 wrap 上, wrap 顶满 94vh 时按钮越过视口上沿只露半个)"
+    # ---------- ④⁵ 只看要看的  ----------
+    # 三个慢因: ① 缩略图条一次把每页都插进 DOM, 几十个代理请求抢同域名 6 条连接;
+    # ② 翻页时还预取相邻页**原图** (各 1~9MB, 费流量且抢连接); ③ /api/img 先 resp.read()
+    # 整张读完才回给浏览器 → 首字节 = 整图下载耗时。
+    assert js.count('alt="" loading="lazy" decoding="async">') >= 2, \
+        "缩略图条要懒加载 (视口外 / 未展开的页不许发起请求)"
+    assert "const ff = urlsOf(Object.assign({}, cur, pp)).f;" not in js, \
+        "不许再预取相邻页原图 (1~9MB ×2 每次翻页)"
+    _srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    _img = _srv.split("def api_img():")[1].split("\n    # ---")[0]
+    assert "resp.read(65536)" in _img and "yield chunk" in _img, \
+        "图片代理要流式转发 (原来 read() 整张读完才回, 首字节 = 整图下载耗时)"
+    assert "Cache-Control" in _img, "代理要带回缓存头, 同 URL 复用不重复走链路"
+    # ---------- ④‴ 缩略图条可折叠 (远端) ----------
+    assert "lb-remote-fold" in js and ".lb-strip.folded .lb-strip-list" in css, \
+        "缩略图多选条没有折叠开关"
+    assert "applyFold" in js and "lbStripFolded" in js, "折叠态没有记忆 / 没有跟着重排大图"
+    assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
+    # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
+    _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert "app.js?v=20261020l" in _h and "style.css?v=20261020l" in _h, "升一版防旧缓存"
+
+    # ---------- ⑤ 遮挡修复 ----------
+    assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
+    assert ".lightbox.is-reordering .lightbox-nav-items" in css, "样式里没接上"
+    _rb = js.split("reorderBtn.addEventListener('click'")[1].split("stripDone")[0]
+    assert "classList.toggle('is-reordering'" in _rb, "进调整页序时没收起"
+    assert "lb.classList.remove('is-reordering')" in js, "退出调整页序时没恢复"
 
 
 def main() -> int:

@@ -1,0 +1,23 @@
+-- UP:
+-- =============================================================
+-- 「按页下载」: 队列项记住**只下哪几页**。
+--
+-- 背景: 查询页卡片以前只能「➕ 加入清单」→ 整部作品下载。需求能只勾其中几页下
+--   (大图弹窗下方的缩略图多选条)。
+--
+-- 语义: pages = JSON 数组字符串 (如 "[0,3]") = 本次只下这几页 (页号 0 起);
+--       **NULL = 整部作品** —— 老队列项与「加入清单」链路一个字节都不用改 (向后兼容)。
+--
+-- ⚠ 刻意**不塞进 strategy**: 那一列被下载引擎当 DownloadStrategy 枚举解析
+--   (download_engine._run_item / server._cart_add_item), 塞 JSON 会破坏
+--   overwrite / only_new 的判定。
+--
+-- ⚠ 页级任务**不改变**「整部是否已下完」的判定: 引擎与爬虫一律按**远端总页数**写
+--   init_pages / change_work_status.total_pages (page_count 那列仍存远端总页数),
+--   否则 sync_work_and_pages 会把 0..tp-1 判成全 DONE → 图库谎报入库。
+-- =============================================================
+ALTER TABLE download_queue_items ADD COLUMN pages TEXT;
+
+-- DOWN:
+-- 回滚 v020 手工执行:
+--   ALTER TABLE download_queue_items DROP COLUMN pages;

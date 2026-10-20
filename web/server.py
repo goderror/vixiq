@@ -84,6 +84,18 @@ from web.event_bus import EventHub, WebReporter
 _hub = EventHub()
 _cancel_event = threading.Event()
 
+# 启动器开关的热应用钩子 (2026-10-20): main.py 启动时用 set_launcher_apply() 把
+# 「起/停托盘、起/停小控件、开关心跳守护」这套进程级动作交进来 —— web 层只负责存盘与回调,
+# 不掺和进程生命周期 (serve 里没有 tray/widget 对象)。没接钩子时 (如冒烟测试直接 create_app)
+# 只是不热应用, 开关照常存盘。
+_launcher_apply = None
+
+
+def set_launcher_apply(fn) -> None:
+    """注册「启动与托盘」开关的热应用回调: 收 {键: 布尔} → 返回 {键: 结果}。"""
+    global _launcher_apply
+    _launcher_apply = fn
+
 # ---------------------------------------------------------------------------
 # 🔔 数据域「脏」登记 + 事件驱动刷新 
 #   问题: 以前每个写接口各自"记得"通知前端刷新, 漏一个就出现"改了但界面没变",
@@ -510,6 +522,12 @@ def _pixiv_http_session():
         return build_pixiv_http_session(ck, str((acc or {}).get("user_id") or ""))
     except Exception:
         return None
+
+
+# create_app 内部还定义了一个**同名局部函数** `_pixiv_http_session` (读同一套 cookies),
+# 而 Python 编译期就把该名字在 create_app 里定成了闭包变量 —— 于是 create_app 内所有同名
+# 引用都被它劫持, 改不了、也打不了桩。这个模块级别名供「需要在测试里替换」的接口显式引用。
+_pixiv_http_session_module = _pixiv_http_session
 
 
 def _fill_author_name_by_id(db, author_id: str) -> str:
@@ -2944,6 +2962,168 @@ def _act_resp_summary(resp) -> str:
         return ""
 
 
+# ---------------------------------------------------------------------------
+# 📁 路径设置 
+#   以及「数据、配置、缓存要向正常软件看齐, 但别占 C 盘太多」)
+#
+#   分层口径 (按「体积 × 增量」分):
+#     · 图片   = 又大又会长 → 单独一项可指定盘 (通常指到非系统盘); 相对名 = 数据目录下的子目录
+#     · 数据根 = 数据库(百 MB 量级, 增量温和) + 日志 + 缩略图, 默认跟着程序目录 (在 C 盘也不碍事),
+#                真嫌大的用户可以整根搬走 (data_root_override)
+#     · 临时   = 浏览器 profile / 上传缓冲, 既能自动清理又能手动一键清; 默认数据目录下的 temp
+#     · 配置 (config/user.json) 与内置资源都很小且不怎么长, 只展示不可改
+#   三处改动**都要重启**才生效 (utils/paths._paths_cfg() 有进程内缓存, SQLite 连接也已建好);
+#   界面上只写一句「重启 Vixiq 后生效」, 不摆理由。
+# ---------------------------------------------------------------------------
+def _norm_dir_setting(raw, *, allow_rel: bool = False) -> "tuple[str, str]":
+    """规整一项目录设置: 返回 (值, 错误)。空串 = 清除回默认。
+
+    ``allow_rel=True`` (图片目录这种挂在数据根下的子目录) 额外接受**单段相对名** ——
+    不接受 ``a/b`` 或 ``..``: 前者语义含糊, 后者能爬到数据根外面去。"""
+    s = str(raw if raw is not None else "").strip().strip('"')
+    if not s:
+        return "", ""
+    try:
+        p = Path(s).expanduser()
+    except Exception:
+        return "", "路径不合法"
+    if p.is_absolute():
+        return str(p), ""
+    if not allow_rel:
+        return "", "只接受绝对路径，例：F:/vixiq-data"
+    if any(ch in s for ch in '\\/:*?"<>|') or s in (".", ".."):
+        return "", "相对路径只能填一个子目录名；想放别的盘请填绝对路径"
+    return s, ""
+
+
+def _resolve_dir(override: str, fallback: Path) -> Path:
+    """与 utils.paths._abs 同口径: 空/非法 → fallback。"""
+    if not override:
+        return fallback
+    try:
+        p = Path(str(override)).expanduser()
+        return p if p.is_absolute() else fallback
+    except Exception:
+        return fallback
+
+
+def _size_mb(target: "str | Path", *, cap: int = 30000) -> "float | None":
+    """占用 (MB); 路径不存在 → None。
+
+    目录是**有上限地数**: 最多数 ``cap`` 个文件就收手 (数字只算个大概的「有没有涨起来」,
+    但设置页每次切换都要算一遍, 不能因为一个几十万文件的 temp 目录卡在那儿)。"""
+    try:
+        p = Path(target)
+        if p.is_file():
+            return round(p.stat().st_size / 1048576, 1)
+        if not p.is_dir():
+            return None
+        total, seen = 0, 0
+        stack = [p]
+        while stack and seen < cap:
+            d = stack.pop()
+            try:
+                it = os.scandir(d)
+            except OSError:
+                continue
+            with it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(Path(e.path))
+                        elif e.is_file(follow_symlinks=False):
+                            total += e.stat(follow_symlinks=False).st_size
+                            seen += 1
+                            if seen >= cap:
+                                break
+                    except OSError:
+                        continue
+        return round(total / 1048576, 1)
+    except Exception:
+        return None
+
+
+def _paths_snapshot() -> dict:
+    """路径卡片的一份快照: ``saved``(用户填过的) + ``defaults``(默认落点) +
+    ``effective``(实际落点) + ``sizes``(占用 MB)。
+
+    effective **不用** utils.paths.data_root() 去算 —— 它带进程内缓存, 刚改完配置也返回旧值;
+    这里按落盘后的配置直接推, 保证「保存后立刻看到新落点」。"""
+    from utils import paths as _p
+    cfg = load_config().get("paths", {}) or {}
+    overd = str(cfg.get("data_root_override") or "")
+    overt = str(cfg.get("temp_root_override") or "")
+    img_cfg = str(cfg.get("img_subdir") or "").strip()
+    # "img" 是出厂默认, 视同「没设置过」—— 界面上那句清除按钮只在真改过时才出现
+    saved_img = "" if img_cfg in ("", "img") else img_cfg
+    wr = _p.writable_root()
+    rr = _p.resource_root()
+    default_data = wr / "data"
+    droot = _resolve_dir(overd, default_data)
+    troot = _resolve_dir(overt, droot / "temp")
+    # 图片目录: 相对名挂在数据根下, 绝对路径 (F:/…) 直接就是它 —— 与 paths.user_data 同一语义
+    img = Path(img_cfg) if img_cfg and Path(img_cfg).is_absolute() else (droot / (img_cfg or "img"))
+    db = droot / str(cfg.get("db_filename") or "pixiv.db")
+    thumbs = droot / "thumbs"
+    feat = droot / str(cfg.get("feature_db_subdir") or "feature_db")
+    return {
+        "saved": {"data_root_override": overd, "temp_root_override": overt,
+                  "img_subdir": saved_img},
+        "defaults": {"data_root": str(default_data),
+                     "temp_root": str(default_data / "temp"), "img_subdir": "img"},
+        "effective": {
+            "data_root": str(droot),
+            "temp_root": str(troot),
+            "img": str(img),
+            "db": str(db),
+            "logs": str(droot / str(cfg.get("logs_subdir") or "logs")),
+            "thumbs": str(thumbs),
+            "feature_db": str(feat),
+            "wallpaper_dir": str(cfg.get("wallpaper_dir") or ""),
+            "config_file": str(_p.user_config_path()),
+            "install_root": str(wr),
+            "resource_root": str(rr),
+        },
+        "sizes": {"db": _size_mb(db), "thumbs": _size_mb(thumbs),
+                  "temp": _size_mb(troot), "feature_db": _size_mb(feat),
+                  "img": _size_mb(img)},
+    }
+
+
+# (键, 是否允许单段相对名) —— 只有图片目录允许相对, 它本来就常填 "img" 这种子目录名
+_PATH_SETTING_KEYS = (("img_subdir", True),
+                      ("data_root_override", False),
+                      ("temp_root_override", False))
+
+
+def _save_path_overrides(body: dict) -> "tuple[dict | None, str]":
+    """校验并落盘路径设置。成功 → (新快照, "")；失败 → (None, 错误)。"""
+    from utils.config import save_user_config
+    upd = {}
+    for k, allow_rel in _PATH_SETTING_KEYS:
+        if k not in body:
+            continue
+        val, err = _norm_dir_setting(body.get(k), allow_rel=allow_rel)
+        if err:
+            return None, err
+        if val and os.path.isabs(val):
+            # 建一下并验可写: 存个建不出来的路径进去, 下次启动就是一堆报错, 不如此刻就说清
+            try:
+                Path(val).mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                return None, f"这个路径建不出来：{e}"
+            if not os.access(val, os.W_OK):
+                return None, "这个路径当前不可写"
+        upd[k] = val
+    if not upd:
+        return None, "没有可识别的路径设置"
+    try:
+        save_user_config({"paths": upd})
+    except Exception as e:
+        return None, str(e)
+    return _paths_snapshot(), ""
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     static_dir = Path(__file__).resolve().parent / "static"
@@ -3275,6 +3455,80 @@ def create_app() -> Flask:
             tb = str(e).splitlines()[0] if str(e) else repr(e)
             return jsonify({"status": "error",
                             "text": f"查询出错: {tb}\n(若提示登录问题, 请到设置页重新登录)"}), 500
+
+    @app.route("/api/artwork/<artwork_id>/pages")
+    def api_artwork_pages(artwork_id: str):
+        """某作品的「全部页 URL + 库内页状态」—— 查询页大图预览 / 按页下载用 (2026-10-20)。
+
+        只读接口, 不起浏览器。错误映射 (前端要能区分「没登录」与「请求失败」):
+          未登录 → **200 + {"status":"need_login"}** (不要 401);
+          作品不存在 → 404; 登录态失效/取页失败 → 502。
+        `low` = urls.regular (弹窗默认先显示它), `high` = urls.original (点「显示原图」才用)。
+        前端**一律走既有 /api/img?url= 代理**取图 —— i.pximg.net 不带 Referer 会 403。
+        合并库内页状态: 已入库 → 该页 status 取 pages 表 (PSt 常量, 缺行 = 'none'); 未入库 → 全 'none'。"""
+        aid = str(artwork_id or "").strip()
+        if not aid.isdigit():
+            return jsonify({"status": "error", "text": "作品 ID 无效"}), 400
+        # 用模块级别名, 别用同名局部函数 (见 _pixiv_http_session_module 处的说明)
+        sess = _pixiv_http_session_module()
+        if sess is None:
+            return jsonify({"status": "need_login",
+                            "text": "需要先在设置页登录 pixiv 才能查看原图 / 下载"}), 200
+        from core.search_client import http_fetch_illust, http_fetch_illust_pages
+        try:
+            info = http_fetch_illust(sess, aid)
+            raw_pages = http_fetch_illust_pages(sess, aid)
+        except ArtworkNotFoundError as e:
+            return jsonify({"status": "not_found", "text": str(e)}), 404
+        except PermissionError as e:
+            return jsonify({"status": "error", "text": str(e)}), 502
+        except Exception as e:
+            tb = str(e).splitlines()[0] if str(e) else repr(e)
+            return jsonify({"status": "error", "text": f"获取页列表失败: {tb}"}), 502
+
+        in_lib = False
+        local: dict = {}
+        with _db() as db:
+            meta = db.get_artwork_metadata(aid)
+            in_lib = bool(meta and meta.get("trashed_at") is None)
+            for r in db.conn.execute(
+                    "SELECT page_num, status FROM pages "
+                    "WHERE artwork_id=? AND trashed_at IS NULL", (aid,)).fetchall():
+                local[int(r[0])] = int(r[1] or 0)
+
+        total = int(getattr(info, "page_count", 0) or len(raw_pages))
+        pages = []
+        for p in raw_pages:
+            pn = int(p["page_num"])
+            pages.append({
+                "page_num": pn,
+                "low": p["regular"],
+                "high": p["original"],
+                # small/thumb 给「缩略图多选条」用 (整条几十格全用 regular 太费流量)
+                "small": p["small"],
+                "thumb": p["thumb"],
+                "width": p["width"],
+                "height": p["height"],
+                "status": (local.get(pn, "none") if in_lib else "none"),
+                "is_extra": bool(total > 0 and pn >= total),
+            })
+        author = getattr(info, "author", None)
+        return jsonify({
+            "status": "ok",
+            "in_library": in_lib,
+            "artwork": {
+                "artwork_id": aid,
+                "title": getattr(info, "title", "") or "",
+                "author_id": getattr(info, "author_id", None),
+                "author_name": (getattr(author, "name", None)
+                                or getattr(info, "author_name", None) or ""),
+                "page_count": total,
+                "is_r18": bool(getattr(info, "is_r18", False)),
+                "illust_type": str(getattr(getattr(info, "illust_type", ""), "value",
+                                          getattr(info, "illust_type", "")) or ""),
+            },
+            "pages": pages,
+        })
 
     @app.route("/api/search/feed")
     def api_search_feed():
@@ -3653,6 +3907,10 @@ def create_app() -> Flask:
             strategy=(DownloadStrategy.OVERWRITE.value if force
                       else (data.get("strategy") or DownloadStrategy.ONLY_NEW.value)),
             source_note=data.get("source_note") or "Web 加入清单",
+            # 按页下载 (2026-10-20): 只有作品项才认 pages; 不传 = 整部 (向后兼容)。
+            # 注: page_count 始终是**远端总页数** (前端卡片带着), 绝不能改成选中页数 ——
+            # 否则下面的 change_work_status(total_pages=...) 会把整部作品判成已下完。
+            pages=(data.get("pages") if item_type == "artwork" else None),
         )
         if aid:
             if author_id and data.get("author_name"):
@@ -8562,11 +8820,28 @@ def create_app() -> Flask:
                 "Referer": "https://www.pixiv.net/",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             })
-            with urlopen(req, timeout=10) as resp:
-                data = resp.read()
-            return Response(data, content_type=resp.headers.get("Content-Type", "image/jpeg"))
+            resp = urlopen(req, timeout=15)
         except Exception:
             return "", 502
+        ctype = resp.headers.get("Content-Type", "image/jpeg")
+
+        def _stream():
+            # 流式转发: 首字节随读随发 —— 原来 `resp.read()` 要先等 pixiv 把整张图下完再一次性
+            # 回给浏览器, 「点开大图 → 出画面」的时间 = 整图下载耗时 (2026-10-20 
+            # 「只是打开低清的都要加载很久」的主因之一)。注意不能在 `with urlopen(...)` 里
+            # return 生成器: 那会在 return 时就把连接关掉, 所以这里显式在生成器里 close。
+            try:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                resp.close()
+
+        # 带缓存头: 同一 URL 24h 内浏览器直接复用, 不重复走 Flask→pixiv CDN 这条链路
+        return Response(_stream(), content_type=ctype,
+                        headers={"Cache-Control": "public, max-age=86400"})
 
     # ---------------- 对 pixiv 账号的写操作 (收藏 / 关注) ----------------
     @app.route("/api/pixiv-actions")
@@ -8682,10 +8957,15 @@ def create_app() -> Flask:
 
     @app.route("/api/launcher", methods=["POST"])
     def api_launcher_set():
-        """改启动器形态开关 (写回 config/user.json 持久化)。
+        """改启动器形态开关 (写回 config/user.json 持久化), 存盘后**就地热应用**。
 
         白名单过滤: 只认 LAUNCHER_DEFAULTS 里的键, 防止前端 POST 一个 _note 或别的节
-        把 user.json 写脏。未出现的键不动, 交 _deep_merge 与已有 user.json 合并。"""
+        把 user.json 写脏。未出现的键不动, 交 _deep_merge 与已有 user.json 合并。
+
+        2026-10-20 用户: 「启动与托盘那几个设置为什么要设置成重启才生效? 很麻烦」→ 除了
+        「启动自动开浏览器」(那一刻才有浏览器可开) 以外全部改成存盘即刻生效。热应用钩子由
+        main.py 的 set_launcher_apply 交进来 (web 层碰不到托盘/小控件对象); 逐项结果放进
+        ``applied`` 回传, 让界面能如实说清哪一项没立刻生效、为什么。"""
         body = request.get_json(silent=True) or {}
         from utils.config import LAUNCHER_DEFAULTS, save_user_config
         upd = {k: bool(body[k]) for k in LAUNCHER_DEFAULTS if k in body}
@@ -8695,8 +8975,81 @@ def create_app() -> Flask:
             save_user_config({"launcher": upd})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
+        applied = None
+        hook = _launcher_apply
+        if hook is not None:
+            try:
+                applied = hook(dict(upd))
+            except Exception as e:
+                applied = {"error": str(e)}
         mark_dirty("settings")
-        return jsonify({"ok": True, **upd})
+        return jsonify({"ok": True, **upd, "applied": applied})
+
+    # ---------------- 📁 路径设置 (2026-10-20 · 用户: 「所有路径」都要有设置入口) ----------------
+    @app.route("/api/paths")
+    def api_paths_get():
+        """读路径设置: 可改的两个重定向 + 其余位置的只读落点 (给设置页「📁 路径」卡片画)。"""
+        return jsonify(_paths_snapshot())
+
+    @app.route("/api/paths", methods=["POST"])
+    def api_paths_set():
+        """改数据目录 / 临时目录重定向 (写回 config/user.json)。
+
+        空串 = 清除, 回到默认落点。非空必须是**绝对路径且能建出来、能写** —— 校验口径见
+        ``_norm_path_override`` / ``_save_path_overrides``。改完**要重启**才生效 (理由见
+        ``_paths_snapshot`` 上方的模块注释): 响应里带 ``restart_required`` 让界面如实提示。"""
+        body = request.get_json(silent=True) or {}
+        payload, err = _save_path_overrides(body)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        mark_dirty("settings")
+        return jsonify({"ok": True, "restart_required": True, **payload})
+
+    @app.route("/api/paths/pick", methods=["POST"])
+    def api_paths_pick():
+        """弹**系统「选择文件夹」对话框**挑数据目录 / 临时目录, 选中即存; 取消什么都不改。
+
+        ``which`` = ``img``(图片目录) / ``data``(数据目录) / ``temp``(临时目录)。浏览器拿不到用户选中目录的绝对
+        路径, 所以「选目录」只能由服务端弹原生对话框 (复用 utils/folder_dialog.pick_folder,
+        与壁纸夹那处同一套实现)。对话框阻塞当前请求线程到用户选完, dev server 是 threaded,
+        不影响别的请求。"""
+        body = request.get_json(silent=True) or {}
+        which = str(body.get("which") or "data")
+        _PICK = {"img": ("img_subdir", "选择图片目录（原始图片都存这里，建议放非系统盘）", "img"),
+                 "data": ("data_root_override", "选择数据目录（数据库·日志·缩略图）", "data_root"),
+                 "temp": ("temp_root_override", "选择临时目录", "temp_root")}
+        if which not in _PICK:
+            return jsonify({"ok": False, "error": "未知的路径项"}), 400
+        key, title, cur_key = _PICK[which]
+        cur = _paths_snapshot()["effective"][cur_key]
+        from utils.folder_dialog import pick_folder
+        try:
+            picked = pick_folder(title, initial=str(cur) if cur else None)
+        except Exception as e:
+            # 这条路全是 ctypes/COM: 任一环节失败都必须是 JSON, 不能让前端把 500 当"取消"
+            return jsonify({"ok": False, "error": f"弹不出系统对话框: {e}"}), 500
+        if not picked:
+            return jsonify({"ok": False, "cancelled": True, **_paths_snapshot()})
+        payload, err = _save_path_overrides({key: picked})
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        mark_dirty("settings")
+        return jsonify({"ok": True, "saved": True, "restart_required": True, **payload})
+
+    @app.route("/api/paths/temp/clean", methods=["POST"])
+    def api_paths_temp_clean():
+        """一键清空临时目录 (浏览器 profile / 上传缓冲 / 各种临时文件)。
+
+        临时目录本来就是「随时可整删」的, 手动清与启动时那次自动清理同一套逻辑
+        (``aggressive=True`` 表示连当前进程正在用的也删, 下次用时重建)。"""
+        from utils import paths as _p
+        try:
+            st = _p._cleanup_temp(max_age_h=0, aggressive=True)
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        _reporter().log(f"🧹 临时目录已清理: 删除 {st.get('removed', 0)} 项, 释放 {st.get('freed_mb', 0)} MB")
+        return jsonify({"ok": True, "removed": st.get("removed", 0),
+                        "freed_mb": st.get("freed_mb", 0), "sizes": _paths_snapshot()["sizes"]})
 
     # ---------------- ✨ 壁纸文案 AI (2026-09-27) ----------------
     @app.route("/api/ai")

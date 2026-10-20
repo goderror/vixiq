@@ -51,6 +51,7 @@ _CMD_LABELS = {
 WM_NULL = 0x0000
 WM_CLOSE = 0x0010
 WM_LBUTTONUP = 0x0202
+WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONUP = 0x0205
 WM_CONTEXTMENU = 0x007B
 WM_QUIT = 0x0012
@@ -184,7 +185,11 @@ def second_instance_action(cfg) -> str:
 
 
 def handle_tray_message(msg, wparam, lparam) -> "tuple[str, ...]":
-    """把窗口消息翻成「动作名」列表 (纯函数, 便于冒烟)。ctypes 层只按名字执行。"""
+    """把窗口消息翻成「动作名」列表 (纯函数, 便于冒烟)。ctypes 层只按名字执行。
+
+    左键: **单击**只刷 tooltip (``refresh``), **双击**直接打开图库 (``open_gallery``)。
+    双击时 Windows 会先补一整套 单击消息 (DOWN/UP/DBLCLK/UP), 所以会同时收到
+    ``refresh`` 与 ``open_gallery`` —— 前者只是重算 tooltip 文案, 无副作用, 不必去重。"""
     try:
         msg = int(msg)
     except (TypeError, ValueError):
@@ -193,6 +198,8 @@ def handle_tray_message(msg, wparam, lparam) -> "tuple[str, ...]":
         ev = int(lparam) & 0xFFFF
         if ev in (WM_RBUTTONUP, WM_CONTEXTMENU):
             return ("menu",)
+        if ev == WM_LBUTTONDBLCLK:
+            return ("open_gallery",)
         if ev == WM_LBUTTONUP:
             return ("refresh",)
         return ()
@@ -483,14 +490,17 @@ class Tray:
         return bool(self.hwnd)
 
     def stop(self) -> None:
-        """退出: 让托盘线程自己 NIM_DELETE + DestroyWindow + 退消息循环 (不留残图标)。"""
+        """**只停托盘**: 摘图标 + 让托盘线程收工, 不动程序生命周期。
+
+        ⚠ 这里**绝不能投 WM_CLOSE**: ``handle_tray_message`` 把 WM_CLOSE 翻成 ``("quit",)``,
+        那是「退出 Vixiq」的语义 (→ ``_request_quit`` → ``on_quit`` → 整个进程退出, 浏览器
+        跟着没)。2026-10-20 就是这么来的 ——
+        关闭开关时调的正是本方法。所以直接投线程消息 ``WM_QUIT`` 让消息循环收工,
+        ``_run()`` 的 finally 照常 NIM_DELETE + DestroyWindow (不留幽灵图标)。
+        系统关机 / 右键「退出 Vixiq」仍走 WM_CLOSE → ``_request_quit`` (那条路要 on_quit)。
+        """
         self._wall_stop.set()
-        if self.hwnd:
-            try:
-                ctypes.windll.user32.PostMessageW(self.hwnd, WM_CLOSE, 0, 0)
-            except Exception:
-                pass
-        elif self._tid:
+        if self._tid:
             try:
                 ctypes.windll.user32.PostThreadMessageW(self._tid, WM_QUIT, 0, 0)
             except Exception:
@@ -590,10 +600,13 @@ class Tray:
                 ctypes.windll.user32.PostMessageW(self.hwnd, WM_SHOW_MENU, 0, 0)
             elif a == "refresh":
                 threading.Thread(target=self.refresh_tooltip, daemon=True).start()
+            elif a == "open_gallery":
+                # 双击托盘图标 = 快速打开图库 (与右键菜单「打开图库」同一落点)
+                self._open_url(self.base_url + "#library")
             elif a == "wall_changed":
                 self._on_wall_changed()
             elif a == "already_running":
-                self._bubble("Vixiq", "已在托盘中运行（右键托盘图标可打开界面或退出）")
+                self._bubble("Vixiq", "已在托盘中运行（双击图标打开图库，右键菜单可退出）")
             elif a == "quit":
                 self._request_quit()
         if m == WM_CLOSE:

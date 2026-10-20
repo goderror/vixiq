@@ -340,7 +340,33 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   background: rgba(80,60,0,.75); box-shadow: 0 4px 20px rgba(0,0,0,.4);
 }
 .lightbox-reveal:hover { background: rgba(110,85,0,.85); }
-.lightbox-img-wrap { position: relative; }
+.lightbox-img-wrap { position: relative; cursor: zoom-in; }
+/* 点击图片 → 1:1（100% 像素）放大 + 拖动平移 (本地图库查看器与远程大图弹窗共用)。
+   为什么需要: 大图都是按容器缩放的, master1200(低清) 与 img-original(原图) 在这个尺寸下
+   都远超容器, 肉眼几乎一样 —— 只有 1:1 渲染才比得出细节。 */
+.lightbox-img-wrap.is-zoom { cursor: grab; overflow: hidden; user-select: none; }
+.lightbox-img-wrap.is-zoom:active { cursor: grabbing; }
+/* 放大态: 图片元素**自身**撑到自然尺寸, 定位改回 left/top:50% 居中 (基类的 inset:0 会拉伸元素,
+   必须把 right/bottom 也改 auto 才解得掉)。此时「视口」= .lightbox-img-wrap 的 overflow:hidden,
+   translate 才是在一张大图上移动视口。
+   【为什么不能只用 object-fit: none】元素盒子仍是容器尺寸, 裁剪窗口锚在**元素盒子**上,
+   translate 移动的是「盒子 + 盒里那份固定裁剪」—— 看起来只是把一个方块拖着走, 翻不出新区域
+。 */
+.lightbox-img-wrap.is-zoom .lightbox-img.lb-layer {
+  width: auto; height: auto;
+  left: 50%; top: 50%; right: auto; bottom: auto;
+}
+/* 放大态放开 wrap 的宽高上限: 常态 92vw / 85vh 是「大图 + 两边留白」的取景, 放大看细节时
+   取景窗要铺满可用区域。这两条不放开的话,
+   基类的 max-width/max-height 会盖住 JS 设的 inline 尺寸 (max-* 优先于 width/height)。 */
+.lightbox.is-zoom .lightbox-wrap { max-width: 99vw; max-height: 99vh; }
+.lightbox.is-zoom .lightbox-img-wrap { max-width: 99vw; max-height: 97vh; }
+/* 放大提示挂在图片容器内, 不占信息行的位置 (信息行在窄窗下本来就很挤) */
+.lb-zoom-hint {
+  position: absolute; left: 8px; bottom: 8px; z-index: 6; pointer-events: none;
+  padding: 3px 9px; border-radius: 999px; font-size: 11px; color: #dff6f2;
+  background: rgba(10,26,24,.55); opacity: .75;
+}
 .work-card .w-body { padding: 10px 12px 12px; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 .work-card .w-title { font-size: 13px; font-weight: 600; line-height: 1.35; display: -webkit-box;
   -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 35px; }
@@ -572,7 +598,9 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   /* 无开场动画: 半透明叠加半绘制的大图正是「割裂横条」的来源, 让内容一次性全不透明出现 */
 }
 .lightbox-close {
-  position: absolute; top: -40px; right: 0;
+  /* 锚视口, 不挂在 .lightbox-wrap 上: 原 top:-40px 的写法在 wrap 顶满 94vh 时按钮会越过视口上沿,
+     只露半个  */
+  position: fixed; top: 18px; right: 22px;
   width: 36px; height: 36px; border: none; border-radius: 50%;
   background: rgba(255,255,255,.15); color: #fff;
   font-size: 20px; cursor: pointer; display: flex;
@@ -659,6 +687,45 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   .lightbox-nav-items { right: 8px; bottom: 12px; gap: 6px; }
   .lightbox-nav-items button { padding: 7px 13px; font-size: 12px; }
 }
+/* 调整页序时收起右下角号「上个作品 / 下个作品」: 它俩 fixed 在视口右下角, 展开页序条后
+   正好压住「完成」按钮。由 JS 在进入/退出调整页序时增删这个类。 */
+.lightbox.is-reordering .lightbox-nav-items { display: none; }
+
+/* ---- 远程大图弹窗 (查询页卡片) 的右下角按钮组: 显示原图 / 下载该页 / 原网页 ---- */
+/* 不用 fixed: 页序条就在它下方, fixed 到视口右下角会跟多选条抢位置。挂在信息行右端即可。 */
+.lightbox-info .lb-remote-ops {
+  display: flex; gap: 8px; align-items: center; margin-left: auto; flex-wrap: wrap;
+}
+.lb-remote-ops button, .lb-remote-ops a.lb-remote-src {
+  padding: 7px 14px; border: 1px solid rgba(143,216,208,.45); border-radius: 999px;
+  background: rgba(20,40,38,.72); color: #e8fdfa; text-decoration: none;
+  font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: background .15s, border-color .15s;
+}
+.lb-remote-ops button:hover, .lb-remote-ops a.lb-remote-src:hover {
+  background: rgba(20,70,64,.9); border-color: #8fd8d0;
+}
+.lb-remote-ops button.lb-remote-dl { background: #2f8f83; border-color: #2f8f83; }
+.lb-remote-ops button.lb-remote-dl:hover { background: #27756b; }
+.lb-remote-strip-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lb-remote-all {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  color: #cfe9e5; font-size: 12px; white-space: nowrap;
+}
+.lb-remote-count { color: #9fcac4; font-size: 12px; margin-left: auto; white-space: nowrap; }
+.lb-remote-dlsel {
+  border: none; border-radius: 7px; padding: 5px 16px;
+  background: #2f8f83; color: #fff; font-size: 13px; cursor: pointer;
+}
+.lb-remote-dlsel:hover { background: #27756b; }
+/* 已入库的页: 灰掉 + 不许勾选 (橄榄色 ✓ 角标由 .lb-remote-pick 里的文字给出) */
+.lb-strip-item.is-done { opacity: .5; }
+.lb-strip-item.is-done .lb-strip-thumb { filter: grayscale(.6); }
+.lb-remote-pick {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  color: #cfe9e5; font-size: 11px; white-space: nowrap;
+}
+.lb-strip-item.is-done .lb-remote-pick { cursor: default; }
 /* Lightbox 内「↔ 调整页序」入口按钮 + 底部页序条 */
 .lb-reorder-btn {
   border: 1px solid rgba(143,216,208,.5); background: rgba(20,60,56,.35);
@@ -672,6 +739,16 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   border-radius: 10px; display: flex; flex-direction: column; gap: 8px;
 }
 .lb-strip.hidden { display: none; }
+/* 折叠态: 只留一条工具行 (展开/收起 + 全选 + 下载选中页), 缩略图与提示收起, 高度还给大图
+    */
+.lb-strip.folded .lb-strip-hint,
+.lb-strip.folded .lb-strip-list { display: none; }
+.lb-remote-fold {
+  border: 1px solid rgba(143,216,208,.4); background: rgba(20,60,56,.35);
+  color: #bdeee7; border-radius: 7px; padding: 4px 12px; font-size: 12px;
+  cursor: pointer; white-space: nowrap;
+}
+.lb-remote-fold:hover { background: rgba(20,80,74,.7); }
 .lb-strip-hint { color: #9fcac4; font-size: 12px; }
 .lb-strip-list {
   display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px;

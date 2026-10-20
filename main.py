@@ -53,6 +53,11 @@ _instance_mutex = None
 _tray = None
 # 桌面壁纸小控件 (utils/widget_window.py 的 WallWidget; launcher.wall_widget 开着时才有)
 _wall_widget = None
+# 服务实际绑定的端口 (端口顺延后才是最终值): 「启动与托盘」开关热应用时按它起组件
+_active_port = DEFAULT_PORT
+# 心跳守护的**代次**: 每关/每开一次都 +1, 在跑的守护线程发现自己的代次过期就自己退出。
+# 用代次而不是「停止事件 + 复用线程」—— 关了又马上开时绝不会出现两条守护线程同时判退出。
+_watchdog_gen = 0
 
 
 def _acquire_single_instance(name: str = "vixiq_web") -> "object | None":
@@ -432,6 +437,63 @@ def _start_wall_widget(port: int) -> None:
         _app_log(f"桌面小控件启动失败: {e}")
 
 
+# ── 「🚀 启动与托盘」开关的热应用 (2026-10-20 · 用户: 「为什么要设置成重启才生效? 很麻烦」) ──
+# 这组开关里只有「启动自动开浏览器」是**启动动作** (进程起浏览器那一刻才有意义), 其余四项都能
+# 就地生效 —— 于是做成存盘后立刻回调这里 reconcile, 界面不再笼统写「重启后生效」。
+_LAUNCHER_STARTUP_ONLY = ("auto_open_browser",)
+
+
+def _apply_launcher(upd: dict) -> dict:
+    """让启动与托盘开关**立即生效** (不重启), 返回逐项结果供接口回传。
+
+    - ``tray_enabled`` / ``wall_widget``   → 就地起/停托盘 / 桌面小控件
+    - ``exit_on_browser_close``            → 就地开/关心跳守护 (见 _set_watch_browser)
+    - ``notify_on_wall_change``            → 托盘每次判气泡时现读配置, 本来就热, 无需动作
+    - ``auto_open_browser``                → 是启动动作, 此刻无浏览器可开, 如实回报 startup_only
+    """
+    result = {}
+    for k, v in (upd or {}).items():
+        try:
+            if k == "tray_enabled":
+                if v and _tray is None:
+                    _start_tray(_active_port)
+                    result[k] = "started" if _tray is not None else "failed"
+                elif (not v) and _tray is not None:
+                    _tray_stop()
+                    result[k] = "stopped"
+                else:
+                    result[k] = "unchanged"
+            elif k == "wall_widget":
+                if v and _wall_widget is None:
+                    _start_wall_widget(_active_port)
+                    result[k] = "started" if _wall_widget is not None else "failed"
+                elif (not v) and _wall_widget is not None:
+                    _wall_widget_stop()
+                    result[k] = "stopped"
+                else:
+                    result[k] = "unchanged"
+            elif k == "exit_on_browser_close":
+                _set_watch_browser(bool(v))
+                result[k] = "applied"
+            elif k == "notify_on_wall_change":
+                result[k] = "applied"
+            elif k in _LAUNCHER_STARTUP_ONLY:
+                result[k] = "startup_only"
+        except Exception as e:
+            _app_log(f"热应用 {k} 失败: {e}")
+            result[k] = "failed"
+    return result
+
+
+def _register_launcher_bridge() -> None:
+    """把 :func:`_apply_launcher` 交给 web/server.py —— /api/launcher 存盘后立刻回调它。"""
+    try:
+        from web.server import set_launcher_apply
+        set_launcher_apply(_apply_launcher)
+    except Exception as e:
+        _app_log(f"启动器热应用钩子未接上 (开关仍需重启生效): {e}")
+
+
 # 浏览器存活判定阈值 (模块级: 便于冒烟测试直接引用)
 _HB_STALE = 300.0     # 心跳兜底: 5min 无心跳才认为浏览器可能真崩了/休眠了。
                       # 取 5min 而非 90s: 浏览器会节流隐藏标签定时器(约 1 次/分钟),
@@ -463,24 +525,46 @@ def _browser_gone(*, now: float, clients: int, seen_sse: bool, last_client_at: f
     return False, "心跳仍新鲜 (页面可能只是被节流)"
 
 
-def _heartbeat_watchdog():
+def _set_watch_browser(on: bool) -> None:
+    """开/关「关页面即退出」心跳守护 —— 现在改完立即生效, 不需要重启。
+
+    关 = 把代次 +1: 正在跑的守护线程发现自己的代次过期就自行退出 (最多等它一个睡眠周期
+    约 3 秒)。开 = 再 +1 起一条新的。代次单调递增, 任何时刻至多一条线程在判退出。
+    """
+    global _watchdog_gen
+    _watchdog_gen += 1
+    if not on:
+        _app_log("心跳守护已关闭 (launcher.exit_on_browser_close=false): 关浏览器不会退出服务")
+        return
+    gen = _watchdog_gen
+    threading.Thread(target=_heartbeat_watchdog, args=(gen,), daemon=True,
+                     name="vixiq-hbwatch").start()
+    _app_log("心跳守护已开启 (launcher.exit_on_browser_close=true): 页面全关即退出服务")
+
+
+def _heartbeat_watchdog(gen: int):
     """浏览器页面心跳守护: 页面全部关闭后自动退出服务 (判定逻辑见 _browser_gone)。
 
-    **默认不启用** —— 托盘常驻后进程不再围着浏览器转, 关掉浏览器不该把它也带走。
-    只有用户显式打开 launcher.exit_on_browser_close 才恢复旧行为 (见 should_watch_browser)。"""
+    ``gen`` 是启动它时的代次; 一旦 ``_watchdog_gen`` 变了 (用户在设置页关掉了这个开关) 就
+    立刻收工, 绝不再判退出 —— 否则「关了还照样自杀」.
+    **默认不启用** —— 托盘常驻后进程不再围着浏览器转, 关掉浏览器不该把它也带走。"""
     from web.server import _heartbeat, _hub
     seen_sse = False
     last_client_at = 0.0
     # 启动宽限: 等首个 SSE 连接或首个心跳 (浏览器约 1~3s 后自动打开)
     for _ in range(30):
+        if _watchdog_gen != gen:
+            return
         time.sleep(2)
         try:
             if _hub.client_count() > 0 or _heartbeat["ever"]:
                 break
         except Exception:
             pass
-    while True:
+    while _watchdog_gen == gen:
         time.sleep(3)
+        if _watchdog_gen != gen:
+            return          # 睡的这一觉里用户把开关关了 → 别再判退出
         now = time.time()
         try:
             clients = _hub.client_count()
@@ -588,6 +672,8 @@ def main():
     except Exception:
         _close_splash(splash_stop)   # 服务起不来也别让启动画面卡住用户
         raise
+    # 设置页「启动与托盘」开关的热应用钩子: 存盘后立刻 reconcile, 不用重启
+    _register_launcher_bridge()
 
     # 端口决策:
     #  - 端口上有活实例(能响应 HTTP) → 不重复启动, 直接打开它
@@ -624,6 +710,9 @@ def main():
             print(f"⚠ 端口 {old} 被占用但无响应(疑似僵尸残留), 已自动改用端口 {port}")
 
     url = f"http://127.0.0.1:{port}/"
+    # 把最终端口亮给热应用 (端口顺延后, 起托盘/小控件得用真正在跑的那个)
+    global _active_port
+    _active_port = port
     ln = config.get("launcher") or {}
 
     # 端口就绪后: 关掉启动画面 → 起托盘 → (可选) 开浏览器 / 桌面小控件。
@@ -673,16 +762,12 @@ def main():
     # 心跳守护: 浏览器页面全部关闭后自动退出服务 (daemon, 不阻塞进程退出)。
     # ⚠ 2026-09-24 起**默认不启动** —— 托盘常驻后进程不再围着浏览器转, 关掉浏览器不该把
     #   服务也带走 (以前就是这样, 用户切走一会儿回来处处 failed to fetch)。
-    #   想恢复旧行为: 设置页「🚀 启动与托盘」里打开「关页面即退出」。
+    #   想恢复旧行为: 设置页「🚀 启动与托盘」里打开「关页面即退出」, 存盘后立即生效。
     try:
         from utils.tray import should_watch_browser
-        _watch_browser = should_watch_browser(config)
-    except Exception:
-        _watch_browser = False
-    if _watch_browser:
-        threading.Thread(target=_heartbeat_watchdog, daemon=True).start()
-    else:
-        _app_log("心跳守护未启用 (launcher.exit_on_browser_close=false): 关浏览器不会退出服务")
+        _set_watch_browser(should_watch_browser(config))
+    except Exception as e:
+        _app_log(f"心跳守护未启用: {e}")
     try:
         app.run(host="127.0.0.1", port=port, threaded=True, use_reloader=False)
     except Exception:

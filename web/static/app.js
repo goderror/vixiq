@@ -1,4 +1,4 @@
-﻿/* Vixiq · Web 版前端逻辑 (原生 JS, 零依赖) */
+/* Vixiq · Web 版前端逻辑 (原生 JS, 零依赖) */
 'use strict';
 
 // ============ 工具 ============
@@ -21,7 +21,7 @@ window.switchTab = function (name) {
   else if (name === 'stats') loadStatsPage();
   else if (name === 'reverse') loadReverseStatus();
   else if (name === 'tasks') refreshCart();
-  else if (name === 'settings') { loadThumbsStats(); loadOperations(); paintSelfCheckCard(); loadActivityStats(); loadPixivActions(); loadLauncher(); loadWallDir(); loadWallLib(); loadAiText(); }
+  else if (name === 'settings') { loadThumbsStats(); loadOperations(); paintSelfCheckCard(); loadActivityStats(); loadPixivActions(); loadLauncher(); loadWallDir(); loadWallLib(); loadAiText(); loadPaths(); }
 };
 
 // ============ 🖼 当前壁纸 (桌面幻灯片) 信息窗 —— 2026-09-24 ============
@@ -1945,7 +1945,16 @@ async function toggleLauncher(key) {
     if (r && r.ok === false) throw new Error(r.error || '保存失败');
     launcherState[key] = next;
     paintLauncher();
-    toast((LAUNCHER_KEYS[key].on || key) + (next ? ' 已开启' : ' 已关闭') + '（重启后生效）', 'ok');
+    // 2026-10-20: 除「启动自动开浏览器」外都在存盘后立刻生效 (后端 main._apply_launcher
+    // 回报 applied)。只有这一项是启动动作, 如实说清它下次启动才起作用。
+    const name = (LAUNCHER_KEYS[key].on || key) + (next ? ' 已开启' : ' 已关闭');
+    const eff = (r && r.applied) ? r.applied[key] : '';
+    if (eff === 'failed') toast(name + '，但没能立刻生效，重启 Vixiq 后生效', 'err');
+    else if (key === 'auto_open_browser') toast(name + '（下次启动生效）', 'ok');
+    else if (key === 'tray_enabled' && !next)
+      // 托盘一关, 右下角就没有退出入口了 —— 顺嘴指一下还剩哪两个 (不是解释"为什么", 是告诉他去哪儿点)
+      toast(name + '（已立即生效）；之后从页面「退出程序」或 Ctrl+C 退出', 'ok');
+    else toast(name + '（已立即生效）', 'ok');
   } catch (e) { toast('设置失败: ' + (e.message || e), 'err'); }
   finally { if (btn) btn.disabled = false; }
 }
@@ -1987,6 +1996,109 @@ async function pickWallDir() {
     if (st) st.textContent = r.effective || '（当前没有壁纸，读不到目录）';
     toast('壁纸夹已设为 ' + (r.dir || ''), 'ok');
   } catch (e) { toast('选择文件夹失败: ' + (e.message || e), 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+// ===== 📁 路径 
+//       以及「数据、配置、缓存要向正常软件看齐, 但别占 C 盘太多」) =====
+// 按「体积 × 增量」分层: 图片单独可指定(大且会涨, 建议非系统盘) / 数据根(数据库+日志+缩略图,
+// 默认随程序目录, 也可整根搬) / 临时目录(可一键清)。选目录只能由服务端弹系统对话框 ——
+// 浏览器拿不到选中目录的绝对路径。改动**要重启**才生效 (utils/paths 有进程内缓存,
+// SQLite 连接也已建好), 所以每处都带一句「重启 Vixiq 后生效」。
+let pathsState = {};
+// 三处可改目录 → 输入框/清除钮/配置键/中文名, 一处定义三处复用
+const PATH_EDITABLE = {
+  img:  { input: 'path-img-input',  clear: 'path-img-clear',  key: 'img_subdir',         label: '图片目录' },
+  data: { input: 'path-data-input', clear: 'path-data-clear', key: 'data_root_override', label: '数据目录' },
+  temp: { input: 'path-temp-input', clear: 'path-temp-clear', key: 'temp_root_override', label: '临时目录' },
+};
+
+async function loadPaths() {
+  try { pathsState = await api('/api/paths'); }
+  catch (e) {
+    pathsState = {};
+    const box = $('#path-positions');
+    if (box) box.textContent = '读取失败: ' + (e.message || e);
+    return;
+  }
+  paintPaths();
+}
+
+function paintPaths() {
+  const saved = pathsState.saved || {}, eff = pathsState.effective || {},
+        sz = pathsState.sizes || {};
+  const mbHint = (v) => (v == null ? '' : '（' + v + ' MB）');
+  Object.values(PATH_EDITABLE).forEach((it) => {
+    const inp = $('#' + it.input), clr = $('#' + it.clear);
+    const v = saved[it.key] || '';
+    if (inp) inp.value = v;
+    if (clr) clr.hidden = !v;      // 没设置过就没有可清除的东西
+  });
+  const box = $('#path-positions');
+  if (!box) return;
+  if (!eff.data_root) { box.textContent = '读取失败'; return; }
+  const wp = eff.wallpaper_dir || '';
+  box.textContent = [
+    ['图片目录', eff.img + mbHint(sz.img)],
+    ['数据目录', eff.data_root],
+    ['数据库', eff.db + mbHint(sz.db)],
+    ['日志目录', eff.logs],
+    ['缩略图', eff.thumbs + mbHint(sz.thumbs)],
+    ['反搜特征库', eff.feature_db + mbHint(sz.feature_db)],
+    ['临时目录', eff.temp_root + mbHint(sz.temp)],
+    ['壁纸夹', wp || '（未设置，跟随当前壁纸所在文件夹）'],
+    ['配置文件', eff.config_file],
+    ['程序目录', eff.install_root],
+    ['内置资源', eff.resource_root],
+  ].map(([k, v]) => k + '  ' + v).join('\n');
+}
+
+async function pickPathDir(which) {
+  const it = PATH_EDITABLE[which];
+  const btn = $('#' + (which === 'img' ? 'path-img-pick'
+                      : which === 'data' ? 'path-data-pick' : 'path-temp-pick'));
+  if (btn) btn.disabled = true;
+  // 对话框会一直挂着直到用户选完 —— 先给一句反馈, 否则弹在别的窗口后面看着像「点了没反应」
+  toast('已打开系统「选择文件夹」窗口，请在弹出的窗口中选择', 'ok');
+  try {
+    const r = await api('/api/paths/pick', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ which }),
+    });
+    if (r && r.cancelled) { pathsState = r; paintPaths(); return; }   // 取消: 静默
+    if (!r || r.ok !== true) throw new Error((r && r.error) || '服务端没有返回结果');
+    pathsState = r; paintPaths();
+    toast(it.label + '已设为 ' + ((r.saved || {})[it.key] || '') + '（重启 Vixiq 后生效）', 'ok');
+  } catch (e) { toast('选择文件夹失败: ' + (e.message || e), 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+async function cleanTempDir() {
+  const btn = $('#path-temp-clean');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/paths/temp/clean', { method: 'POST' });
+    if (!r || r.ok !== true) throw new Error((r && r.error) || '服务端没有返回结果');
+    if (r.sizes) pathsState.sizes = r.sizes;
+    paintPaths();
+    toast('临时目录已清理：删除 ' + (r.removed || 0) + ' 项，释放 ' + (r.freed_mb || 0) + ' MB', 'ok');
+  } catch (e) { toast('清理失败: ' + (e.message || e), 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+async function clearPathDir(which) {
+  const it = PATH_EDITABLE[which];
+  const btn = $('#' + it.clear);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/paths', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [it.key]: '' }),
+    });
+    if (!r || r.ok !== true) throw new Error((r && r.error) || '服务端没有返回结果');
+    pathsState = r; paintPaths();
+    toast(it.label + '已回到默认落点（重启 Vixiq 后生效）', 'ok');
+  } catch (e) { toast('设置失败: ' + (e.message || e), 'err'); }
   finally { if (btn) btn.disabled = false; }
 }
 
@@ -2143,7 +2255,7 @@ function renderWorksGrid(works, gallery = false) {
     // 原网页 URL: 优先 DB 记录的 source_url (外来源归档的直达链接), 否则 pixiv 作品的确定链接
     const origUrl = w.source_url || w.pixiv_url || '';
     return `
-    <div class="work-card${w.file_missing ? ' is-missing' : ''}" data-key="${esc(w._key)}"${origUrl ? ` data-url="${esc(origUrl)}"` : ''}>
+    <div class="work-card${w.file_missing ? ' is-missing' : ''}" data-key="${esc(w._key)}"${origUrl ? ` data-url="${esc(origUrl)}"` : ''} data-aid="${esc(w.artwork_id)}" data-r18="${w.is_r18 ? '1' : '0'}">
       ${gallery ? `<label class="card-sel" title="Shift+点击可范围多选"><input type="checkbox" data-key="${esc(w._key)}" ${libSelected.has(w._key) ? 'checked' : ''}></label>` : ''}
       ${w.file_missing
         ? `<img class="thumb" src="${imgSrc((w.image_urls || [])[0], w)}" alt=""
@@ -6929,14 +7041,13 @@ function bind() {
     });
   })();
 
-  // 搜索页作品卡点击 → 打开作品原网页 (搜索面板无框选/选中逻辑, 单击直达)
-  // 用 mousedown/mouseup 位移判定「拖选复制」→ 不跳转; 双击选字由 dblclick 取消跳转
-  // 推荐区的卡片同样处理 (2026-09-20): 都是 .work-card, 别让推荐区点了没反应
+  // 搜索页作品卡点击 → 自研「远程大图」弹窗 (2026-10-20 需求,
+  // 不再直接跳 pixiv 原站)。原站入口保留为卡片上已有的「🔗 原网页」按钮 (它是 <a>, 由守卫放行)。
+  // 保留 mousedown/mouseup 位移判定「拖选复制」→ 不打开弹窗; 推荐区 (.work-card) 同样处理。
   ['#search-result', '#search-feed-body'].forEach((sel) => {
     const sbox = $(sel);
     if (!sbox) return;
-    let t = null, downX = 0, downY = 0, dragged = false;
-    const cancel = () => { if (t) { clearTimeout(t); t = null; } };
+    let downX = 0, downY = 0, dragged = false;
     sbox.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; dragged = false; });
     sbox.addEventListener('mouseup', (e) => {
       if (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4) dragged = true;
@@ -6944,14 +7055,11 @@ function bind() {
     sbox.addEventListener('click', (e) => {
       if (e.target.closest('a, button, input, select, textarea, .w-actions, .w-path')) return;
       const card = e.target.closest('.work-card');
-      if (!card) return;
-      const url = card.dataset.url;
-      if (!url) return;
-      if (dragged) { dragged = false; return; }   // 拖选文字/图片, 不跳转
-      cancel();
-      t = setTimeout(() => { t = null; window.open(url, '_blank'); }, 250);
+      if (!card || !card.dataset.aid) return;
+      if (dragged) { dragged = false; return; }   // 拖选文字/图片, 不打开
+      dragged = false;
+      window.openRemoteLightbox(card);
     });
-    sbox.addEventListener('dblclick', cancel);
   });
 
   $$('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
@@ -7235,6 +7343,92 @@ function bind() {
     });
   })();
 
+  // ---- 🔍 点图 1:1 放大 + 拖动平移 (本地图库查看器与远程大图弹窗共用) ----
+  // 两处所需行为完全一样, 抽成一支装上, 免得改了这边忘了那边 
+  // 「关于点击查看大图的优化也应该适用到本地图库里面」)。调用方要保证:
+  //   ① HTML 里放一个 span.lb-zoom-hint 当放大提示位 (缺了也不报错, 只是没提示);
+  //   ② CSS 的 .lightbox-img-wrap.is-zoom 规则生效 —— 放大态由 CSS 把**图片元素自身**撑到
+  //      自然尺寸, 于是「视口」= wrap 的 overflow:hidden, translate 才是移动视口。只写
+  //      object-fit: none 是不够的: 元素盒子仍是容器尺寸, 拖动就只是把一个方块拖着走。
+  //   sizeWrapFn: 调用方自己的重排 —— 按 isZoom() 取宽高额度 (放大态放开上限), 写入 wrap 的
+  //               inline 尺寸, 并记下自然尺寸
+  //   getNat:     取 [自然宽, 自然高] (调用方的 curNw/curNh)
+  const setupZoom = (lb, wrap, lay, sizeWrapFn, getNat) => {
+    const hint = lb.querySelector('.lb-zoom-hint');
+    let zoom = false, zx = 0, zy = 0, panFrom = null, panMoved = false, blocked = false;
+    // 平移量是「相对居中」的偏移: 上限 = (自然 - 视口)/2; 图比视口小 → 不可拖。
+    // 视口必须取 wrap 的**实际渲染尺寸**, 不能拿自然尺寸去算 (那样算出来恒为 0 → 拖不动)。
+    const clampAxis = (v, view, nat) => {
+      const lim = Math.max(0, (nat - view) / 2);
+      return Math.min(lim, Math.max(-lim, v));
+    };
+    const paint = () => lay.forEach((el) => {
+      el.style.transform = zoom ? `translate(-50%, -50%) translate(${zx}px, ${zy}px)` : '';
+    });
+    // -50%/-50% 负责把自然尺寸的大图居中 (元素 transform 的百分比按自身盒解析), 平移量叠在它后面
+    const applyZoom = () => {
+      lb.classList.toggle('is-zoom', zoom);   // 放大态才放开 wrap / img-wrap 的宽高上限
+      wrap.classList.toggle('is-zoom', zoom);
+      paint();
+      if (hint) hint.textContent = zoom ? '再点图片还原 · 拖动可平移' : '点击图片放大 100%';
+      sizeWrapFn();      // 额度随放大态变 → 立刻重排
+    };
+    const zoomTo = (on) => { zoom = !!on; zx = 0; zy = 0; applyZoom(); };
+    // 视口尺寸变了 (窗口缩放 / 刚切过放大态): 重排 + 按新视口重新夹一遍平移量 (旧上限已失效)
+    const resync = () => {
+      sizeWrapFn();
+      if (!zoom) return;
+      const [nw, nh] = getNat();
+      zx = clampAxis(zx, wrap.clientWidth, nw);
+      zy = clampAxis(zy, wrap.clientHeight, nh);
+      paint();
+    };
+    const panStart = (ev) => {
+      if (!zoom || ev.button !== 0) return;
+      panFrom = { x: ev.clientX, y: ev.clientY, ox: zx, oy: zy };
+      panMoved = false;
+      ev.preventDefault();     // 拖图时不要顺手选中文字
+    };
+    const panMove = (ev) => {
+      if (!panFrom) return;
+      const dx = ev.clientX - panFrom.x, dy = ev.clientY - panFrom.y;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) panMoved = true;
+      const [nw, nh] = getNat();
+      zx = clampAxis(panFrom.ox + dx, wrap.clientWidth, nw);
+      zy = clampAxis(panFrom.oy + dy, wrap.clientHeight, nh);
+      paint();
+    };
+    const panEnd = () => { panFrom = null; };
+    const onClick = (ev) => {
+      // 点「🔒 显示」/ 刚拖完图 (panMoved) 都不算「点图放大」
+      if (ev.target.closest('.lightbox-reveal') || panMoved) { panMoved = false; return; }
+      if (blocked) return;     // 打码页 / 没有图: 占位图 1:1 只会露出一块小矩形
+      zoomTo(!zoom);
+    };
+    wrap.addEventListener('mousedown', panStart);
+    wrap.addEventListener('click', onClick);
+    window.addEventListener('mousemove', panMove);
+    window.addEventListener('mouseup', panEnd);
+    applyZoom();     // 落一次初值 (调用方还没自然尺寸时, 它自己的 sizeWrap 会早退)
+    return {
+      isZoom: () => zoom,
+      zoomTo,
+      resync,
+      // 打码页(安全模式未解锁) / 没有图可放: 禁放大并收起提示; 已放大则先还原
+      setBlocked: (b) => {
+        blocked = !!b;
+        if (hint) hint.classList.toggle('hidden', blocked);
+        if (blocked && zoom) zoomTo(false);
+      },
+      teardown: () => {
+        wrap.removeEventListener('mousedown', panStart);
+        wrap.removeEventListener('click', onClick);
+        window.removeEventListener('mousemove', panMove);
+        window.removeEventListener('mouseup', panEnd);
+      },
+    };
+  };
+
   // ---- 轻量级大图预览 (Lightbox): 双叠层 + 隐藏层加载完成才淡入, 零空白帧 ----
   // 父容器尺寸由 JS 按图片自然比例显式设定(叠层 absolute 不撑开父容器), 缩略图/原图
   // 同画幅 → 换层只有透明度过渡, 无布局跳变、无闪烁; 可见层绝不中途改 src。
@@ -7272,6 +7466,7 @@ function bind() {
       + '<img class="lightbox-img lb-layer" alt="">'
       + '<img class="lightbox-img lb-layer" alt="">'
       + '<button class="lightbox-reveal hidden" title="查看原图">🔒 显示</button>'
+      + '<span class="lb-zoom-hint"></span>'
       + '</div>'
       + '<div class="lightbox-info">'
       + '<span class="lb-title"></span>'
@@ -7294,6 +7489,7 @@ function bind() {
     const lbTitle = lb.querySelector('.lb-title');
     const lbMeta = lb.querySelector('.lb-meta');
     const lbFile = lb.querySelector('.lb-file');
+    const lbInfo = lb.querySelector('.lightbox-info');   // 量信息行实测高度, 好把放大态竖屏额度算准
     const lbNav = lb.querySelector('.lb-nav');
     const btnPrev = lb.querySelector('.lightbox-prev');
     const btnNext = lb.querySelector('.lightbox-next');
@@ -7353,17 +7549,33 @@ function bind() {
     };
 
     // 按图片自然比例把父容器设定为「适配视口后的像素尺寸」→ 换层时容器零变化
+    let z = null;   // setupZoom 的句柄 (在下面装上): 只有它知道当前是不是放大态
     const sizeWrap = (nw, nh) => {
       if (!nw || !nh) return;
-      const maxW = window.innerWidth * 0.92, maxH = window.innerHeight * 0.85;
-      const r = Math.min(maxW / nw, maxH / nh, 1);
-      const W = Math.max(1, Math.round(nw * r)), H = Math.max(1, Math.round(nh * r));
-      wrap.style.width = W + 'px';
-      wrap.style.height = H + 'px';
+      const zin = !!(z && z.isZoom());
+      const capNorm = window.innerHeight * 0.85;
+      const capZoom = Math.max(capNorm, window.innerHeight * 0.94
+        - (lbInfo ? lbInfo.offsetHeight : 0) - lb.querySelector('.lb-strip').offsetHeight - 10);
+      if (zin) {
+        // 放大态: wrap 只是**取景窗** (图片元素自身已是自然尺寸, 溢出由 overflow:hidden 裁掉),
+        // 所以不再跟图片比例走 —— 直接铺满可用区域 
+        // 比例稍微向外撑了一些, 我要的是直接铺满屏幕」)。竖向扣掉信息行与页序条的**实测**
+        // 高度, 下方那两行与 ✕ / ‹ › 才不会被顶出视野。
+        wrap.style.width = Math.max(1, Math.round(window.innerWidth * 0.98)) + 'px';
+        wrap.style.height = Math.max(1, Math.round(capZoom)) + 'px';
+      } else {
+        // 常态: 按图片比例「适配」进视口 (contain) 且不放大超过原尺寸 —— 换层时容器零变化
+        const r = Math.min(window.innerWidth * 0.92 / nw, capNorm / nh, 1);
+        wrap.style.width = Math.max(1, Math.round(nw * r)) + 'px';
+        wrap.style.height = Math.max(1, Math.round(nh * r)) + 'px';
+      }
       curNw = nw; curNh = nh;
     };
-    const onWinResize = () => { if (curNw && curNh) sizeWrap(curNw, curNh); };
+    // 窗口尺寸变化: 重排 + (放大态) 按新视口重新夹一遍平移量
+    const onWinResize = () => { if (curNw && curNh) z.resync(); };
     window.addEventListener('resize', onWinResize);
+    // 🔍 点图 1:1 放大 + 拖动平移 (与远程大图弹窗共用同一支; 2026-10-20 需求下沉到本地图库)
+    z = setupZoom(lb, wrap, lay, () => sizeWrap(curNw, curNh), () => [curNw, curNh]);
 
     // 把 url 放到「当前隐藏层」, 后台 Image 加载+decode 完成后才在隐藏层落 src,
     // 再淡入新层、淡出旧层 —— 可见层从不中途改 src, 全程无空白帧。
@@ -7402,6 +7614,7 @@ function bind() {
     };
 
     function showPage(i) {
+      const prevIdx = idx;
       idx = (i + pages.length) % pages.length;
       const token = ++seq;
       const pg = Object.assign({}, cur, pages[idx]);   // 页面字段覆盖作品字段
@@ -7410,6 +7623,7 @@ function bind() {
       const needBlur = !!(safemode && pg.is_r18 && !pg._reveal);
       lay.forEach(el => el.classList.toggle('blur-r18', needBlur));
       revealBtn.classList.toggle('hidden', !needBlur);
+      z.setBlocked(needBlur);   // 打码页不给放大 (占位图 1:1 放大只会露出一块小矩形)
       lbTitle.textContent = pg.title || '（无标题）';
       lbMeta.textContent = (pg.author_name || pg.author_id || '未知作者') + ' · #' + pg.artwork_id
         + (pg.is_r18 ? (safemode ? ' · R18（安全模式已打码）' : ' · R18') : '');
@@ -7431,12 +7645,11 @@ function bind() {
         fitFrom(im);
         updateDim(im ? im.naturalWidth : pg.width, im ? im.naturalHeight : pg.height, pg);
       });
-      // 预取相邻页原图, 翻页时基本免等
-      [-1, 1].forEach((d) => {
-        const pp = pages[(idx + d + pages.length) % pages.length];
-        const ff = urlsOf(Object.assign({}, cur, pp)).f;
-        if (ff) { const im = new Image(); im.src = ff; }
-      });
+      // 这里**不再**预取相邻页原图。
+      // 原写法一次翻页就悄悄下两张 img-original (各 1~9MB), 既费流量, 又跟当前这张抢同一
+      // 域名的 6 条并发连接 —— 看起来就是「连低清都要等很久」。
+      // 换页才收缩放; 同一页里的「缩略图 ↔ 原图」切换保留放大状态 —— 那正是要 1:1 看细节的场合
+      if (z.isZoom() && idx !== prevIdx) z.zoomTo(false);
     }
 
     // 安全模式: 点「🔒 显示」解锁**当前这一张** (仅本次, 不取消安全模式)
@@ -7483,7 +7696,7 @@ function bind() {
           ? `<button type="button" data-act="fill" title="把这张附加页改成空出来的第 p${hole} 页（其余页号不动）">↳ 填 p${hole}</button>`
           : '';
         return `<div class="lb-strip-item${i === idx ? ' cur' : ''}" data-i="${i}" data-pn="${esc(pg.page_num)}">`
-          + `<img class="lb-strip-thumb${stripBlur}" src="${esq(urlsOf(pg).t)}" alt="">`
+          + `<img class="lb-strip-thumb${stripBlur}" src="${esq(urlsOf(pg).t)}" alt="" loading="lazy" decoding="async">`
           + `<div class="lb-strip-meta">第 ${i + 1} 张 · p${pg.page_num}${extra}</div>`
           + '<div class="lb-strip-ops">'
           + `<button type="button" data-act="prev" title="前移一位"${i === 0 ? ' disabled' : ''}>◀</button>`
@@ -7516,11 +7729,15 @@ function bind() {
       reorderBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         strip.classList.toggle('hidden');
+        // 调整页序时收起右下角「上个作品 / 下个作品」: 它俩 fixed 在视口右下角, 展开页序条后
+        // 正好压住「完成」按钮。退出调整页序时恢复 (见下三处)。
+        lb.classList.toggle('is-reordering', !strip.classList.contains('hidden'));
         if (!strip.classList.contains('hidden')) renderStrip();
       });
       stripDone.addEventListener('click', (ev) => {
         ev.stopPropagation();
         strip.classList.add('hidden');
+        lb.classList.remove('is-reordering');
       });
       strip.addEventListener('click', (ev) => ev.stopPropagation());
       stripList.addEventListener('click', async (ev) => {
@@ -7608,6 +7825,7 @@ function bind() {
       cur = navItems[navIdx];
       pages = (cur.pages && cur.pages.length) ? cur.pages : [cur];
       strip.classList.add('hidden');   // 页序条属于上一张卡片, 换卡时收起
+      lb.classList.remove('is-reordering');   // 同时恢复右下角两颗按钮 (见 reorderBtn 处)
       showPage(0);
     };
     if (nextItemBtn) {
@@ -7621,6 +7839,7 @@ function bind() {
     lb.addEventListener('click', (e) => {
       if (e.target === lb || e.target.closest('.lightbox-close') || e.target.closest('.lightbox-bg')) {
         window.removeEventListener('resize', onWinResize);
+        z.teardown();       // 摘掉放大/平移那几个 window 监听 (不摘会在关窗后继续响应鼠标)
         lb.remove();
       }
     });
@@ -7628,6 +7847,7 @@ function bind() {
     const onKey = (e) => {
       if (e.key === 'Escape') {
         window.removeEventListener('resize', onWinResize);
+        z.teardown();
         lb.remove();
         document.removeEventListener('keydown', onKey);
       } else if (e.key === 'ArrowLeft') showPage(idx - 1);
@@ -7637,6 +7857,395 @@ function bind() {
     };
     document.addEventListener('keydown', onKey);
     showPage(0);
+  };
+
+  // ---- 远程大图预览 (查询页卡片: 单击/双击都开它, 2026-10-20 需求) ----
+  // 刻意**不复用** openLightbox —— 它的 canReorderNow / holesOf / 页序调序全绑「库内作品」,
+  // 塞进远程模式会把那个函数撑爆、动摇既有断言。这里单写一支, 数据只来自
+  // /api/artwork/<id>/pages: 大图默认低清 (regular), 点「显示原图」才叠 original;
+  // 大图按钮组 = 「显示原图 · 下载该页 · 🔗 原网页」(没有「上个作品/下个作品」);
+  // 下方一条缩略图多选条 = 勾几页下几页, 已入库的页标 ✓ 并灰掉。
+  // 缩略图多选条折叠态: 跨打开沿用上次选择, 默认收起 —— 打开大图的主目的是看图,
+  // 竖向空间先还给大图 
+  let lbStripFolded = true;
+  window.openRemoteLightbox = async function (card) {
+    const aid = String((card && card.dataset && card.dataset.aid) || '').trim();
+    if (!aid) return;
+    const origUrl = (card && card.dataset && card.dataset.url)
+      || ('https://www.pixiv.net/artworks/' + aid);
+    const old = document.getElementById('lightbox');
+    if (old) old.remove();
+
+    const lb = document.createElement('div');
+    lb.id = 'lightbox';
+    lb.className = 'lightbox';   // 与本地图库查看器同一套样式 (放大/平移由 setupZoom 共同装上;
+    lb.innerHTML = '<div class="lightbox-bg"></div>'
+      + '<div class="lightbox-wrap">'
+      + '<button class="lightbox-close" title="关闭 (Esc)">✕</button>'
+      + '<button class="lightbox-prev hidden" title="上一页 (←)">‹</button>'
+      + '<button class="lightbox-next hidden" title="下一页 (→)">›</button>'
+      + '<div class="lightbox-img-wrap">'
+      + '<div class="lb-spinner"></div>'
+      + '<img class="lightbox-img lb-layer" alt="">'
+      + '<img class="lightbox-img lb-layer" alt="">'
+      + '<button class="lightbox-reveal hidden" title="查看原图">🔒 显示</button>'
+      + '<span class="lb-zoom-hint"></span>'
+      + '</div>'
+      + '<div class="lightbox-info">'
+      + '<span class="lb-title"></span>'
+      + '<span class="lb-meta"></span>'
+      + '<span class="lb-file"></span>'
+      + '<span class="lb-nav"></span>'
+      + '<span class="lb-remote-ops">'
+      + '<button class="lb-remote-hi" type="button" title="切换原图（默认低清）">🖼️ 显示原图</button>'
+      + '<button class="lb-remote-dl" type="button" title="只下载当前这一页">⬇ 下载该页</button>'
+      + '<a class="lb-remote-src" href="' + esc(origUrl) + '" target="_blank" rel="noopener" title="打开作品原网页">🔗 原网页</a>'
+      + '</span>'
+      + '</div>'
+      + '<div class="lb-remote-strip lb-strip hidden"></div>'
+      + '</div>';
+    document.body.appendChild(lb);
+
+    const wrap = lb.querySelector('.lightbox-img-wrap');
+    const lay = lb.querySelectorAll('.lightbox-img.lb-layer');
+    const spinner = lb.querySelector('.lb-spinner');
+    const revealBtn = lb.querySelector('.lightbox-reveal');
+    const lbTitle = lb.querySelector('.lb-title');
+    const lbMeta = lb.querySelector('.lb-meta');
+    const lbFile = lb.querySelector('.lb-file');
+    const lbInfo = lb.querySelector('.lightbox-info');   // 量它的实测高度, 好把额度算准
+    const lbNav = lb.querySelector('.lb-nav');
+    const btnPrev = lb.querySelector('.lightbox-prev');
+    const btnNext = lb.querySelector('.lightbox-next');
+    const hiBtn = lb.querySelector('.lb-remote-hi');
+    const dlBtn = lb.querySelector('.lb-remote-dl');
+    const strip = lb.querySelector('.lb-remote-strip');
+    let stripList = null;
+
+    let pages = [], art = null, isR18 = false;
+    let idx = 0, seq = 0, vis = 0, curNw = 0, curNh = 0;
+    let hiOn = false;                 // 「显示原图」开关: 默认关 (先给低清, 省流量)
+    let folded = lbStripFolded;       // 缩略图多选条是否收起
+    let busy = false;
+    const picked = new Set();         // 多选条里勾中的页号
+    const blocked = (p) => p.status === 1 || p.status === 'in_queue';
+
+    let z = null;   // setupZoom 的句柄 (在下面装上): 只有它知道当前是不是放大态
+    const sizeWrap = (nw, nh) => {
+      if (!nw || !nh) return;
+      const zin = !!(z && z.isZoom());
+      // 大图能吃多少: 展开多选条时下方还有信息行 + 工具行 + 缩略图 (~250px), 常态只能给 0.56 ——
+      // 按本地那套会把多选条顶出视口 (弹窗整体不滚动, .lightbox-wrap 只 max-height 不 overflow);
+      // 折叠后把省下的高度还给大图。
+      const infoH = lbInfo ? lbInfo.offsetHeight : 0;
+      const stripH = strip.offsetHeight;          // 收起的条 / 未加载时为 0
+      const capNorm = window.innerHeight * (folded ? 0.72 : 0.56);
+      const capZoom = Math.max(capNorm, window.innerHeight * 0.94 - infoH - stripH - 10);
+      if (zin) {
+        // 放大态: wrap 只是**取景窗** (图片元素自身已是自然尺寸, 溢出由 overflow:hidden 裁掉),
+        // 所以不再跟图片比例走 —— 直接铺满可用区域 
+        // 比例稍微向外撑了一些, 我要的是直接铺满屏幕」)。竖向扣掉信息行与工具行的**实测**高度
+        // (弹窗不滚动, 多给就会把下方那行顶出视口), 下方那两行与 ✕ / ‹ › 才不会被顶出视野。
+        wrap.style.width = Math.max(1, Math.round(window.innerWidth * 0.98)) + 'px';
+        wrap.style.height = Math.max(1, Math.round(capZoom)) + 'px';
+      } else {
+        // 常态: 按图片比例「适配」进视口 (contain) 且不放大超过原尺寸
+        const r = Math.min(window.innerWidth * 0.92 / nw, capNorm / nh, 1);
+        wrap.style.width = Math.max(1, Math.round(nw * r)) + 'px';
+        wrap.style.height = Math.max(1, Math.round(nh * r)) + 'px';
+      }
+      curNw = nw; curNh = nh;
+    };
+    // 窗口尺寸变化: 重排 + (放大态) 按新视口重新夹一遍平移量
+    const onResize = () => { if (curNw && curNh) z.resync(); };
+    window.addEventListener('resize', onResize);
+
+    // 🔍 点图 1:1 放大 + 拖动平移 (与本地图库查看器共用同一支 setupZoom; 它按 isZoom() 取额度)。
+    // 为什么需要: 弹窗里大图是按容器缩放的, master1200(低清) 与 img-original(原图) 在这个尺寸
+    // 下都远超容器, 肉眼完全一样 —— 只有 1:1 看才比得出细节(以及 master1200 重编码的痕迹)。
+    // 放大只重排**已经加载的**那一张, 不会顺手去取原图 (原图仍只在点「🖼️ 显示原图」时才请求)。
+    z = setupZoom(lb, wrap, lay, () => sizeWrap(curNw, curNh), () => [curNw, curNh]);
+
+    // 把 url 放隐藏层, 解码完成才切可见性 (与本地 Lightbox 同一套双叠层, 无空白帧)
+    const swapLayer = (url, token, st, isFull, done) => {
+      if (!url) { if (done) done(null); return; }
+      const pre = new Image();
+      const render = () => {
+        if (token !== seq) return;
+        const hid = 1 - vis;
+        const im = lay[hid];
+        if (im.getAttribute('src') !== url) im.src = url;
+        const showIt = () => {
+          if (token !== seq || im.getAttribute('src') !== url) return;
+          if (isFull) st.fullShown = true;
+          else if (st.fullShown) return;
+          im.classList.add('show');
+          lay[vis].classList.remove('show');
+          vis = hid;
+          spinner.style.display = 'none';
+          if (done) done(im);
+          window.setTimeout(() => {
+            if (token === seq && !lay[1 - vis].classList.contains('show')
+                && lay[1 - vis].getAttribute('src')) lay[1 - vis].removeAttribute('src');
+          }, 300);
+        };
+        if (im.complete) showIt();
+        else { im.onload = showIt; im.onerror = () => { if (token === seq) showIt(); }; }
+      };
+      pre.onload = () => {
+        if (token !== seq) return;
+        Promise.resolve(pre.decode ? pre.decode() : undefined).catch(() => {}).then(render);
+      };
+      pre.onerror = render;
+      pre.src = url;
+    };
+
+    // 远端图一律走 /api/img 防盗链代理 (i.pximg.net 不带 Referer 会 403)
+    const proxied = (u) => u ? imgSrc(u, {}) : '';
+    // 安全模式 + R18: 未解锁当前页时**不返回真实地址**, 一律占位 (浏览器从不请求 R18 像素)
+    const urlsOf = (pg) => (safemode && isR18 && !pg._reveal)
+      ? { t: R18_MASK_SVG, f: R18_MASK_SVG }
+      : { t: proxied(pg.low || pg.high), f: proxied(pg.high || pg.low) };
+    const thumbOf = (pg) => (safemode && isR18 && !pg._reveal)
+      ? R18_MASK_SVG : proxied(pg.thumb || pg.small || pg.low);
+
+    function syncStripCur() {
+      if (!stripList) return;
+      stripList.querySelectorAll('.lb-strip-item').forEach((el) => {
+        el.classList.toggle('cur', Number(el.dataset.i) === idx);
+      });
+    }
+
+    function showPage(i) {
+      if (!pages.length) return;
+      const prevIdx = idx;
+      idx = (i + pages.length) % pages.length;
+      const token = ++seq;
+      const pg = pages[idx];
+      const needBlur = !!(safemode && isR18 && !pg._reveal);
+      lay.forEach((el) => el.classList.toggle('blur-r18', needBlur));
+      revealBtn.classList.toggle('hidden', !needBlur);
+      z.setBlocked(needBlur);   // 打码页不给放大 (占位图 1:1 放大只会露出一块小矩形)
+      lbTitle.textContent = (art && art.title) || '（无标题）';
+      lbMeta.textContent = ((art && (art.author_name || art.author_id)) || '未知作者')
+        + ' · #' + aid + (isR18 ? (safemode ? ' · R18（安全模式已打码）' : ' · R18') : '');
+      lbNav.textContent = pages.length > 1 ? (idx + 1) + ' / ' + pages.length : '';
+      btnPrev.classList.toggle('hidden', pages.length <= 1);
+      btnNext.classList.toggle('hidden', pages.length <= 1);
+      lbFile.textContent = (pg.width && pg.height) ? pg.width + '×' + pg.height : '';
+      if (pg.width && pg.height) sizeWrap(pg.width, pg.height);
+      const { t, f } = urlsOf(pg);
+      const st = { fullShown: false };
+      const fitFrom = (im) => { if (im && im.naturalWidth) sizeWrap(im.naturalWidth, im.naturalHeight); };
+      spinner.style.display = '';
+      swapLayer(t, token, st, false, fitFrom);
+      if (hiOn) swapLayer(f, token, st, true, (im) => {
+        fitFrom(im);
+        if (im && im.naturalWidth) lbFile.textContent = im.naturalWidth + '×' + im.naturalHeight;
+      });
+      // 换页才收缩放; 同一页切「低清 ↔ 原图」保留放大状态 —— 那正是要 1:1 比清晰度的场合
+      if (z.isZoom() && idx !== prevIdx) z.zoomTo(false);
+      syncStripCur();
+    }
+
+    // 折叠/展开多选条: 收起只留一条工具行, 把竖向空间还给大图 (并同步重排大图尺寸)
+    const applyFold = () => {
+      if (!stripList) return;
+      strip.classList.toggle('folded', folded);
+      const b = strip.querySelector('.lb-remote-fold');
+      if (b) b.textContent = folded ? '▸ 展开缩略图' : '▾ 收起缩略图';
+      lbStripFolded = folded;                  // 记住本次选择, 下次打开沿用
+      if (curNw && curNh) sizeWrap(curNw, curNh);
+    };
+
+    // 缩略图多选条: 勾几页 → 「下载选中页」; 点格子本身 = 切到那一页
+    const renderStrip = () => {
+      const cand = pages.filter((p) => !blocked(p));
+      const allSel = cand.length > 0 && cand.every((p) => picked.has(p.page_num));
+      const list = pages.map((pg, i) => {
+        const done = pg.status === 1, queued = pg.status === 'in_queue';
+        const locked = done || queued;
+        return '<div class="lb-strip-item' + (i === idx ? ' cur' : '') + (locked ? ' is-done' : '')
+          + '" data-i="' + i + '" data-pn="' + esc(pg.page_num) + '">'
+          + '<img class="lb-strip-thumb" src="' + esq(thumbOf(pg)) + '" alt="" loading="lazy" decoding="async">'
+          + '<div class="lb-strip-meta">第 ' + (i + 1) + ' 页 · p' + esc(pg.page_num)
+          + (pg.is_extra ? '<span class="lb-strip-tag">附加</span>' : '') + '</div>'
+          + '<label class="lb-remote-pick"><input type="checkbox" data-pn="' + esc(pg.page_num) + '"'
+          + (locked ? ' disabled' : (picked.has(pg.page_num) ? ' checked' : '')) + '>'
+          + '<span>' + (done ? '✓ 已入库' : (queued ? '⏳ 已加入' : '下载')) + '</span></label>'
+          + '</div>';
+      }).join('');
+      strip.innerHTML = '<div class="lb-strip-hint">勾选要下载的页 → 「下载选中页」；已入库的页标 ✓ 并灰掉</div>'
+        + '<div class="lb-remote-strip-bar">'
+        + '<button class="lb-remote-fold" type="button"></button>'
+        + '<label class="lb-remote-all"><input type="checkbox"' + (allSel ? ' checked' : '')
+        + '><span>全选</span></label>'
+        + '<span class="lb-remote-count">已选 ' + picked.size + ' 页 · 共 ' + pages.length
+        + ' 页 · 未下载 ' + cand.length + ' 页</span>'
+        + '<button class="lb-remote-dlsel" type="button">⬇ 下载选中页</button>'
+        + '</div>'
+        + '<div class="lb-strip-list">' + list + '</div>';
+      strip.classList.remove('hidden');
+      stripList = strip.querySelector('.lb-strip-list');
+      applyFold();
+    };
+
+    // 「下载该页 / 下载选中页」共用: 走既有清单链路 (入队 → 下载引擎 → 落进图库)
+    const doDownload = async (pns) => {
+      if (busy) return;
+      const asked = (pns || []).map((n) => pages.find((p) => p.page_num === Number(n)))
+        .filter(Boolean);
+      const nums = [];
+      asked.forEach((pg) => {
+        if (!blocked(pg) && nums.indexOf(pg.page_num) < 0) nums.push(pg.page_num);
+      });
+      if (!nums.length) {
+        // 说清为什么点不动 (同一个作品连点第二次时, 要的是「已在清单」而不是一句空话)
+        if (asked.some((pg) => pg.status === 'in_queue')) {
+          toast('⏳ 该作品已在下载列表中，无需重复添加', 'info');
+        } else if (asked.some((pg) => pg.status === 1)) {
+          toast('✓ 该页已入库', 'info');
+        } else {
+          toast('没有可下载的页', 'info');
+        }
+        return;
+      }
+      busy = true;
+      try {
+        const r = await api('/api/cart', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            item_type: 'artwork',
+            artwork_id: aid,
+            author_id: (art && art.author_id) || null,
+            author_name: (art && art.author_name) || null,
+            title: '#' + aid + ' ' + ((art && art.title) || ''),
+            page_count: (art && art.page_count) || pages.length,   // 远端总页数, 不是选中页数
+            pages: nums,
+          }),
+        });
+        const reason = (r && r.reason) || '';
+        if (reason === 'in_queue') { toast('⏳ 该作品已在下载列表中，无需重复添加', 'info'); return; }
+        if (reason === 'already_downloaded') { toast('✓ 该作品已入库', 'info'); return; }
+        if (!r || (r.status !== 'ok' && reason !== 'added')) {
+          toast('加入清单失败：' + apiErr(r), 'err'); return;
+        }
+        nums.forEach((n) => {
+          const pg = pages.find((p) => p.page_num === n);
+          if (pg) pg.status = 'in_queue';
+        });
+        picked.clear();
+        renderStrip();
+        toast('已加入清单，本次只下 ' + nums.length + ' 页 ⬇', 'ok');
+        await autoStartDownload();
+      } catch (e) {
+        toast('加入清单失败：' + e.message, 'err');
+      } finally {
+        busy = false;
+      }
+    };
+
+    const closeLb = () => {
+      window.removeEventListener('resize', onResize);
+      z.teardown();       // 摘掉放大/平移那几个 window 监听 (不摘会在关窗后继续响应鼠标)
+      document.removeEventListener('keydown', onKey);
+      lb.remove();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeLb();
+      else if (e.key === 'ArrowLeft') showPage(idx - 1);
+      else if (e.key === 'ArrowRight') showPage(idx + 1);
+    };
+    document.addEventListener('keydown', onKey);
+    lb.addEventListener('click', (e) => {
+      if (e.target === lb || e.target.closest('.lightbox-close') || e.target.closest('.lightbox-bg')) closeLb();
+    });
+    revealBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (pages[idx]) pages[idx]._reveal = true;
+      showPage(idx);
+      renderStrip();
+    });
+    btnPrev.addEventListener('click', (ev) => { ev.stopPropagation(); showPage(idx - 1); });
+    btnNext.addEventListener('click', (ev) => { ev.stopPropagation(); showPage(idx + 1); });
+    hiBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const pg = pages[idx];
+      if (safemode && isR18 && pg && !pg._reveal) {
+        toast('安全模式下需先点「🔒 显示」解锁本页', 'info'); return;
+      }
+      if (!hiOn && !(pg && pg.high) ) {   // 没有原图地址就别空转一趟
+        toast('这个作品没有提供原图地址', 'info'); return;
+      }
+      hiOn = !hiOn;
+      hiBtn.textContent = hiOn ? '🖼️ 显示低清' : '🖼️ 显示原图';
+      showPage(idx);
+    });
+    dlBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (pages[idx]) doDownload([pages[idx].page_num]);
+    });
+    strip.addEventListener('click', (ev) => {
+      if (ev.target.closest('.lb-remote-fold')) { folded = !folded; applyFold(); return; }
+      if (ev.target.closest('.lb-remote-all')) {
+        ev.preventDefault();     // 自己算全选态, 不吃原生 label 的切换
+        const cand = pages.filter((p) => !blocked(p));
+        const allSel = cand.length > 0 && cand.every((p) => picked.has(p.page_num));
+        cand.forEach((p) => { if (allSel) picked.delete(p.page_num); else picked.add(p.page_num); });
+        renderStrip();
+        return;
+      }
+      if (ev.target.closest('.lb-remote-dlsel')) { doDownload([...picked]); return; }
+      const pick = ev.target.closest('.lb-remote-pick');
+      if (pick) {
+        const box = pick.querySelector('input[type="checkbox"]');
+        if (!box || box.disabled) return;
+        // 不让 label/checkbox 自己改状态, 一律由 picked 集合驱动 —— 否则勾选态与计数文案
+        // 会各走各的 (原生的 checked 改了, 我们的 Set 没改)。
+        ev.preventDefault();
+        const n = Number(box.dataset.pn);
+        if (picked.has(n)) picked.delete(n); else picked.add(n);
+        renderStrip();
+        return;
+      }
+      const item = ev.target.closest('.lb-strip-item');
+      if (item) showPage(Number(item.dataset.i));
+    });
+
+    let data = null;
+    try {
+      data = await api('/api/artwork/' + encodeURIComponent(aid) + '/pages');
+    } catch (e) {
+      spinner.style.display = 'none';
+      hiBtn.classList.add('hidden');
+      dlBtn.classList.add('hidden');
+      z.setBlocked(true);   // 没图可放, 别留一句「点击图片放大」
+      lbFile.textContent = '加载失败：' + e.message;
+      return;
+    }
+    // 没登录: 明确说清原因 + 只留「🔗 原网页」(不要一个空白弹窗)
+    if (!data || data.status === 'need_login') {
+      spinner.style.display = 'none';
+      hiBtn.classList.add('hidden');
+      dlBtn.classList.add('hidden');
+      z.setBlocked(true);
+      lbFile.textContent = (data && data.text)
+        || '需要先在设置页登录 pixiv 才能查看原图 / 下载';
+      return;
+    }
+    if (data.status !== 'ok' || !Array.isArray(data.pages) || !data.pages.length) {
+      spinner.style.display = 'none';
+      hiBtn.classList.add('hidden');
+      dlBtn.classList.add('hidden');
+      z.setBlocked(true);
+      lbFile.textContent = (data && data.text) || '没有取到该作品的页列表';
+      return;
+    }
+    art = data.artwork || {};
+    isR18 = !!art.is_r18;
+    pages = data.pages.map((p) => ({ ...p }));
+    showPage(0);
+    renderStrip();
   };
 
   // 定时轮询对账: 仅当停留在「图库」页时每 15s 轻量同步 (TTL 内不强制重扫),

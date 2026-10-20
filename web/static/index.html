@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -8,7 +8,7 @@
      换图标后必须换 URL 才会重新拉取  -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20260929a">
+<link rel="stylesheet" href="/static/style.css?v=20261020l">
 </head>
 <body>
 
@@ -428,22 +428,26 @@
       </div>
 
       <div class="set-group">
-        <h4>桌面与壁纸</h4>
+        <h4>系统与启动</h4>
         <div class="card-row">
           <div class="card mini">
-            <h3>🖼️ 壁纸夹</h3>
-            <div class="field-row">
-              <div class="search-box">
-                <input id="wall-dir-input" type="text" readonly spellcheck="false"
-                       placeholder="未设置（跟随当前壁纸所在文件夹）" title="目录只能通过右侧按钮选择">
-                <button id="wall-dir-clear" class="input-clear" type="button" hidden
-                        title="清除设置，改为跟随当前壁纸所在文件夹" onclick="clearWallDir()">✕</button>
-              </div>
-              <button id="wall-dir-pick" class="btn accent" onclick="pickWallDir()">📁 选择文件夹…</button>
+            <h3>🚀 启动与托盘</h3>
+            <div class="hint">启动后常驻右下角托盘：双击图标打开图库，右键出菜单。改动立即生效，其中「启动自动开浏览器」为下次启动生效。</div>
+            <div id="launcher-switches" class="btn-row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
+              <button class="btn ghost" data-k="tray_enabled">🖥 托盘常驻</button>
+              <button class="btn ghost" data-k="auto_open_browser" title="启动动作：只在下一次启动时起作用">🌐 启动自动开浏览器</button>
+              <button class="btn ghost" data-k="wall_widget">🖼️ 桌面壁纸小控件</button>
+              <button class="btn ghost" data-k="notify_on_wall_change">🔔 壁纸切换提示</button>
+              <button class="btn ghost" data-k="exit_on_browser_close">🚪 关页面即退出</button>
             </div>
-            <div class="hint">「上一张 / 下一张 / 幻灯片」在此目录内取图；未设置时跟随当前壁纸所在文件夹。</div>
-            <div class="hint">当前生效：<span id="wall-dir-state">读取中…</span></div>
+            <div class="hint" style="margin-top:8px">当前状态：<span id="launcher-state">读取中…</span>（亮起 = 已开启）</div>
           </div>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h4>桌面与壁纸</h4>
+        <div class="card-row">
           <div class="card mini">
             <h3>🖼️ 壁纸库</h3>
             <div class="hint">按「宽 ≥ 1920、高 ≥ 1080 且比例贴近 16:9」从图库挑选，原样复制进壁纸夹并登记。重复生成不会多占文件。</div>
@@ -470,18 +474,6 @@
             </div>
             <div class="hint" style="margin-top:8px">当前状态：<span id="ai-state">读取中…</span></div>
             <div class="hint">「测试连接」用一次最省的请求验证地址 / 密钥 / 模型名，不发图、不要求有当前壁纸；生成只对当前这一张，换壁纸后需再点一次。</div>
-          </div>
-          <div class="card mini">
-            <h3>🚀 启动与托盘</h3>
-            <div class="hint">启动后常驻右下角托盘，右键可开界面 / 改设置 / 退出。修改保存到 <code>config/user.json</code>，重启后生效。</div>
-            <div id="launcher-switches" class="btn-row" style="margin-top:10px;flex-wrap:wrap;gap:8px">
-              <button class="btn ghost" data-k="tray_enabled">🖥 托盘常驻</button>
-              <button class="btn ghost" data-k="auto_open_browser">🌐 启动自动开浏览器</button>
-              <button class="btn ghost" data-k="wall_widget">🖼️ 桌面壁纸小控件</button>
-              <button class="btn ghost" data-k="notify_on_wall_change">🔔 壁纸切换提示</button>
-              <button class="btn ghost" data-k="exit_on_browser_close">🚪 关页面即退出</button>
-            </div>
-            <div class="hint" style="margin-top:8px">当前状态：<span id="launcher-state">读取中…</span>（亮起 = 已开启）</div>
           </div>
         </div>
       </div>
@@ -560,6 +552,61 @@
       </div>
 
       <div class="set-group">
+        <h4>数据与路径</h4>
+        <div class="card mini">
+          <h3>📁 路径</h3>
+          <div class="hint">图片 / 数据 / 临时三处目录改动须重启 Vixiq 后生效；已有数据不会被搬动，仍留在原位置。</div>
+          <div class="hint" style="margin-top:10px">图片目录<span style="opacity:.75"> · 原始图片，体积大，建议放非系统盘</span></div>
+          <div class="field-row" style="margin:6px 0 0">
+            <div class="search-box">
+              <input id="path-img-input" type="text" readonly spellcheck="false"
+                     placeholder="默认：数据目录下的 img\" title="目录只能通过右侧按钮选择">
+              <button id="path-img-clear" class="input-clear" type="button" hidden
+                      title="清除设置，回到默认图片目录" onclick="clearPathDir('img')">✕</button>
+            </div>
+            <button id="path-img-pick" class="btn accent" onclick="pickPathDir('img')">📁 选择…</button>
+          </div>
+          <div class="hint" style="margin-top:10px">数据目录<span style="opacity:.75"> · 数据库 · 日志 · 缩略图</span></div>
+          <div class="field-row" style="margin:6px 0 0">
+            <div class="search-box">
+              <input id="path-data-input" type="text" readonly spellcheck="false"
+                     placeholder="默认：程序目录下的 data\" title="目录只能通过右侧按钮选择">
+              <button id="path-data-clear" class="input-clear" type="button" hidden
+                      title="清除设置，回到默认数据目录" onclick="clearPathDir('data')">✕</button>
+            </div>
+            <button id="path-data-pick" class="btn accent" onclick="pickPathDir('data')">📁 选择…</button>
+          </div>
+          <div class="hint" style="margin-top:10px">临时目录<span style="opacity:.75"> · 浏览器临时文件，可随时清理</span></div>
+          <div class="field-row" style="margin:6px 0 0">
+            <div class="search-box">
+              <input id="path-temp-input" type="text" readonly spellcheck="false"
+                     placeholder="默认：数据目录下的 temp\" title="目录只能通过右侧按钮选择">
+              <button id="path-temp-clear" class="input-clear" type="button" hidden
+                      title="清除设置，回到默认临时目录" onclick="clearPathDir('temp')">✕</button>
+            </div>
+            <button id="path-temp-pick" class="btn accent" onclick="pickPathDir('temp')">📁 选择…</button>
+            <button id="path-temp-clean" class="btn ghost" onclick="cleanTempDir()" title="清空临时目录，释放占用">🧹 清理</button>
+          </div>
+          <div class="hint" style="margin-top:10px">壁纸夹<span style="opacity:.75"> · 「上一张 / 下一张 / 幻灯片」的取图目录，选完立即生效</span></div>
+          <div class="field-row" style="margin:6px 0 0">
+            <div class="search-box">
+              <input id="wall-dir-input" type="text" readonly spellcheck="false"
+                     placeholder="未设置（跟随当前壁纸所在文件夹）" title="目录只能通过右侧按钮选择">
+              <button id="wall-dir-clear" class="input-clear" type="button" hidden
+                      title="清除设置，改为跟随当前壁纸所在文件夹" onclick="clearWallDir()">✕</button>
+            </div>
+            <button id="wall-dir-pick" class="btn accent" onclick="pickWallDir()">📁 选择…</button>
+          </div>
+          <div class="hint">当前生效：<span id="wall-dir-state">读取中…</span></div>
+          <div class="hint" style="margin-top:8px">保存到 <code>config/user.json</code>；未设置的项跟随默认落点。</div>
+        </div>
+        <div class="card mini">
+          <h3>📍 位置与占用</h3>
+          <div id="path-positions" class="hint" style="margin-top:0;white-space:pre-line">正在读取…</div>
+        </div>
+      </div>
+
+      <div class="set-group">
         <h4>维护</h4>
         <div class="card-row">
           <div class="card mini">
@@ -615,7 +662,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20260929a"></script>
+<script src="/static/app.js?v=20261020l"></script>
 </body>
 </html>
 
