@@ -14,8 +14,10 @@ config/user.json.local
 
 # 打包产物
 build/
+build-rel/
 dist/
 dist-release/
+release/
 *.spec.bak
 
 # 体积大 / 可再分发性存疑的二进制,不进库(缺失不影响运行):
