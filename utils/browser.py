@@ -336,7 +336,7 @@ def make_browser(
     options.page_load_strategy = bcfg.get("page_load_strategy", "eager")
 
     # 查找 Edge 浏览器 exe + 版本;找到后显式绑定 binary_location
-    # :双路径绑定 = driver路径 + 浏览器路径,避免驱动启动了却找不到浏览器)
+    # (双路径绑定 = driver 路径 + 浏览器路径, 避免驱动启动了却找不到浏览器)
     edge_binary, edge_ver = _edge_info()
     if edge_binary and os.path.isfile(edge_binary):
         options.binary_location = edge_binary

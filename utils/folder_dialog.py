@@ -3,7 +3,7 @@
 
 为什么非有不可: 浏览器**拿不到**用户选中目录的绝对路径。`<input type="file" webkitdirectory>`
 只给相对路径 (``webkitRelativePath``), 让用户手打路径又等于把「选文件夹」变成「填表单」——
-用户实测报障原话:「选择文件夹为什么要有两个按钮, 一个不就足够了, 而且为什么点了没反应」。
+早期实测出现过按钮点了没反应的问题。
 所以「选目录」这件事只能交给**服务端进程**去弹系统对话框。
 
 实现走 ``SHBrowseForFolderW`` (shell32) 而不是 ``IFileOpenDialog``: 后者要声明一整套 COM
@@ -14,7 +14,7 @@
     那些模块互不兼容的原型会互相覆盖 (2026-09-25 托盘图标被摘掉那次就是它)。所以这里
     一律用**私有实例** ``ctypes.WinDLL("shell32")``。
   - 对话框由**服务端进程**弹出, 而前台窗口是浏览器 —— 不给它 ``SetForegroundWindow`` 就会被
-    浏览器挡在身后, 表现又成了「点了没反应」。所以用 ``BFFM_INITIALIZED`` 回调拿句柄并置前。
+    浏览器挡在身后, 表现又成了点了没反应。所以用 ``BFFM_INITIALIZED`` 回调拿句柄并置前。
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class BROWSEINFOW(ctypes.Structure):
     # 往它上面赋 ``create_unicode_buffer(N)``(c_wchar_Array_N) 会被 ctypes 判为
     # 「incompatible types」直接抛 TypeError —— 2026-09-26 真机实测就是这个 500:
     #   POST /api/wallpaper/dir/pick status=500 resp=error=TypeError: incompatible types,
-    #   c_wchar_Array_1024 instance i…      (用户:「点了没反应」, 且前端把错误当取消, 把输入框清空了)
+    #   c_wchar_Array_1024 instance i…      (前端把错误当取消, 会清空输入框)
     # 结构体字段比函数参数严格得多, 这里只能自己 cast 成裸指针。
     _fields_ = [("hwndOwner", wintypes.HWND),
                 ("pidlRoot", ctypes.c_void_p),

@@ -1,6 +1,6 @@
 # core/models.py
 """
-统一数据模型: 体系化设计先于零散代码)
+统一数据模型 (体系化设计先于零散代码)
 所有 core/ 模块的交互都基于这 4 个 dataclass, 不再裸 dict 互传,
 保证 crawler / reverse_search / download_engine / db 之间的字段一致。
 """
@@ -47,7 +47,7 @@ class AuthorInfo:
     twitter: Optional[str] = None
     bio: Optional[str] = None
     pixiv_url: Optional[str] = None
-    # 名下作品总数 (2026-09-18): 作者搜索结果「共 N 件 · 换一批」用; 未知时为 None
+    # 名下作品总数: 作者搜索结果「共 N 件 · 换一批」用; 未知时为 None
     works_total: Optional[int] = None
 
     def display_name(self) -> str:
@@ -66,7 +66,7 @@ class ArtworkInfo:
     bookmark_count: int = 0
     is_r18: bool = False
     # pixiv 官方 AI 判定 (ajax 的 aiType): 0=未知/未标记, 1=非 AI, 2=AI
-    # 
+    # (图库能过滤 AI 作品, 走 pixiv 权威字段而非猜标签)
     ai_type: int = 0
     author_name: Optional[str] = None  # P4c: ajax 作品接口直接带的作者名
     # P4a 渲染还原: SearchPage.apply_result() 按 author_id 匹配后会把 AuthorInfo 引用

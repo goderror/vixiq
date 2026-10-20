@@ -5,7 +5,7 @@ P3 拆分: Pixiv 查询客户端 (纯查询, 不下载图)
 解决的问题:
   - 原来 PixivDownloader 一创建就开浏览器 + 跑下载, 顶栏搜索点一下就下载太重
   - 现在 SearchClient: 只查信息 (AuthorInfo / ArtworkInfo), 返回给 GUI 画卡片
-  -  + 点➕加清单后, 才由 DownloadEngine 真正去下载
+  - 在清单里点➕之后, 才由 DownloadEngine 真正去下载
   - 同一 Selenium driver 复用, 连续查询不需要每次重启 Edge
 
 输入类型识别 parse_input(s):
@@ -64,11 +64,11 @@ _RE_PURE_NUM = re.compile(r'^\s*(\d{3,20})\s*$')
 # pixiv 一改版就全失效 → 「搜索只出 1 条/作者爬成空」。
 _AJAX_BASE = "https://www.pixiv.net/ajax"
 
-# 作者搜索结果里「作品列表」每批条数 
+# 作者搜索结果里「作品列表」每批条数 (以前写死 12 个, 既不全也没翻页)
 # 与图库分页/搜索一次 60 条的口径一致。
 AUTHOR_WORKS_PAGE = 60
 
-# 关键字搜索结果每批条数。
+# 关键字搜索结果每批条数 (加「换一批」)。
 # 一直是 24 (沿用原显示条数, 不改变用户习惯), 只是现在能往后翻了。
 KEYWORD_WORKS_PAGE = 24
 
@@ -76,7 +76,7 @@ KEYWORD_WORKS_PAGE = 24
 # 所以一页刚好够翻 2 次多 —— 跨页时自动续取下一页, 不重复也不跳过。
 _PIXIV_SEARCH_PER_PAGE = 60
 
-# 「没搜索时显示一批推荐」的两个来源。
+# 「没搜索时显示一批推荐」的两个来源 (要能在两者间切换)。
 #   ranking   = pixiv 日榜 (ranking.php?format=json), 50 条/页, 有排名, **不返回 aiType**
 #   discovery = pixiv 个性化推荐 (/ajax/illust/discovery), 10 条, **自带 aiType**
 # 两者都要能套「隐藏 AI 作品」—— discovery 直接就能判, ranking 得靠调用方联网补。
@@ -309,10 +309,10 @@ class SearchClient:
 
     def execute_scoped(self, q: ParsedQuery, scope: str,
                        offset: int = 0, limit: int = AUTHOR_WORKS_PAGE):
-        """按用户选定的类型搜索, 不做自动猜测/二次 fallback, 减少查询成本。
+        """按指定类型搜索, 不做自动猜测/二次 fallback, 减少查询成本。
 
         scope: 'artwork' 只搜作品 | 'author' 只搜作者 | 其它/None 走原自动逻辑 execute()。
-        offset/limit (2026-09-18): 「作者作品换一批」—— 只影响作者结果里的作品列表。
+        offset/limit: 「作者作品换一批」—— 只影响作者结果里的作品列表。
         返回 dict 结构与 execute() 一致的子集。
         """
         offset, limit = max(0, int(offset or 0)), max(1, int(limit or AUTHOR_WORKS_PAGE))
@@ -390,7 +390,7 @@ class SearchClient:
 
         缓存是给「换一批」用的: 按 24 条一步走, 而 pixiv 一页 60 条 ——
         offset 0/24/48 全落在第 1 页, 没缓存就要把同一页反复请求三次
-        (用户明确担心被网站风控, 能省一次是一次)。缓存只在本次进程内有效,
+        (能省一次请求是一次, 避免触发风控)。缓存只在本次进程内有效,
         够服务「连点换一批」这个场景就行, 所以满了直接清空, 不做 LRU。
         """
         cache = getattr(self, '_kw_page_cache', None)
@@ -487,13 +487,13 @@ class SearchClient:
 
         P4b+ 重写: ajax/search/artworks 主通道 —— 一次 0.5s 返回 60 条结构化数据
         (标题/作者/页数/缩略图全齐)。旧 DOM 扫描只等第 1 个锚点出现就开爬
-        (SPA 约 2s 才渲染满) → 用户实测「搜索只有 1 条结果」; 且卡片作者
+        (SPA 约 2s 才渲染满) → 搜索结果只有 1 条; 且卡片作者
         链接在锚点外, styled-components 类名无法定位 → 作者全是空。
 
         s_mode=s_tag (标签完全匹配) 无结果时自动降级 s_tc (部分匹配)。
         DOM 扫描保留为最后兜底 (_search_keyword_dom)。
 
-        offset : 以前 URL 里写死 `p=1` → 同一个词
+        offset (「换一批」): 以前 URL 里写死 `p=1` → 同一个词
         每次搜到的永远是同一批固定结果。现在按 offset 连续切片, 跨 pixiv 分页
         (每页 60 条) 自动续取, 不重复也不跳过 (见 _search_raw)。
 
@@ -531,7 +531,7 @@ class SearchClient:
                     page_count=max(1, int(it.get("pageCount") or 1)),
                     image_urls=[it.get("url")] if it.get("url") else [],
                     is_r18=int(it.get("xRestrict") or 0) >= 1,
-                    # aiType (2026-09-20): 关键字结果也要带 AI 判定, 否则查询页
+                    # aiType: 关键字结果也要带 AI 判定, 否则查询页
                     # 「隐藏 AI 作品」对关键字搜索完全失效 (全是未知=0)
                     ai_type=int(it.get("aiType") or 0),
                 )
@@ -563,12 +563,12 @@ class SearchClient:
     def search_authors(self, keyword: str, *, limit: int = 30) -> list[AuthorInfo]:
         """P4a · 按作者名/Id 搜作者。
 
-        实测 (2026-09-02): pixiv 已下架 ajax/search/users/* 独立作者搜索接口
+        实测: pixiv 已下架 ajax/search/users/* 独立作者搜索接口
         (路径版 404), 现代作者搜索页在 /search/users?nick=xxx。
         核心难点: 页面 DOM 里 /users/{id} 链接混有导航/推荐关注等噪声, 且锚点内
         often 不含作者名 → 直接扫 a.text 得到一堆「作者 {id}」或无关作者。
 
-        修正策略 (2026-09-03):
+        修正策略 
           ① 任选一个作者搜索页 (先 /search/users, 老 search_user.php 兜底);
           ② 收集页面上所有 /users/{id} 候选 id (宁多勿漏, 靠名字过滤兜底);
           ③ 逐个用 ajax/user/{id} 取「真实名字+头像」(该接口稳定, 也是全站通用);
@@ -1064,8 +1064,8 @@ class SearchClient:
 
         P4b+: ajax 主通道 —— 旧 DOM 版的作者名/头像 xpath 是
         __next/div/div[2]/div[5]/... 绝对路径, pixiv 改版即失效
-        (用户实测 author 爬成空)。DOM 版保留为兜底。
-        offset (2026-09-18): 「换一批」用 —— pixiv 的 profile/all 一次返回全部作品 ID,
+        (实测 author 会爬成空)。DOM 版保留为兜底。
+        offset: 「换一批」用 —— pixiv 的 profile/all 一次返回全部作品 ID,
         所以翻页只是换个切片, 不用重新分页请求。命中总数的字段见 works_total。
         """
         try:
@@ -1427,7 +1427,7 @@ def _profile_work_to_info(w: dict, default_author_id: str = "") -> "ArtworkInfo 
         "illustType": w.get("illustType"),
         "urls": {"thumb": w.get("url") or ""},
         "xRestrict": w.get("xRestrict"),
-        # aiType (2026-09-20): 作者作品列表 / 作者对账台也带 AI 判定,
+        # aiType  作者作品列表 / 作者对账台也带 AI 判定,
         # 否则查询页「隐藏 AI 作品」对作者结果失效
         "aiType": w.get("aiType"),
         "uploadDate": w.get("createDate"),
@@ -1511,7 +1511,7 @@ def http_fetch_illust_pages(session, artwork_id: str,
                             *, timeout: float = 15.0) -> "list[dict]":
     """urllib 直连 ajax 作品**分页列表** → 每页 dict (只读, 不起浏览器)。
 
-    查询页「大图预览 + 按页下载」用 : 之前只有 `_parse_pages_body`
+    查询页「大图预览 + 按页下载」用: 之前只有 `_parse_pages_body`
     拿到 `(page_num, original, ext)`, 且它内联在 `Crawler._download_http` 里 —— 只读场景
     不该为了拿几条 URL 去唤起下载器, 所以抽这个独立函数。
 

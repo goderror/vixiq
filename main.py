@@ -215,9 +215,9 @@ def _wall_widget_stop():
 
 def _notify_pages_quit() -> None:
     """退出前告诉所有已打开的标签页「应用要退了」: 前端收到 app_quit 会弹遮罩并尝试
-    ``window.close()``, 一次退出把所有窗口一起收掉。
+    ``window.close``, 一次退出把所有窗口一起收掉。
 
-    2026-09-26 用户实测报障:——
+    ——
     网页版「退出程序」按钮 (``/api/app/quit``) 一直有这条广播, 但**托盘退出**走的是
     本文件的 ``_cleanup`` → ``os._exit(0)``, 完全没广播, 页面就留在那儿变成一个连不上的
     死标签。这里补上同一个事件。
@@ -268,7 +268,7 @@ def _on_signal(signum, frame):
     sys.exit(0)
 
 
-# ── Windows 控制台事件 (2026-09-27) ──
+# ── Windows 控制台事件 ──
 CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT = 0, 1, 2
 
 
@@ -292,7 +292,7 @@ _console_handler_ref = None
 
 
 def _install_console_handler() -> None:
-    """把「关闭控制台窗口」接到 :func:`_cleanup` 上 —— 治托盘幽灵图标。
+    """把「关闭控制台窗口」接到:func:`_cleanup` 上 —— 治托盘幽灵图标。
 
     退出路径原先只覆盖三条: 托盘菜单退出 / Ctrl+C(``signal``) / ``--quit``。**点终端窗口
     右上角 ✕** 走的是 CTRL_CLOSE_EVENT, 既不跑 atexit 也不触发信号处理器, 进程被直接终结
@@ -437,7 +437,7 @@ def _start_wall_widget(port: int) -> None:
         _app_log(f"桌面小控件启动失败: {e}")
 
 
-# ── 「🚀 启动与托盘」开关的热应用 (2026-10-20 · 用户: 「为什么要设置成重启才生效? 很麻烦」) ──
+# ── 「🚀 启动与托盘」开关的热应用 (2026-10-20: 改为无需重启, 存盘即生效) ──
 # 这组开关里只有「启动自动开浏览器」是**启动动作** (进程起浏览器那一刻才有意义), 其余四项都能
 # 就地生效 —— 于是做成存盘后立刻回调这里 reconcile, 界面不再笼统写「重启后生效」。
 _LAUNCHER_STARTUP_ONLY = ("auto_open_browser",)
@@ -486,7 +486,7 @@ def _apply_launcher(upd: dict) -> dict:
 
 
 def _register_launcher_bridge() -> None:
-    """把 :func:`_apply_launcher` 交给 web/server.py —— /api/launcher 存盘后立刻回调它。"""
+    """把:func:`_apply_launcher` 交给 web/server.py —— /api/launcher 存盘后立刻回调它。"""
     try:
         from web.server import set_launcher_apply
         set_launcher_apply(_apply_launcher)
@@ -742,7 +742,7 @@ def main():
     try:
         from web.server import (_kick_metadata_fill, warm_thumbs_background,
                                 _backfill_page_counts, _normalize_timestamps_at_startup)
-        # 时间戳格式统一 (2026-09-18): 几处老代码写的 ISO 串(带 'T')会让「按修改时间」
+        # 时间戳格式统一  几处老代码写的 ISO 串(带 'T')会让「按修改时间」
         # 排序永远把它们顶在最前 —— 启动时先纠正, 不用等用户去跑体检
         _normalize_timestamps_at_startup()
         _kick_metadata_fill()

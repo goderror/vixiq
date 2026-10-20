@@ -44,7 +44,7 @@ from core.search_client import (
     web_unfollow,
 )
 from core.download_engine import run_cart
-# 桌面壁纸溯源唯一规则 (2026-09-24): 与 utils/tray.py 的托盘共用同一份, 不各写一份
+# 桌面壁纸溯源唯一规则  与 utils/tray.py 的托盘共用同一份, 不各写一份
 from core.wallpaper_trace import (
     wallpaper_file,
     wall_relation,
@@ -63,7 +63,7 @@ from db.store import PixivDatabase, WSt, PSt, pixiv_natural_key, parse_foreign_a
 from utils import paths
 from utils import audit_log
 # 作者夹命名唯一规则 (2026-09-21 治本): 一键整理/下载器/反搜/自检共用同一套,
-# 不再各写一份「非法字符怎么处理」—— 否则同一位作者会被摆成两个夹
+# 不再各写一份非法字符处理规则 —— 否则同一位作者会被摆成两个夹
 from utils.author_naming import (
     POLLUTE_PAREN as _POLLUTE_PAREN,
     author_folder_name as _author_folder_name,
@@ -84,7 +84,7 @@ from web.event_bus import EventHub, WebReporter
 _hub = EventHub()
 _cancel_event = threading.Event()
 
-# 启动器开关的热应用钩子 (2026-10-20): main.py 启动时用 set_launcher_apply() 把
+# 启动器开关的热应用钩子  main.py 启动时用 set_launcher_apply() 把
 # 「起/停托盘、起/停小控件、开关心跳守护」这套进程级动作交进来 —— web 层只负责存盘与回调,
 # 不掺和进程生命周期 (serve 里没有 tray/widget 对象)。没接钩子时 (如冒烟测试直接 create_app)
 # 只是不热应用, 开关照常存盘。
@@ -97,7 +97,7 @@ def set_launcher_apply(fn) -> None:
     _launcher_apply = fn
 
 # ---------------------------------------------------------------------------
-# 🔔 数据域「脏」登记 + 事件驱动刷新 
+# 🔔 数据域「脏」登记 + 事件驱动刷新 (一套覆盖全库的机制)
 #   问题: 以前每个写接口各自"记得"通知前端刷新, 漏一个就出现"改了但界面没变",
 #         用户只能跑全量体检或手动 F5; 也不该让每个页面各写一套刷新逻辑。
 #   做法 = 事件驱动的标准三件套 (写入侧登记 → 版本号 → 订阅侧定向重算):
@@ -254,7 +254,7 @@ _login_lock = threading.Lock()
 _self_check_state = {"running": False, "result": None}
 
 # ---------------------------------------------------------------------------
-# 🩺 体检 (原「一键自检」) —— 2026-09-16 按要求拆成 6 个可独立运行的步骤
+# 🩺 体检 (原「一键自检」) —— 拆成 6 个可独立运行的步骤
 #   旧实现把性质完全不同的 6 件事串进同一个后台线程: 深度磁盘对账(最重 I/O) →
 #   离线清理 → 作者改名同步(每个作者一次 HTTP) → 联网补元数据(Selenium, 最慢) →
 #   文件整理(动磁盘) → 汇总。于是: 耗时长、进度只有"第几步"、某步出错整体白跑、
@@ -603,13 +603,13 @@ def _labels_inline(ids, maxn: int = 3) -> str:
 
 
 def _auto_bookmark_after_download(queued_ids: "set[int]") -> None:
-    """下载成功后自动收藏到 pixiv（用户 2026-09-18 要求「点击下载后自动收藏该作品（红心）」）。
+    """下载成功后自动收藏到 pixiv (原网页点 ♡ 红心)。
 
     四条边界（都是有意的，别放宽）：
       · 只处理本批**跑成功**的「单个作品」任务 —— 画师批量下载不碰（一次收藏上千张不是想要的效果）；
       · 已收藏的作品**一律跳过**（只读状态判断，绝不覆盖/改动原本的公开-非公开设置）；
       · 没登录/没 cookies → 如实打一行日志后跳过，不报错、不影响下载结果。
-      · **R18 作品强制非公开收藏**（用户 2026-09-18 定案）：公开收藏里挂着成人向作品
+      · **R18 作品强制非公开收藏**：公开收藏里挂着成人向作品
         是能被别人看到的，这类一律 private，与设置里的公开/非公开无关。
     """
     try:
@@ -725,7 +725,7 @@ def _launch_run_cart(only_ids: "list[int] | None" = None,
                         pass
                 except Exception as e:
                     _reporter().error(f"下载任务异常: {str(e).splitlines()[0]}")
-                # 本批下载成功的作品 → 按设置自动收藏到 pixiv (用户 2026-09-18 要求)
+                # 本批下载成功的作品 → 按设置自动收藏到 pixiv 
                 try:
                     _auto_bookmark_after_download(_pending_ids)
                 except Exception as e:
@@ -1033,7 +1033,7 @@ def _organize_loose_images(img_root: Path) -> int:
         pass
     organized = 0
     for p in loose:
-        # 统一身份识别 (2026-09-15): 旧宽松正则会把外来源顺序号当 pid 去查作者
+        # 统一身份识别  旧宽松正则会把外来源顺序号当 pid 去查作者
         nkey = pixiv_natural_key(p.name)
         if not nkey:
             continue  # 连作品 ID 都没有, 留给反搜
@@ -1208,13 +1208,13 @@ def _recycle_files(paths: "list[str]") -> "tuple[int, list[str]]":
 
 
 # =====================================================================
-# 应用内回收站 (软删除的物理层) —— 2026-09-17 需求
+# 应用内回收站 (软删除的物理层) —— 
 # =====================================================================
 def _trash_root() -> Path:
     """应用内回收站的物理根: data_root/trash。
 
     **必须在 img/ 之外** (见 db/migrations/016 的说明): 对账/自检/散落图整理都用
-    `img_root.rglob()` 全盘扫, 回收站放进去就会被当成散落图搬走或被当孤儿清掉。
+    `img_root.rglob` 全盘扫, 回收站放进去就会被当成散落图搬走或被当孤儿清掉。
     放外面则所有这些扫描天生看不见它, 一条过滤都不用加。
     """
     return Path(paths.user_data("trash"))
@@ -1267,14 +1267,14 @@ def _shuffle_arg() -> bool:
     return str(request.args.get("shuffle") or "").strip().lower() in ("1", "true", "on", "yes")
 
 
-# ── 🧹 壁纸副本清理 (「省空间」) —— 2026-09-24 设计约定: 只做省空间, 且必须逐条人工确认 ──
+# ── 🧹 壁纸副本清理 (「省空间」) —— 2026-09-24 只做省空间, 且必须逐条人工确认 ──
 # 壁纸夹 7.4 GB / 1181 张, 全量算 MD5 要几十秒, 请求里等不起 → 后台线程扫 + 前端轮询进度。
 # 结果**只报告, 绝不自动删**: 删哪几条一律由界面上的勾选决定, 且只进 Windows 回收站 (可还原)。
 _WALL_DUPES = {"status": "idle", "done": 0, "total": 0, "current": "", "error": "",
                "at": 0.0, "result": None}
 _WALL_DUPES_LOCK = threading.Lock()
 
-# ── 🖼 壁纸库生成 (2026-09-27) ──
+# ── 🖼 壁纸库生成 ──
 # 从图库挑够格的页复制进壁纸夹 (core/wallpaper_lib.py)。上千行判定 + 几百 MB 的复制,
 # 同样不适合放在请求里等 → 后台线程 + 前端轮询, 与上面那份状态一模一样。
 _WALL_LIB = {"status": "idle", "done": 0, "total": 0, "current": "", "error": "",
@@ -1393,7 +1393,7 @@ def _kick_metadata_fill(limit: int = 100):
                             _upsert_meta(db, aid, art)
                             # AI 判定必须**无条件落值**(含接口没给的 0), 否则
                             # ai_type IS NULL 的作品永远卡在补全队列头部每轮重问一遍
-                            # (2026-09-20)
+                            # 
                             db.set_artwork_ai_type(aid, getattr(art, "ai_type", 0))
                         ok += 1
                         streak = 0
@@ -1464,8 +1464,8 @@ def _normalize_timestamps_at_startup():
     """启动时把历史上写歪的时间戳纠正成库内统一格式 (本地操作, 毫秒级)。
 
     不修的话「按修改时间」排序会一直错乱: 带 'T' 的行 (老代码几处用 isoformat() 写的)
-    字符串比较永远排在所有正常时间戳前面 —— 2026-09-18 
-    。同一件事在体检「② 离线清理」里也做一遍 (幂等)。
+    字符串比较永远排在所有正常时间戳前面 —— 那几条记录会一直顶在最前面。
+    同一件事在体检「② 离线清理」里也做一遍 (幂等)。
     """
     try:
         with _db() as db:
@@ -1657,7 +1657,7 @@ def _sync_author_folder(db, aid: str, new_name: str, old_id: "str | None" = None
 def _gather_works_into_author_folder(db, artwork_ids: "list[str]") -> dict:
     """把指定作品的**在库文件**按「一键整理」的同一套期望夹规则归位。
 
-    触发场景 : 「本地作者 (如 bilibili 账号) 绑定成真 pixiv 作者」后,
+    触发场景: 「本地作者 (如 bilibili 账号) 绑定成真 pixiv 作者」后,
     文件还留在登记时的落脚点 (`#其他来源#/xxx.png`) —— 身份换了磁盘却没跟着走,
     用户还得自己再跑一次一键整理。
     做法: **复用** `_tidy_build_plans` + `_tidy_apply_plans` (不另写一套搬移逻辑, 保证与
@@ -1739,7 +1739,7 @@ def _tidy_parent_prefix(db, parent: str) -> str:
       · 单来源 local_ 作者的文件已在 `作者夹/站点@账号` → `X图/作者夹/作者夹`；
       · 作品被放错到**别人**的夹里（merged 作品属于「ying yi」却躺在「qing0ying0」夹里）
         → `X图/qing0ying0夹/ying yi夹`（跨作者套娃）。
-    2026-09-14 设计约定: 单来源 → 平铺回作者夹本身（不建站点子夹）。"""
+    单来源 → 平铺回作者夹本身（不建站点子夹）。"""
     if not parent:
         return parent
     seg = parent.split("/")[-1]
@@ -1750,14 +1750,14 @@ def _tidy_parent_prefix(db, parent: str) -> str:
 
 def _tidy_expected_folder(db, meta, parent_prefix: str) -> "str | None":
     """算作品的期望作者文件夹 rel (与 parent_prefix 同级)。
-    新结构 (2026-09-12): 按作者聚合、作者内按来源分。
+    新结构  按作者聚合、作者内按来源分。
     - pixiv 作品 → 顶层夹「现用名_ID」(直接放顶层);
     - 外来源作品且作者已建档(数字 pixiv ID 或外来作者 local_xxx) → 顶层「作者名_ID」下的
       「站点@账号」子夹 (同一作者的 pixiv/twitter/bilibili 图都收进一个顶层, 不再散落);
       **单来源也一样建这层子夹** —— 否则夹名里看不出作品来自哪个站 ;
     - 外来源作品且**没有**作者 (未建档/未记录名字) → 平铺「站点@账号」(不臆造层级);
     - 账号为空 → 子夹/平铺用纯站点名 (如 bilibili);
-    - 未知来源(other) / 无账号(未知作者) → 夹名加 `#...#` 包裹 (2026-09-12):
+    - 未知来源(other) / 无账号(未知作者) → 夹名加 `#...#` 包裹 
       未知来源 → `#其他来源#`; 真实来源无账号 → `#站点#` (与普通「站点@账号」区分开);
       不用下划线前缀的原因: 部分作者名本身就以下划线开头/包含 (如 `_LM7_`), `_` 前缀区分度不够;
     - 定位不到作者返回 None (交人工确认)。"""
@@ -1785,7 +1785,7 @@ def _tidy_expected_folder(db, meta, parent_prefix: str) -> "str | None":
             nm = str(a.get("name") or "").strip() if a else ""
             if nm and not _is_unreadable_name(nm):
                 top = _author_folder_name(db, aid, nm)
-                # 2026-09-14 设计约定: **单来源也保留「站点@账号」子夹**。
+                # **单来源也保留「站点@账号」子夹**。
                 # 原来单来源直接平铺「作者名_local_xxx」, 结果夹名里完全看不出作品来自哪个站
                 # (实测: `bilibili@Colorful辉色` 被搬成 `Colorful辉色_local_629de578ab2d`,
                 # 来源信息丢失, 用户"看文件夹名不知道是 bili 的作品")。
@@ -1850,7 +1850,7 @@ def _tidy_build_plans(db, img_root: Path) -> list:
         segs = [s for s in folder.split("/") if s]
         parent = "/".join(segs[:-1])
         base = segs[-1] if segs else ""
-        # ①a 作者归属争议 → 「待确认」。
+        # ①a 作者归属争议 → 「待确认」(单向闭环 用户→数据库→磁盘)。
         # 文件夹名里解析出的作者与 DB 记录不一致时**绝不自动改写数据库** —— 那是让数据库听
         # 磁盘的, 方向反了。只把两边证据摆出来交给用户判断; 用户定完作者(写入 DB)后, 下一次
         # 整理才由 DB 驱动去改磁盘。争议未决期间**整夹冻结**(不产生改名/归位/命名规范计划),
@@ -2010,7 +2010,7 @@ def _tidy_build_plans(db, img_root: Path) -> list:
                  f"文件夹 {folder} 无匹配作者/作品记录, 需人工确认", files, False)
 
     # ---- ③ 文件名规范化: 「乱码名」→ 统一可读名 ----
-    # 原则 : 图片名归用户/来源, 系统只在名字**毫无信息**时才动手,
+    # 原则: 图片名归用户/来源, 系统只在名字**毫无信息**时才动手,
     # 且必须出现在预览表里 (旧名 → 新名 + 理由), 看过再执行, 绝不静悄悄改。
     #   · pixiv 作品 → `{pid}_p{页码}.ext`（与下载命名一致, 也是对账的第一身份）
     #   · 非 pixiv 且原名是无信息串 → `{站点@账号}_{序号:03d}.ext`（不写作者名/不写假页码）
@@ -2091,7 +2091,7 @@ def _tidy_build_plans(db, img_root: Path) -> list:
              f"文件名不规范: {base} → {want}", [rel], True)
 
     # ---- ④ 清理空夹: 整棵子树只有空目录/系统杂物的文件夹 ----
-    # 为什么要放进整理 :
+    # 为什么要放进整理 (一键整理要自带清空夹):
     # 整理自己会把图搬走 (归位/平铺) 从而**制造**空夹, 善后理应在同一次"一键"里做完,
     # 而不是让用户再跑去健康面板点一次「删除空文件夹」。实测真实库整理完留着 16 个空夹。
     # 只列**最上层**那一处 (子夹随它一起删), 免得同一片残留列出一排重复行。
@@ -2219,7 +2219,7 @@ def _tidy_apply_plans(db, img_root: Path,
         except OSError as e:
             failed.append(f"{_p['from']}: 删除空夹失败 {str(e).splitlines()[0]}")
     # ⑤ (已移除) 旧「作者更正」执行段: 曾用文件夹名解析出的作者**无条件覆盖** DB。
-    # 2026-09-14 设计约定: 数据只能「用户 → 数据库 → 磁盘」单向流动, 检测到磁盘与 DB 不一致时
+    # 数据只能「用户 → 数据库 → 磁盘」单向流动, 检测到磁盘与 DB 不一致时
     # 由 ①a 生成「待确认」项交给用户判断, 绝不自动改写数据库。
     return {"renamed": renamed, "moved": moved, "filenamed": filenamed,
             "rmdirs": rmdirs, "failed": failed}
@@ -2507,7 +2507,7 @@ def _art_to_dict(a) -> "dict | None":
         "image_urls": list(a.image_urls) if a.image_urls else [],
         "publish_date": a.publish_date,
         "is_r18": bool(a.is_r18),
-        # pixiv 官方 AI 判定 (1=非AI, 2=AI, 0=未知): 查询页据此隐藏 AI 卡片 (2026-09-20)
+        # pixiv 官方 AI 判定 (1=非AI, 2=AI, 0=未知): 查询页据此隐藏 AI 卡片 
         "ai_type": int(getattr(a, "ai_type", 0) or 0),
         "author_name": getattr(author, "name", None) or getattr(a, "author_name", None),
         "pixiv_url": f"https://www.pixiv.net/artworks/{a.artwork_id}",
@@ -2526,7 +2526,7 @@ def _author_to_dict(a) -> "dict | None":
         "twitter": a.twitter,
         "bio": a.bio,
         "pixiv_url": a.pixiv_url or f"https://www.pixiv.net/users/{a.author_id}",
-        # 名下作品总数 (2026-09-18): 「共 N 件 · 换一批」用; None = 拿不到总数 (DOM 兜底)
+        # 名下作品总数  「共 N 件 · 换一批」用; None = 拿不到总数 (DOM 兜底)
         "works_total": getattr(a, "works_total", None),
     }
 
@@ -2606,7 +2606,7 @@ def _attach_local_status(db, res: dict) -> dict:
 
 
 # =============================================================
-# 查询页「没输入内容时显示一批推荐」
+# 查询页「没输入内容时显示一批推荐」(两个来源可切换)
 # 🏆 排行榜 / ✨ 个性化推荐 —— 见 GET /api/search/feed
 # =============================================================
 _FEED_TTL = 600.0          # 推荐内容缓存 10 分钟: 来回切 tab 不该反复打 pixiv
@@ -2670,7 +2670,7 @@ def _feed_ai_types(db, works, *, want: bool) -> int:
         except Exception:
             return w, None          # 单条失败不影响其余 (删除/权限/网络都能容错)
 
-    # 6 路并发: 约 24 条约 2s 问完 (实测 2022ms); 再高容易触发 pixiv 限速 (用户明确担心风控)
+    # 6 路并发: 约 24 条约 2s 问完 (实测 2022ms); 再高容易触发 pixiv 限速
     with ThreadPoolExecutor(max_workers=6) as ex:
         for w, at in ex.map(_one, pending):
             if at is None:
@@ -2726,7 +2726,7 @@ def _abs_path(img_root: Path, rel: str) -> Path:
 def _with_dl_state(db, items: list[dict]) -> list[dict]:
     """给图库条目补 dl_state (与搜索结果 _attach_local_status 同一套语义)。
 
-    为什么非有不可 :
+    为什么非有不可 (「删一个作品, 整个列表的按钮都闪一下」):
     图库条目不带 dl_state 时, 卡片上的「加入下载」按钮一律按默认样式渲染, 再由前端
     decorateCartButtons 异步请求改成「✔ 已下载 / ⏳ 已在下载列表」—— 于是每次列表重画
     都会闪一遍(而删除会让列表连刷两次, 所以特别明显)。带上 dl_state 后首屏就是终态。
@@ -2963,8 +2963,8 @@ def _act_resp_summary(resp) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 📁 路径设置 
-#   以及「数据、配置、缓存要向正常软件看齐, 但别占 C 盘太多」)
+# 📁 路径设置 (所有路径都要有设置入口,
+#   以及数据/配置/缓存不占系统盘)
 #
 #   分层口径 (按「体积 × 增量」分):
 #     · 图片   = 又大又会长 → 单独一项可指定盘 (通常指到非系统盘); 相对名 = 数据目录下的子目录
@@ -2990,7 +2990,7 @@ def _norm_dir_setting(raw, *, allow_rel: bool = False) -> "tuple[str, str]":
     if p.is_absolute():
         return str(p), ""
     if not allow_rel:
-        return "", "只接受绝对路径，例：F:/vixiq-data"
+        return "", "只接受绝对路径，例：D:/vixiq-data"
     if any(ch in s for ch in '\\/:*?"<>|') or s in (".", ".."):
         return "", "相对路径只能填一个子目录名；想放别的盘请填绝对路径"
     return s, ""
@@ -3061,7 +3061,7 @@ def _paths_snapshot() -> dict:
     default_data = wr / "data"
     droot = _resolve_dir(overd, default_data)
     troot = _resolve_dir(overt, droot / "temp")
-    # 图片目录: 相对名挂在数据根下, 绝对路径 (F:/…) 直接就是它 —— 与 paths.user_data 同一语义
+    # 图片目录: 相对名挂在数据根下, 绝对路径 (D:/…) 直接就是它 —— 与 paths.user_data 同一语义
     img = Path(img_cfg) if img_cfg and Path(img_cfg).is_absolute() else (droot / (img_cfg or "img"))
     db = droot / str(cfg.get("db_filename") or "pixiv.db")
     thumbs = droot / "thumbs"
@@ -3258,7 +3258,7 @@ def create_app() -> Flask:
             _reporter().error(f"接口异常 {request.path}: {type(e).__name__} {first}")
         except Exception:
             pass
-        # 「database is locked」取证 (2026-09-16): 写锁被别的任务长期占着时, 逐个打印
+        # 「database is locked」取证  写锁被别的任务长期占着时, 逐个打印
         # 存活线程的调用栈 —— 谁在持锁/卡在哪儿一目了然, 不必再靠猜。
         # (本次真凶就是这样定位的: 自检「作者改名同步」里的裸 UPDATE 从不 commit,
         #  循环里还有逐个作者的 HTTP 请求, 写锁被握数分钟。)
@@ -3428,7 +3428,7 @@ def create_app() -> Flask:
         if not q:
             return jsonify({"status": "error", "text": "搜索内容为空"}), 400
         scope = (request.args.get("scope", "") or "").strip()  # 'artwork' | 'author' | ''=auto
-        # offset (2026-09-18): 作者结果里作品列表的「换一批」起点 (默认 0 = 最新一批)
+        # offset  作者结果里作品列表的「换一批」起点 (默认 0 = 最新一批)
         try:
             offset = max(0, int(request.args.get("offset", 0) or 0))
         except (TypeError, ValueError):
@@ -3458,7 +3458,7 @@ def create_app() -> Flask:
 
     @app.route("/api/artwork/<artwork_id>/pages")
     def api_artwork_pages(artwork_id: str):
-        """某作品的「全部页 URL + 库内页状态」—— 查询页大图预览 / 按页下载用 (2026-10-20)。
+        """某作品的「全部页 URL + 库内页状态」—— 查询页大图预览 / 按页下载用。
 
         只读接口, 不起浏览器。错误映射 (前端要能区分「没登录」与「请求失败」):
           未登录 → **200 + {"status":"need_login"}** (不要 401);
@@ -3532,7 +3532,7 @@ def create_app() -> Flask:
 
     @app.route("/api/search/feed")
     def api_search_feed():
-        """查询页没输入内容时显示的推荐批次。
+        """查询页没输入内容时显示的推荐批次 (, 两个来源可切换)。
 
         kind=ranking   🏆 pixiv 日榜 (内容确定, 不依赖个性化)
         kind=discovery ✨ pixiv 个性化推荐 (按浏览/收藏记录算, 需登录)
@@ -3874,7 +3874,7 @@ def create_app() -> Flask:
         —— 否则 DONE 被降级成 NOT_YET, 状态显示错乱, 下载引擎也失去「整作品已下完」
         跳过能力 (2026-09-10 审计发现, 已记录)。
 
-        force=True = 显式「重下修复」: 允许已 DONE 的作品入队并
+        force=True = 显式「重下修复」(2026-09-16 方案): 允许已 DONE 的作品入队并
         强制 overwrite 策略 (下载器把被覆盖的旧文件备份成 .bak)。**只有用户点了
         「♻ 重下修复」才会带 force** —— 「加入下载」(单个/批量) 永不传, 语义永远是
         "有则跳过、缺页补全", 所以批量场景不存在"该覆盖还是跳过"的猜测。"""
@@ -3907,7 +3907,7 @@ def create_app() -> Flask:
             strategy=(DownloadStrategy.OVERWRITE.value if force
                       else (data.get("strategy") or DownloadStrategy.ONLY_NEW.value)),
             source_note=data.get("source_note") or "Web 加入清单",
-            # 按页下载 (2026-10-20): 只有作品项才认 pages; 不传 = 整部 (向后兼容)。
+            # 按页下载  只有作品项才认 pages; 不传 = 整部 (向后兼容)。
             # 注: page_count 始终是**远端总页数** (前端卡片带着), 绝不能改成选中页数 ——
             # 否则下面的 change_work_status(total_pages=...) 会把整部作品判成已下完。
             pages=(data.get("pages") if item_type == "artwork" else None),
@@ -3989,7 +3989,7 @@ def create_app() -> Flask:
         """清空下载队列。scope 与「下载任务」页四个筛选栏一一对应:
         all(全部, 默认) / running(未完成) / done(已完成) / failed(失败)。
 
-        对用户而言「清空一条进行中的任务」= 
+        「清空一条进行中的任务」= 撤销该次下载
 。所以清掉的行**真的不会被下载**, 兑现方式在引擎侧:
           - 每项开跑前先 queue_claim_item 认领, 认领不到 (行已被清掉) → 整项跳过;
           - 正在跑的那一项, 引擎注册的 abort 回调逐页回查 queue_item_alive,
@@ -4048,7 +4048,7 @@ def create_app() -> Flask:
         """♻ 重下修复: 用官方源**覆盖重下**选中的作品 (旧文件自动备份为 .bak)。
 
         与「加入下载」的区别只在**意图是否显式声明** —— 这个接口永远是"覆盖重下",
-        所以批量也无需任何隐式判定 :
+        所以批量也无需任何隐式判定 (2026-09-16 方案):
           - 「加入下载」(单个/批量) = 有则跳过、缺页补全, 永不覆盖;
           - 「重下修复」= 永远覆盖, 必须由用户点这个按钮来表达。
         只接受纯数字 pixiv 作品 (外来源/合并产物没有可重下的官方源, 如实跳过并给出原因)。
@@ -4109,7 +4109,7 @@ def create_app() -> Flask:
         return jsonify({"status": "stopping"})
 
     # ---------------- 图库管理 ----------------
-    # ---- 来源治理: 记录/解析来源 URL → 归类; 无 URL 才进反搜  ----
+    # ---- 来源治理: 记录/解析来源 URL → 归类; 无 URL 才进反搜 (2026-09-10 方案) ----
     _SOURCE_SITES = {
         "pixiv": ("pixiv", "Pixiv 插画站"),
         "twitter": ("twitter", "X / Twitter"),
@@ -4275,7 +4275,7 @@ def create_app() -> Flask:
                     if not str(cur.get("source_author") or "").strip():
                         fields.setdefault("source_author", str(det["handle"]))
         # 只带作者信息(无来源字段)也应允许 —— 用于把拆出来的图重新挂回作者
-        # 
+        # (拆分后想改回作者, 却因 fields 为空被 400 挡掉)
         _aid_in = str(data.get("author_id") or "").strip()
         _aname_in = str(data.get("author_name") or "").strip()
         if not fields and not (_aid_in or _aname_in):
@@ -4309,7 +4309,7 @@ def create_app() -> Flask:
                     if target_id:
                         db.set_artworks_author([aid], target_id)
                         author_id_out = target_id
-            # 来源一确认就顺带纠正身份 : 合并产物一旦被标明是外部来源
+            # 来源一确认就顺带纠正身份: 合并产物一旦被标明是外部来源
             # (推特/ArtStation/…), 主键与标题就该从 merged_xxx 变成 ext_ 语义, 不能一直背着
             # 「合并」身份。只动 merged_ 前缀的作品, 纯 pixiv 合并产物不受影响。
             if fields.get("source") or fields.get("source_url"):
@@ -4556,7 +4556,7 @@ def create_app() -> Flask:
 
         文件名 `{pid}_pN` 只给出**作品 ID**, 给不出作者。这里以前把 `author_name`/`author_id`
         写死成空串, 于是结果行只剩「✅ 命中 Pixiv #xxx」, 作者一栏空着、确认框里也没有
-        「作者 = …」那一行 —— 用户 2026-09-21 报 `115531046`: 明明作品 ID 能直接打开原网页,
+        「作者 = …」那一行 —— `115531046`: 作品 ID 明明 能直接打开原网页,
         系统却说没识别出作者。而本地 `artworks`/`authors` 里其实早就记着这位作者了。
 
         库里有就填, 库里没有(占位作品/未入库)才留空 —— 保持这条捷径「秒回、不启浏览器」的性质。
@@ -4685,13 +4685,13 @@ def create_app() -> Flask:
 
     @app.route("/api/library/batch-source-search", methods=["POST"])
     def api_library_batch_source_search():
-        """🔎 批量搜索来源。
+        """🔎 批量搜索来源 (2026-09-16 需求)。
 
         body: {"artwork_ids": [...]}
         逐个作品两阶段处理:
           ① 已记录 source_url 且能归类的 → **直接归类**(零成本, 不占反搜额度);
           ② 其余 → 取首张本地图跑 SauceNAO, 命中结果**只报告**由用户确认 (不自动改库,
-             反搜可能误判, 不能替设计约定)。
+             反搜可能误判, 不能代为决定)。
         SauceNAO 每张 5~15 秒且有限速, 所以后台串行 + 前端轮询 _SRC_SEARCH["batch"]。"""
         data = request.get_json(silent=True) or {}
         aids = [str(x).strip() for x in (data.get("artwork_ids") or []) if str(x).strip()]
@@ -4736,7 +4736,7 @@ def create_app() -> Flask:
                         bat["done"] += 1          # 归类完成才计数
                     else:
                         # 留给阶段②处理, 在那边计数 —— 这里若也 +1 会重复,
-                        # 出现「4/2」这种 done 超过 total 的进度 
+                        # 出现「4/2」这种 done 超过 total 的进度
                         it.update(status="queued", url=url)
                         todo.append(it)
                     st["done"] = bat["done"]
@@ -4954,7 +4954,7 @@ def create_app() -> Flask:
             items = db.list_authors(q=q, status=status, source=source,
                                     sort=sort, order=order,
                                     limit=limit, offset=offset)
-            # 「同名但不同身份」提示 :
+            # 「同名但不同身份」提示 (同一作者出现两条记录):
             # 本地作者(= 站点账号 local_xxx)与真实 pixiv 作者同名时会各占一行 —— 这是**对的**,
             # 但界面要看得出来、并给一键绑定。只标出来让人判断, 谁也不自动合并。
             _same = db.same_name_pixiv_authors(
@@ -4970,7 +4970,7 @@ def create_app() -> Flask:
             })
 
     def _norm_author_links(raw) -> list[dict]:
-        """作者「来源链接」规范化 + 识别站点/账号 (用户 2026-09-16: 链接不能只是记录)。
+        """作者「来源链接」规范化 + 识别站点/账号 (链接不能只是记录)。
 
         复用作品来源那套 URL 分类 `_classify_url` → 每条链接带上:
           site   站点键 (用 _SITE_TO_SOURCE 归一到与 artworks.source 同口径, 如 bili→bilibili)
@@ -5043,7 +5043,7 @@ def create_app() -> Flask:
     def api_library_author_bind_pixiv():
         """把「本地作者」绑定到真实 pixiv 作者 ID —— 链接产生"关联"的核心动作。
 
-        典型流程 (用户 2026-09-16 要求): 给作者记了 https://www.pixiv.net/users/12345
+        典型流程: 给作者记了 https://www.pixiv.net/users/12345
         → 说明他其实就是 pixiv 作者 12345 → 一键把该作者**全部作品迁到 pixiv 作者名下**,
         作者行合并 (曾用名/链接跟着走), 磁盘文件夹按新名同步 (名字_local_xxx → 名字_12345),
         之后体检的「作者改名同步/存续状态」也认得他。"""
@@ -5070,7 +5070,7 @@ def create_app() -> Flask:
                 res["folder_renamed"] = _sync_author_folder(db, pid, new_name, old_id=src)
             except Exception:
                 res["folder_renamed"] = 0
-            # 身份换了 → 文件也要跟着走 (用户 2026-09-18: 绑定后文件还留在 #其他来源#/)
+            # 身份换了 → 文件也要跟着走 (绑定后文件还留在 #其他来源#/)
             try:
                 _g = _gather_works_into_author_folder(db, res.get("artwork_ids") or [])
             except Exception as e:
@@ -5087,7 +5087,7 @@ def create_app() -> Flask:
     def api_library_author_refresh():
         """轻量刷新**单个作者** (定向刷新): 联网核对现用名 + 存续状态。
 
-        用户 2026-09-17 反馈: 编辑完作者还得等"全量自检"才会更新状态 —— 不合理。
+        编辑完作者还得等"全量自检"才会更新状态 —— 不合理。
         自检已经是"一锅端拆成小项"了, 但每一项仍是**全量**的 (③ 要逐个核对几百位作者)。
         这里只查这一个人: HTTP 直连 /ajax/user/ 一次请求, 毫秒级;
         名字变了顺带把磁盘文件夹按新名对齐。"""
@@ -5167,7 +5167,7 @@ def create_app() -> Flask:
     def api_library_refresh_scope():
         """🎯 定向(增量)刷新: 只把**刚动过的那一小块**重新核对到正确, 不跑全量。
 
-        用户 2026-09-17: "自检虽然拆成了小项, 但每一项仍是全量; 能不能在触动某项时
+        "自检虽然拆成了小项, 但每一项仍是全量; 能不能在触动某项时
         只针对这部分做一次快速自检" —— 这个端点就是那件事的后端:
           scope="work"   ids=[作品ID…]  本地核对: 状态/页数重算 + 来源 URL 归类 + 磁盘文件在不在
           scope="author" ids=[作者ID…]  本地重算该作者名下作品 + 联网核对这几位作者(1 次 HTTP/人)
@@ -5234,7 +5234,7 @@ def create_app() -> Flask:
     def api_library_author_reconcile():
         """🗂 作者对账台: 左边"我库里来源未定的图" 右边"他 pixiv 主页的作品", 点一下就认领转正。
 
-        场景 (用户 2026-09-17): 一批外来源图被赋予了本地 ID (ext_xxx)、作者已手动指定成
+        场景: 一批外来源图被赋予了本地 ID (ext_xxx)、作者已手动指定成
         pixiv 画师, 但作品本身不是正式 pixiv 卡片。全站以图搜图(SauceNAO)慢且不稳,
         逐张翻 pixiv 又太贵 —— 候选集只要限定在**这个作者**就便宜得多。
         本接口只取数据不写库: pixiv 侧走 HTTP 直连(不开浏览器), 本地侧列出该作者名下
@@ -5302,7 +5302,7 @@ def create_app() -> Flask:
         """✅ 配对认领: 把一张"来源未定"的本地图挂到某个 pixiv 作品的第 N 页并转正。
 
         body: {local_artwork_id, target_artwork_id, page?, local_page?}
-        做的事 (用户 2026-09-17「作者对账台」的核心动作):
+        做的事 (「作者对账台」的核心动作):
           ① 目标作品不在库 → 用 pixiv 元数据建壳 (标题/作者/页数/封面/标签…);
           ② 文件移进目标作品所在目录并规范命名为 `{pid}_p{N}{ext}`;
           ③ pages 写新行 (MD5/尺寸/大小一并落库) + 删掉本地那条;
@@ -5417,7 +5417,7 @@ def create_app() -> Flask:
                 fmd5 = str(pick["md5"] or "") or None
                 size = None
             # 超出 pixiv 原网页页数的认领页 = 用户手动并入的「附加页」: 标 origin='merged',
-            # 以后可再拆出; 作品 total_pages 保持原值不被覆盖。
+            # 以后可再拆出; 作品 total_pages 保持原值不被覆盖 (2026-09-17 需求)。
             tp = int((tinfo or {}).get("total_pages") or 0)
             is_extra = bool(tp) and page >= tp
             db.mark_page_status(tid, page, PSt.DONE, local_path=new_rel, md5=fmd5,
@@ -5538,7 +5538,7 @@ def create_app() -> Flask:
             q=args.get("q", ""),
             illust_type=args.get("type", ""),
             is_r18=args.get("r18", ""),
-            # 「AI 作品」筛选 (2026-09-20): '2' 只看 AI / '0' 只看非 AI / 空 = 全部
+            # 「AI 作品」筛选  '2' 只看 AI / '0' 只看非 AI / 空 = 全部
             ai=args.get("ai", ""),
             author_id=args.get("author_id", "") or None,
             tag=args.get("tag", "") or None,
@@ -5546,7 +5546,7 @@ def create_app() -> Flask:
             deleted=args.get("deleted", "") == "1",
             author_status=args.get("status", "") or None,
             source=args.get("source", "") or None,
-            # 「仅查看该作品」(2026-09-16): 精确 ID 硬过滤, 覆盖其他条件
+            # 「仅查看该作品」 精确 ID 硬过滤, 覆盖其他条件
             only_aid=args.get("only", "") or None,
         )
         with _db() as db:
@@ -5605,7 +5605,7 @@ def create_app() -> Flask:
         if periodic:
             # 15s 定时轮询**只读**: 以前这里每轮都写库 (补作者表 + 清孤儿), 与自检/元数据
             # 补全这类长任务抢写锁 —— SQLite 单写者, 长任务持锁时轮询就报
-            # `OperationalError: database is locked`。
+            # `OperationalError: database is locked` (日志连报 4 次)。
             # 定时轮询本来只为「磁盘↔图库」状态显示, 写操作留给手动同步/导入/自检, 省 IO。
             resp["authors_adopted"] = 0
             resp["orphans_removed"] = 0
@@ -5665,7 +5665,7 @@ def create_app() -> Flask:
             root_abs = Path(paths.user_data(_config["paths"].get("input_subdir", "input"))).resolve()
         elif root_key == "trash":
             # 回收站里的图 (软删除已把文件搬过去) —— 回收站页要能显示缩略图,
-            # 否则用户认不出自己删的是哪张 (2026-09-17)。
+            # 否则用户认不出自己删的是哪张。
             root_abs = _trash_root().resolve()
         elif root_key == "wall":
             # 壁纸夹里的图 (当前壁纸所在文件夹) —— 「当前壁纸」面板显示桌面那张的缩略图用。
@@ -5730,7 +5730,7 @@ def create_app() -> Flask:
     def _notify_widget() -> None:
         """桌面小控件的主动通知: 别等它 8 秒轮询, 现在就去拉一轮。
 
-        换壁纸 / 文案生成完之后调用。``refresh()`` 只是起个后台线程取数再投消息,
+        换壁纸 / 文案生成完之后调用。``refresh`` 只是起个后台线程取数再投消息,
         不碰窗口线程, 在 Flask 请求线程里调是安全的; 小控件没开 (或旧版进程) 时
         模块里 ``_ACTIVE_WIDGET`` 是 None, 什么都不发生。
         """
@@ -5757,8 +5757,8 @@ def create_app() -> Flask:
             img_url_fn=_local_img_url,
             orb_fn=_wall_orb_candidates,      # 复用本文件的整库检索器单例, 不加载两份
         )
-        # ✨ 壁纸文案 (2026-09-27): 附上「标题 + 氛围句」。**只读缓存, 从不在这里发请求** ——
-        # 生成是设置页那颗「上传当前壁纸」按钮手动触发的 (设计约定: 换壁纸不自动调接口)。
+        # ✨ 壁纸文案  附上「标题 + 氛围句」。**只读缓存, 从不在这里发请求** ——
+        # 生成是设置页那颗「上传当前壁纸」按钮手动触发的 (换壁纸不自动调接口)。
         # 小控件 8 秒轮询一次, 靠 info_key 里的 ai_sig 发现「文案到了」再重画卡片。
         try:
             from core.ai_text import texts_for
@@ -5779,7 +5779,7 @@ def create_app() -> Flask:
 
         注册表里那张已经不存在时**不再直接报错** —— 只要配了壁纸夹, 就从夹子的一端起头
         (2026-09-26 修: 那张壁纸被移出后注册表值不会自己更新, 之前这里一律 400, 表现就是
-        「点击下一张也没反应」)。
+        点「下一张」也没有响应)。
         """
         cur = _wallpaper_file()
         nxt = next_wallpaper(cur, _shuffle_arg())
@@ -5829,7 +5829,7 @@ def create_app() -> Flask:
         """改壁纸夹 (空字符串 = 清除, 回到「当前壁纸所在文件夹」这条默认口径)。
 
         存之前先验: 路径必须真实存在且是目录 —— 存一个不存在的路径进去, 之后「下一张」永远
-        报「没有别的图可换」, 用户还得自己回想是哪里打错了。
+        提示没有别的图可换, 还得自己回想是哪里打错了。
         """
         data = request.get_json(silent=True) or {}
         raw = str(data.get("dir") or "").strip().strip('"')
@@ -5853,8 +5853,8 @@ def create_app() -> Flask:
     def api_wallpaper_dir_pick():
         """弹**系统「选择文件夹」对话框**挑壁纸夹, 选中即存; 取消则什么都不改。
 
-        2026-09-26 用户实测报障:「选择文件夹为什么要有两个按钮, 一个不就足够了, 而且为什么
-        点了没反应」—— 之前界面是「保存 + 读取」两个按钮, 且输入框空着时点保存等于什么都没做。
+        早期界面是「保存 + 读取」两个按钮, 且输入框空着时点保存等于什么都没做,
+        现已合并为单个按钮。
         浏览器拿不到用户选中目录的绝对路径 (``<input webkitdirectory>`` 只给相对路径), 所以
         「选目录」只能由服务端进程弹原生对话框来完成, 见 ``utils/folder_dialog.pick_folder``。
 
@@ -5904,8 +5904,7 @@ def create_app() -> Flask:
         删壁纸不该连带把库里的收藏也删掉。文件本身就在图库内时**拒绝执行**
         (那属于"从图库删", 走图库的软删除流程, 才有记录和恢复)。
 
-        **删之前先把桌面切到下一张** (2026-09-26 用户实测报障: 「点击移除壁纸, 并不会把当前的
-        壁纸换掉, 而是单纯删除壁纸文件夹的图片」)。原因: 桌面显示的是**已经加载进内存的位图**,
+        **删之前先把桌面切到下一张**: 只删图片文件并不会换掉当前桌面壁纸。原因: 桌面显示的是**已经加载进内存的位图**,
         源文件没了它照样挂着不动 —— 只有 ``SPI_SETDESKWALLPAPER`` 指到另一个文件才会真的换。
         所以顺序必须是「先 apply 下一张, 再把旧文件送回收站」; 壁纸夹里只剩这一张时切不了,
         那就只删 (桌面会继续显示这张, 直到用户自己换)。
@@ -6251,7 +6250,7 @@ def create_app() -> Flask:
 
         body: {"ids": ["123", "456", ...]}
 
-        语义变更 : 旧实现是 `DELETE FROM` + 文件 unlink,
+        语义变更 (双层保护): 旧实现是 `DELETE FROM` + 文件 unlink,
         误删一个作品就再也找不回 —— 太危险。现在这里只做两件可逆的事:
           ① DB 打 trashed_at 标记 → 图库立即不再显示它;
           ② 图片文件从 img/ 搬进 data_root/trash/ (还在本机, 用户随时能拿回)。
@@ -6283,7 +6282,7 @@ def create_app() -> Flask:
         body: {"items": [{"artwork_id": "123", "page_num": 0}, ...],
                "cascade_choice": "keep" | "trash"   (可选)}
 
-        级联语义 : 单图软删**不会**把整个作品也拖进回收站 ——
+        级联语义: 单图软删**不会**把整个作品也拖进回收站 ——
         删一张图就只是少一张图。但若这会导致某作品变成 0 个有效页, 先**不改任何东西**、
         返回 need_choice 让用户选:
           · "keep"  → 作品保留在图库(显示 0 页), 只删图;
@@ -6549,19 +6548,19 @@ def create_app() -> Flask:
 
     @app.route("/api/library/reorder-pages", methods=["POST"])
     def api_library_reorder_pages():
-        """↔ 调整作品内页序 / 把附加页填进空位 (2026-09-17 用户需求: 手动认领/自动溯源
+        """↔ 调整作品内页序 / 把附加页填进空位 (2026-09-17 需求: 手动认领/自动溯源
         可能把页挂反, 用户要能事后调)。body 二选一:
           {"artwork_id", "order": [旧页码的完整排列]}      如 [2,0,1] → 页号压实成 0..n-1
           {"artwork_id", "assign": [{"old":5,"new":2}, ...]} 点对点改号, 只动点名的页
             —— 有空洞的作品(删过页)也能用 [{A→B},{B→A}] 交换两页; 把「附加页」填进空位
-               也只动那一页, 其它页的页号一个都不变 
+               也只动那一页, 其它页的页号一个都不变 (以前有洞就整体
                拒绝, 于是附加页既不能移动、更不能填洞)。
         DB 重排页号 (md5/origin 跟文件走, total_pages 不动); 规范命名的文件两阶段
         同步重命名, 用户自命名的文件只改库内顺序。
 
         磁盘改名与改库都在 store.reorder_pages 里完成: **先改名、成功才写库**,
         改名失败会回滚磁盘并抛 ValueError → 这里返回 400, 绝不会出现
-        「库改了、盘没改」的分裂状态。"""
+        「库改了、盘没改」的分裂状态 (后收紧)。"""
         data = request.get_json(silent=True) or {}
         aid = str(data.get("artwork_id") or "").strip()
         order = data.get("order")
@@ -6631,7 +6630,7 @@ def create_app() -> Flask:
 
     @app.route("/api/library/pixiv-author", methods=["POST"])
     def api_library_pixiv_author():
-        """—— 把这个名字/ID 问清楚 (用户 2026-09-16 要求)。
+        """—— 把这个名字/ID 问清楚。
 
         以前手动填作者时, 库里没有的名字一律建「本地作者」, 没法声明"这是 pixiv 作者"。
         这个接口只查不写, 三种模式:
@@ -6801,7 +6800,7 @@ def create_app() -> Flask:
         return jsonify({"status": "started", "count": 0})
 
     # ==================================================================
-    # 🩺 体检 (原「一键自检」) —— 2026-09-16 按要求拆成 6 个可独立运行的步骤
+    # 🩺 体检 (原「一键自检」) —— 拆成 6 个可独立运行的步骤
     #   公共设施 (_CHECK_STEPS / _check_state / _journal_*) 定义在文件头部。
     #   这里只放: 各步骤实现 + 进度上报 + 汇总报告 + 忽略机制 + 任务续跑接口。
     # ==================================================================
@@ -6921,7 +6920,7 @@ def create_app() -> Flask:
             out["reidentified"] = len(db.reidentify_merged_external())
             _ph(6, "统一时间戳格式…")
             # 历史上几处写歪的 ISO 串(带 'T'/微秒)会让「按修改时间」排序错乱 ——
-            # 带 'T' 的行字符串比较永远排最前 
+            # 带 'T' 的行字符串比较永远排最前 (几条旧记录一直顶在最前)
             out["timestamps_fixed"] = db.normalize_all_timestamps()
         _ck_progress("offline", phases, phases, "")
         return out
@@ -6964,9 +6963,9 @@ def create_app() -> Flask:
         """联网补全名单 = 缺元数据的 pixiv 作品 + authors 表缺行的 pixiv 作品
         + 图库根目录散落的 pixiv 命名图所属作品。
 
-        **一律只保留纯数字 ID** (2026-09-16): 非 pixiv 作品(ext_/merged_)在 pixiv 上
+        **一律只保留纯数字 ID**  非 pixiv 作品(ext_/merged_)在 pixiv 上
         没有页面, 去问必然 404 —— 旧实现把它们也塞进来, 于是报告里永远挂着
-        「元数据补全失败」这种补不回来的假问题 (用户: "修了这么多 bug 清单也不见少")。"""
+        「元数据补全失败」这种补不回来的假问题。"""
         img_root = _ck_img_root()
         loose_aids: list[str] = []
         for p in img_root.iterdir():
@@ -7179,7 +7178,7 @@ def create_app() -> Flask:
         return out
 
     # ---------- ⑥ 复检报告 ----------
-    #   条目分类 (需求分开显示):
+    #   条目分类 (分开显示):
     #     可疑项 = 系统异常, 通常能自动/一键修 (文件损坏/丢失/重复/数据存疑/空夹);
     #     待办项 = 需人工决策的 (缺作者名要指定或反搜; 散落图要识别来源)。
     #   旧实现混在一起, 于是"待办"永远挂在"可疑"里, 数字看着永远不降。
@@ -7189,7 +7188,7 @@ def create_app() -> Flask:
     # 待办项=缺信息、只能人工补。前端标题就按这个写。
     _ck_reverify_state = {"at": 0.0}      # GET 报告时顺手本地复核的节流时间戳
 
-    # 本步 = **复检上一版报告** :
+    # 本步 = **复检上一版报告** (, 原先是"顺带汇总"):
     #   "每个部分在检测到问题时不应该直接加入报告吗? 这个部分应该把现有的汇总报告重新检查一遍,
     #    看看问题是否还在, 已经解决了就清理掉, 或者看看问题是不是变化了。"
     # 于是: ① 从对账/DB/磁盘现场**重新推导**本次事实(=重新检查); ② 与上一版逐条 diff:
@@ -7313,7 +7312,7 @@ def create_app() -> Flask:
 
         kept = [it for it in items if (it["type"], it["ref"]) not in dismissed]
 
-        # ---- 复检: 与上一版报告逐条对账 (用户 2026-09-18 要求) ----
+        # ---- 复检: 与上一版报告逐条对账 ----
         # 本次"有条件复检"的类型: 现场重算的恒可; 依赖某步产物的, 看那步这次有没有跑成功。
         ran = set(ctx.get("_ran") or ())
         fresh = set(_CK_FRESH_ALWAYS)
@@ -7410,7 +7409,7 @@ def create_app() -> Flask:
     def _ck_legacy_drop(kind: str, ref: str, *, artwork_id: str = "") -> int:
         """从落盘的旧结构报告里删掉一条 (内存 + 文件同步), 返回删了几处。
 
-        **两个字段都要删** (`suspicious` 与 `todos`) —— 2026-09-18 
+        **两个字段都要删** (`suspicious` 与 `todos`) —— 
         「体检的条目处理完了还一直显示」, 根因就是老版只删了 `suspicious`: 老写法把
         todos 也拼进了 suspicious, 于是同一个条目在 `todos` 里还有一份, 重启读盘时
         (`_ck_load_report_from_disk` 合并两个字段) 又被合并回来, 看着就像"根本删不掉"。
@@ -7441,7 +7440,7 @@ def create_app() -> Flask:
     def _ck_reverify_local(force: bool = False) -> int:
         """打开体检相关界面时顺手做的**本地轻量复核**: 把已经解决的条目从报告里清掉。
 
-        用户 2026-09-18 报「自检的条目处理完了还一直显示」: 报告是上次体检的快照, 只有再跑
+        体检条目处理完了还一直显示: 报告是上次体检的快照, 只有再跑
         一次才刷新 —— 但「缺作者名 / 缺文件 / 空夹 / 散落图 / 损坏图(文件已删)」这几类
         **本地就能判定**, 没必要让用户为了消掉一条去跑一整轮体检。
         只判能现场判的类型; `legacy_name / metadata_failed` 需要重跑对应步骤,
@@ -7511,7 +7510,7 @@ def create_app() -> Flask:
             d = Path(str(it.get("path") or it.get("ref") or ""))
             return not d.is_dir() or not _tidy_dir_is_disposable(d)      # 夹没了 / 里面已经有东西
         if t == "corrupt":
-            # 用户 2026-09-21 报「明明把那张损坏图删了, 报告里还在」。
+            # 「明明把那张损坏图删了, 报告里还在」。
             # **只判文件还在不在**, 不重新校验像素: 文件还在就原样保留 —— 哪怕它其实已经被
             # 修好了, 也不在没重跑①的情况下宣称"损坏已修复"(那才是真的丢信息, 见本函数
             # 顶部那段设计取舍)。文件没了(删掉/移走/进了回收夹) → 这条描述本身不成立 → 清掉。
@@ -7588,7 +7587,7 @@ def create_app() -> Flask:
             _self_check_state["result"] = old
             # 老文件的 layout 可能与内存里规范化后的不一致 —— 老写法把 todos 拼进了
             # suspicious(同一件作品在文件里存了两份)。读回来顺手按新 layout 回写一次,
-            # 免得用户/其它读文件的地方看到重复条目。
+            # 免得用户/其它读文件的地方看到重复条目 ("同一条出现两次")。
             _rep = _check_state["report"]
             if (list(old.get("suspicious") or []) != list(_rep.get("suspicious") or [])
                     or list(old.get("todos") or []) != list(_rep.get("todos") or [])
@@ -7641,7 +7640,7 @@ def create_app() -> Flask:
                         "todos": list(res.get("_todos") or []),
                         "ignored": res.get("ignored", 0),
                         "corrupt_verified": bool(res.get("_corrupt_verified", True)),
-                        # 复检结论 (需求"已解决的清掉、变了的更新" → 要让他看见结果)
+                        # 复检结论 ("已解决的清掉、变了的更新" → 要让他看见结果)
                         "recheck": {
                             "at": _now_str(),
                             "steps_ran": list(res.get("_steps_ran") or []),
@@ -7741,7 +7740,7 @@ def create_app() -> Flask:
         """体检报告: 分「🔧 系统异常(可一键修)」与「✋ 缺信息(需人工补齐)」。
 
         返回前会做一次**本地轻量复核**(节流 60s): 缺作者/缺文件/空夹/散落图这些
-        本地就能判定的条目, 已经解决了就顺手清掉 —— 用户 2026-09-18 报
+        本地就能判定的条目, 已经解决了就顺手清掉 —— 
         「处理完了还一直显示」, 不必为消掉一条去跑一整轮体检。
         """
         rep = _check_state.get("report")
@@ -7757,7 +7756,7 @@ def create_app() -> Flask:
 
     @app.route("/api/library/check-report/dismiss", methods=["POST"])
     def api_library_check_report_dismiss():
-        """把图库顶部那条「🩺 上次体检：…」汇总收起来 (用户 2026-09-18 要求)。
+        """把图库顶部那条「🩺 上次体检：…」汇总收起来。
 
         只隐藏**这条汇总提示**(含「查看详情」按钮), 报告本身不删、体检面板照旧能看;
         下次真跑体检时会自动重新显示(新报告不带这个标记)。
@@ -7773,7 +7772,7 @@ def create_app() -> Flask:
 
     @app.route("/api/library/check-ignore", methods=["POST"])
     def api_library_check_ignore():
-        """忽略 / 恢复一条体检条目 (需求: 待办项能"不再提示")。
+        """忽略 / 恢复一条体检条目 (待办项能"不再提示")。
         body: {kind, ref, undo?: true}"""
         data = request.get_json(silent=True) or {}
         kind = str(data.get("kind") or "").strip()
@@ -8050,7 +8049,7 @@ def create_app() -> Flask:
     @app.route("/api/reverse/status")
     def api_reverse_status():
         # 待反搜图片放在独立输入目录 (input/), 不和图库 img/ 混放
-        # 必须 .resolve(): `_rev_resolve_input` 会把候选路径 resolve 后再判"是否在 input/ 内",
+        # 必须 .resolve: `_rev_resolve_input` 会把候选路径 resolve() 后再判"是否在 input/ 内",
         # 两边形式不一致时(短名 8.3 路径 / 大小写)会被当成"越界"而全部拒绝 ——
         # 2026-09-18 实测就因此把还在收件箱的文件误判成"已不在", 连带把它的失败记录剪掉。
         input_root = Path(paths.user_data(
@@ -8097,7 +8096,7 @@ def create_app() -> Flask:
     def _rev_prune_results(input_root: Path) -> int:
         """清掉「最近一次反搜结果」里**已经不在收件箱**的过时条目 (成功归档的那批除外)。
 
-        用户 2026-09-18 报: 手动入库/丢弃之后, 任务表里那些「未识别」失败项**反复出现**,
+        手动入库/丢弃之后, 任务表里那些「未识别」失败项**反复出现**,
         点清空也没用 —— 因为任务表是从 `reverse_results.json` 重建的, 而入库/丢弃/清空
         **谁都没动过这个文件**, 于是每次刷新又把那几条捞回来, 还反过来提示"文件仍在待反搜区"
         (实际收件箱早空了)。
@@ -8170,9 +8169,9 @@ def create_app() -> Flask:
     def api_reverse_adopt():
         """**手动入库**: 把反搜收件箱里的图直接收进图库 (建自定义作品)。
 
-        为什么需要 :
+        为什么需要:
         反搜只有"命中才自动归档"这一条路, 没命中的图此前**没有任何出口** —— 永远堆在 input/。
-        现在允许用户自己拍板: 收进 img/#其他来源#/ 并登记成 ext_ 壳作品 (标题=文件名),
+        现在允许使用者自行决定: 收进 img/#其他来源#/ 并登记成 ext_ 壳作品 (标题=文件名),
         与导入时的「建自定义作品」完全同一套落地方式。
 
         body: {"files": ["a.png", "not_found/b.png", ...]}
@@ -8644,7 +8643,7 @@ def create_app() -> Flask:
         """弹系统原生「打开文件」框 (可多选图片); 返回 {paths: [...]} (取消则空数组)。
 
         为什么要两个入口: Windows 通用对话框一次只能「选多张文件」或「选一个文件夹」,
-        没有二者合一的形态 —— 前端因此给两个按钮。"""
+        没有二者合一的形态 —— 前端因此给两个按钮 (支持多选图片)。"""
         return jsonify({"status": "ok", "paths": _pick_files_dialog()})
 
     @app.route("/api/library/import-from-path", methods=["POST"])
@@ -8656,9 +8655,9 @@ def create_app() -> Flask:
               {dry_run: true} —— 只统计不动文件 (前端先预览再确认)
           - 文件名含 pixiv 作品ID → 入库 img/ (对账登记 + 后台补元数据 + 归入作者夹)
           - 无 ID (截图等)        → 入库 input/ 反搜收件箱
-          - 目标同名              → **跳过, 源文件留在原处** 
+          - 目标同名              → **跳过, 源文件留在原处** (
                                     宁可不导, 也不动源文件)
-        语义变更 : 原来是 shutil.move 硬搬 + 重复时 os.unlink 永久删,
+        语义变更: 原来是 shutil.move 硬搬 + 重复时 os.unlink 永久删,
         误选一个文件夹就再也找不回。现在一律「复制成功 → 源文件进回收站(可还原)」,
         送回收站失败只如实报告, 绝不回滚已入库的图。"""
         import shutil as _sh
@@ -8723,7 +8722,7 @@ def create_app() -> Flask:
                     if fp.suffix.lower() in IMG_EXT:
                         files.append(fp)
 
-        # 三种去向 :
+        # 三种去向 ("导入前先判定"):
         #   pixiv  → 标准 P 站作品, 直接入库 img/ (对账登记 + 后台补元数据);
         #   custom → 不是标准 P 站作品, 且用户选了「建自定义作品」→ 入 img/#其他来源#/ 建 ext_ 壳;
         #   reverse→ 不是标准 P 站作品, 用户选「转反搜」(默认) → 入 input/ 收件箱。
@@ -8826,8 +8825,8 @@ def create_app() -> Flask:
         ctype = resp.headers.get("Content-Type", "image/jpeg")
 
         def _stream():
-            # 流式转发: 首字节随读随发 —— 原来 `resp.read()` 要先等 pixiv 把整张图下完再一次性
-            # 回给浏览器, 「点开大图 → 出画面」的时间 = 整图下载耗时 (2026-10-20 
+            # 流式转发: 首字节随读随发 —— 原来 `resp.read` 要先等 pixiv 把整张图下完再一次性
+            # 回给浏览器, 「点开大图 → 出画面」的时间 = 整图下载耗时 (
             # 「只是打开低清的都要加载很久」的主因之一)。注意不能在 `with urlopen(...)` 里
             # return 生成器: 那会在 return 时就把连接关掉, 所以这里显式在生成器里 close。
             try:
@@ -8891,7 +8890,7 @@ def create_app() -> Flask:
 
     @app.route("/api/pixiv/follow", methods=["POST"])
     def api_pixiv_follow():
-        """关注 / 取关某位 pixiv 作者（用户 2026-09-18 要求「增加关注该作者的按钮」）。
+        """关注 / 取关某位 pixiv 作者。
 
         body: {"author_id": "...", "follow": true|false, "private"?: bool}
         follow 不传 = 按当前状态取反（前端一个按钮来回切）。
@@ -8962,7 +8961,7 @@ def create_app() -> Flask:
         白名单过滤: 只认 LAUNCHER_DEFAULTS 里的键, 防止前端 POST 一个 _note 或别的节
         把 user.json 写脏。未出现的键不动, 交 _deep_merge 与已有 user.json 合并。
 
-        2026-10-20 用户: 「启动与托盘那几个设置为什么要设置成重启才生效? 很麻烦」→ 除了
+        → 除了
         「启动自动开浏览器」(那一刻才有浏览器可开) 以外全部改成存盘即刻生效。热应用钩子由
         main.py 的 set_launcher_apply 交进来 (web 层碰不到托盘/小控件对象); 逐项结果放进
         ``applied`` 回传, 让界面能如实说清哪一项没立刻生效、为什么。"""
@@ -8985,7 +8984,7 @@ def create_app() -> Flask:
         mark_dirty("settings")
         return jsonify({"ok": True, **upd, "applied": applied})
 
-    # ---------------- 📁 路径设置 (2026-10-20 · 用户: 「所有路径」都要有设置入口) ----------------
+    # ---------------- 📁 路径设置 (所有路径都要有设置入口) ----------------
     @app.route("/api/paths")
     def api_paths_get():
         """读路径设置: 可改的两个重定向 + 其余位置的只读落点 (给设置页「📁 路径」卡片画)。"""
@@ -9051,7 +9050,7 @@ def create_app() -> Flask:
         return jsonify({"ok": True, "removed": st.get("removed", 0),
                         "freed_mb": st.get("freed_mb", 0), "sizes": _paths_snapshot()["sizes"]})
 
-    # ---------------- ✨ 壁纸文案 AI (2026-09-27) ----------------
+    # ---------------- ✨ 壁纸文案 AI ----------------
     @app.route("/api/ai")
     def api_ai_get():
         """读壁纸文案 AI 的设置 (给设置页画表单)。
@@ -9101,7 +9100,7 @@ def create_app() -> Flask:
     def api_ai_test():
         """「🔌 测试连接」: 存下这次填的配置, 再用最便宜的一次请求验一遍。
 
-        2026-09-27 时加回来的 —— 只有一颗按钮
+        接口报错时加回来的 —— 只有一颗按钮
         就没有任何排障入口, 用户只能盲猜是哪一项填错。**不发图、不要求有当前壁纸**,
         地址 / 密钥 / 模型名三项错哪一项, 由接口返回的原话来说明。
         """
@@ -9122,7 +9121,7 @@ def create_app() -> Flask:
     def api_ai_run():
         """「⬆ 上传当前壁纸」: 存下这次填的地址/模型/密钥, 给**当前这张壁纸**生成一次文案。
 
-        用户 2026-09-27 定案: 设置页只留这一颗按钮 —— 点一次 = 保存配置 + 上传当前壁纸 +
+        设置页只留这一颗按钮 —— 点一次 = 保存配置 + 上传当前壁纸 +
         当场拿回「标题 + 氛围句」(同时写进缓存, 桌面小控件随即显示)。换壁纸**不自动**再调
         接口, 所以这条是**同步等待**的 (用户点了就是在等结果)。
         """
@@ -9153,7 +9152,7 @@ def create_app() -> Flask:
             mark_dirty("settings")
         except Exception:
             pass
-        # 文案刚落缓存, 别让小控件干等下一轮 8 秒轮询 —— 立刻捅它一下 (2026-09-29)。
+        # 文案刚落缓存, 别让小控件干等下一轮 8 秒轮询 —— 立刻捅它一下。
         _notify_widget()
         return jsonify({"ok": True, "title": out.get("title", ""), "mood": out.get("mood", "")})
 

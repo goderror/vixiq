@@ -95,7 +95,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 /* ===== 回到顶部 (初音 Q 版立绘贴纸, 滚动后淡入右下角) ===== */
 #to-top {
   /* z-index 必须低于弹窗遮罩(.modal-mask=200): 否则这个浮动贴纸会压在弹窗右下角的按钮上,
-     实测会挡住「指定作者」小窗的「取消」按钮中心点 (2026-09-13) */
+     实测会挡住「指定作者」小窗的「取消」按钮中心点 */
   position: fixed; right: 20px; bottom: 24px; z-index: 150;
   width: 76px; height: 76px; border: none; border-radius: 50%; cursor: pointer;
   background: url('to-top.png') center/cover no-repeat;
@@ -118,7 +118,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 19V5M5 12l7-7 7 7'/%3E%3C/svg%3E") center/38px no-repeat;
 }
 
-/* ===== 🗂 作者对账台 (2026-09-17): 左=我库里来源未定的图, 右=TA 在 pixiv 的作品 ===== */
+/* ===== 🗂 作者对账台  左=我库里来源未定的图, 右=TA 在 pixiv 的作品 ===== */
 .rc-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
 .rc-head .btn { margin-left: auto; }
 .rc-cols { display: grid; grid-template-columns: minmax(230px, 32%) 1fr; gap: 12px; margin-top: 10px; }
@@ -165,7 +165,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 
 /* ===== 🎯 万能刷新 (轻量/定向刷新, 2026-09-17) =====
    不知道刷什么时就点它: 按"最近一次改动"决定只刷新哪一块 (作品/作者/图库), 不跑全量自检。
-   样式: 无底色、无阴影的单色细线图标,
+   样式 (轻量、简约、背景透明): 无底色、无阴影的单色细线图标,
    平时半透明不抢视线, 悬停才亮起来并给一层极淡的圆形底。
    z-index 与 #to-top 一致(150): 必须低于弹窗遮罩(.modal-mask=200), 否则会压住弹窗右下角按钮。 */
 #smart-refresh {
@@ -269,11 +269,11 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .author-card .a-name { font-size: 17px; font-weight: 700; }
 .author-card .a-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .author-card .a-bio { color: var(--muted); font-size: 13px; margin-top: 6px; max-width: 560px; }
-/* 作者卡右侧动作区: 关注 + 全部作品加入清单 (2026-09-18) */
+/* 作者卡右侧动作区: 关注 + 全部作品加入清单 */
 .author-card .a-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
 .author-card .a-actions .btn { white-space: nowrap; }
 
-/* ===== 作者结果里作品列表的翻批栏 (2026-09-18: 「为什么不是全部作品/不能换一批」) ===== */
+/* ===== 作者结果里作品列表的翻批栏  ===== */
 .works-pager {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   flex-wrap: wrap; margin: 4px 0 10px; padding: 7px 12px;
@@ -288,7 +288,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .works-pager .wp-info b { color: var(--text); }
 .works-pager .wp-btns { display: flex; gap: 6px; }
 
-/* 「关键词结果 → 作者详情」顶部的返回条 (2026-09-21): 只有从关键词结果点进来的详情页才有,
+/* 「关键词结果 → 作者详情」顶部的返回条  只有从关键词结果点进来的详情页才有,
    用强调色左边框区分于普通信息条, 让"能回去"一眼可见 */
 .back-bar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -350,8 +350,8 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
    必须把 right/bottom 也改 auto 才解得掉)。此时「视口」= .lightbox-img-wrap 的 overflow:hidden,
    translate 才是在一张大图上移动视口。
    【为什么不能只用 object-fit: none】元素盒子仍是容器尺寸, 裁剪窗口锚在**元素盒子**上,
-   translate 移动的是「盒子 + 盒里那份固定裁剪」—— 看起来只是把一个方块拖着走, 翻不出新区域
-。 */
+   translate 移动的是「盒子 + 盒里那份固定裁剪」—— 看起来只是把一个方块拖着走, 翻不出新区域。
+ */
 .lightbox-img-wrap.is-zoom .lightbox-img.lb-layer {
   width: auto; height: auto;
   left: 50%; top: 50%; right: auto; bottom: auto;
@@ -403,7 +403,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   background: #e3f0fd; border-color: #9ecbf3; color: var(--accent);
 }
 /* 卡片主操作按钮 (🔎 搜索来源 / ✅ 已入库 / 🧩 补全页数 / ➕ 加入清单 / ⏳ 已在下载列表):
-   加粗加大 + 胶囊圆角, 与右侧田字图标块形成明显主次。
+   加粗加大 + 胶囊圆角, 与右侧田字图标块形成明显主次 (字体好看些)。
    选择器用 4 个类(.btn.cart-main)以压过上面的 .work-card .w-actions .btn 基础规则。 */
 .work-card .w-actions .btn.cart-main {
   font-size: 14px; font-weight: 700; letter-spacing: .3px;
@@ -508,7 +508,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .card-row > .card.mini { min-width: 0; }   /* 同上: 网格项默认 min-width:auto 也会顶破列宽 */
 .card.mini { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
 .card.mini h3 { font-size: 14px; margin-bottom: 10px; }
-/* 分组标题 : 每类一张小标题 + 一组卡片, 卡片行的
+/* 分组标题 (「这里一块那里一块」): 每类一张小标题 + 一组卡片, 卡片行的
    行间距交给 .set-group, 免得每行都手写 margin-top 还各写各的。 */
 .set-group { margin-bottom: 20px; }
 .set-group:last-child { margin-bottom: 0; }
@@ -535,7 +535,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .op-item {
   display: flex; align-items: baseline; gap: 8px; padding: 5px 6px;
   border-bottom: 1px dashed #e6ebf0; line-height: 1.5;
-  flex-wrap: wrap;      /* 徽标/时间/动作/详情 太宽时换行, 不再把整列顶宽 (2026-09-18) */
+  flex-wrap: wrap;      /* 徽标/时间/动作/详情 太宽时换行, 不再把整列顶宽 */
 }
 .op-item:last-child { border-bottom: none; }
 .op-badge {
@@ -599,7 +599,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 }
 .lightbox-close {
   /* 锚视口, 不挂在 .lightbox-wrap 上: 原 top:-40px 的写法在 wrap 顶满 94vh 时按钮会越过视口上沿,
-     只露半个  */
+     只露半个 (本地图库查看器同样会顶满, 所以这条对两个弹窗一起生效) */
   position: fixed; top: 18px; right: 22px;
   width: 36px; height: 36px; border: none; border-radius: 50%;
   background: rgba(255,255,255,.15); color: #fff;
@@ -644,13 +644,13 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .lightbox-info .lb-meta { color: #aaa; white-space: nowrap; }
 /* 尺寸/大小、页码 是翻页时唯一会变的文字: 固定最小宽度 + 等宽数字, 位数变化
    ("9 / 12"→"10 / 12"、"750 KB"→"1.4 MB") 不再把整行文字一起推来推去
-。 */
+   (「左右切换时那些文字会闪烁」)。 */
 .lightbox-info .lb-file { color: #aaa; white-space: nowrap;
   min-width: 18ch; font-variant-numeric: tabular-nums; }
 .lightbox-info .lb-nav { color: #8fd8d0; font-weight: 600; white-space: nowrap;
   min-width: 7ch; text-align: right; font-variant-numeric: tabular-nums; }
 /* Lightbox 左右翻页按钮: 固定在视口左右两端, 不随图片大小移动
-。
+   (「点开大图后左右切换的按钮会随着图片大小而变动位置」)。
    原来是 absolute + left/right:-64px, 定位基准是 .lightbox-wrap —— 而它的宽度由
    最宽的子元素决定, 也就是 JS 按图片比例设定的 .lightbox-img-wrap, 于是竖图把两个
    按钮拽向中间、宽图又推到很外面。改成 fixed 后锚在视口边缘, 与图片尺寸无关。 */
@@ -811,7 +811,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 /* 操作行: 条数靠左 + 状态筛选/批量按钮靠右, 与筛选控件分行; 窄窗口允许换行 */
 .lib-ops-row { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin-top: 6px; }
 /* 批量按钮组: 靠右。三个状态筛选(缺元数据/缺失文件/已失效)也挂在这一组最左边 ——
-   以前它们挤在筛选行末尾, 那行控件太多被顶到下一行(用户 2026-09-20 报)。
+   以前它们挤在筛选行末尾, 那行控件太多被顶到下一行。
    flex-wrap: 组内按钮多, 窄窗口整组会溢出, 允许内部换行并保持右对齐。 */
 .lib-batch-group { display: flex; align-items: center; gap: 6px; margin-left: auto;
   flex-wrap: wrap; justify-content: flex-end; }
@@ -974,7 +974,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .rev-noimg { height: 120px; display: flex; align-items: center; justify-content: center; font-size: 32px; background: #f0f2f5; color: #c3c9d1; }
 .rev-pick-label { position: absolute; margin: 6px; padding: 2px 8px; background: rgba(255,255,255,.92); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; cursor: pointer; user-select: none; }
 .rev-cell { position: relative; }
-/* 反搜收件箱里的单格操作: 「📥 入库」「🗑️ 丢弃」—— 识别不出来的图的出路 (2026-09-18) */
+/* 反搜收件箱里的单格操作: 「📥 入库」「🗑️ 丢弃」—— 识别不出来的图的出路 */
 .rev-cell-ops { display: flex; gap: 6px; padding: 0 8px 8px; }
 .rev-cell-ops .btn.mini { flex: 1; padding: 4px 6px; font-size: 12px; }
 /* 「未找到」= 上次反搜没命中、被挪进 not_found/ 的图: 用暖色描边 + 角标让它跳出来, 
@@ -1014,7 +1014,7 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
 .rq-dot.now { background: var(--accent); animation: rq-blink 1s infinite; }
 @keyframes rq-blink { 50% { opacity: .4; } }
 
-/* ===== 🧹 壁纸副本清理弹窗 (2026-09-24) ===== */
+/* ===== 🧹 壁纸副本清理弹窗 ===== */
 .dupe-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .dupe-table th, .dupe-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
 .dupe-table th { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
@@ -1147,7 +1147,7 @@ tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
 .health-group-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
 .health-group .health-list { max-height: 220px; overflow-y: auto; margin-bottom: 6px; }
 
-/* ===== 🩺 体检面板 (2026-09-16): 每项单独运行 + x/y 详细进度 ===== */
+/* ===== 🩺 体检面板  每项单独运行 + x/y 详细进度 ===== */
 /* 大号弹窗里单列会把行拉得又长又空 (标题和「▶ 运行」之间空半屏) → 宽屏自动排两列,
    窄屏 (每列放不下 ~340px) 自动退回单列, 不用媒体查询 */
 .chk-list {
@@ -1237,7 +1237,7 @@ tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
   outline-offset: 2px;
 }
 
-/* ===== 🗑 回收站页 (2026-09-17) ===== */
+/* ===== 🗑 回收站页 ===== */
 /* 缩略图: 文件已搬进 data_root/trash/, 走 /api/local-img?root=trash 直读 */
 .trash-thumb {
   width: 46px; height: 46px; object-fit: cover;
@@ -1256,7 +1256,7 @@ tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
   background: #1e2126; color: #d7dae0; padding: 10px 12px; border-radius: 6px;
 }
 
-/* ===== 🔁 体检「⑥ 复检报告」结论块 (2026-09-18) ===== */
+/* ===== 🔁 体检「⑥ 复检报告」结论块 ===== */
 /* 让"清掉了哪些已解决 / 哪些变了 / 哪些没复检"从正文里跳出来, 一眼看得到 */
 .chk-recheck-box {
   border: 1px solid var(--line, #e3e6ea);
@@ -1268,7 +1268,7 @@ tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
 .chk-recheck-box s { color: #8d93a0; }
 
 /* 体检: 统计徽标行 + 分节标题「标题 · 说明 · 计数」三段式 + 折叠说明
-   (原来判据/复检/口径全塞进正文长句, 堆在一起读不动 —— 2026-09-27 ) */
+   (原来判据/复检/口径全塞进正文长句, 堆在一起读不动 —— ) */
 .chk-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .chk-stats-time { font-size: 12px; color: var(--muted); }
 .chk-sec { display: flex; align-items: baseline; gap: 8px; }
@@ -1327,7 +1327,7 @@ tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
 .lib-list th.sortable:hover { color: var(--accent); }
 .lib-list .src-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px;
   background: #eef2f7; color: #5d6b7a; border: 1px solid #dbe2ea; margin: 1px 2px 1px 0; }
-/* 同名不同身份提示 (本地作者 local_xxx vs 真 pixiv 作者): 用户 2026-09-18 报「两条记录」 */
+/* 同名不同身份提示 (本地作者 local_xxx vs 真 pixiv 作者): 「两条记录」 */
 .c-warn { margin-top: 4px; font-size: 11px; color: #8a6d1f; background: #fff8e1;
   border: 1px solid #f0d68a; border-radius: 6px; padding: 3px 6px;
   display: inline-flex; align-items: center; gap: 6px; max-width: 420px; }
@@ -1340,7 +1340,7 @@ tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
   border-radius: 8px; font-weight: 400; width: 100%; box-sizing: border-box; }
 .lib-edit-form textarea { font-family: inherit; resize: vertical; }
 
-/* ===== 🖼 当前壁纸信息窗 (2026-09-24) ===== */
+/* ===== 🖼 当前壁纸信息窗 ===== */
 /* 桌面幻灯片播到哪张 → 当场告诉你是谁画的 / 库内哪一页 / 有没有更高清的一版。
    只读展示: 高对比、字号小、一行一结论, 不抢图库正文的注意力。 */
 .wall-card {

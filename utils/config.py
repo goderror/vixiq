@@ -11,7 +11,7 @@ import json
 from utils import paths
 
 
-# 启动器形态的用户可选项 (2026-09-24 · 托盘常驻): default.json 的 launcher 节、
+# 启动器形态的可选项 (2026-09-24 · 托盘常驻): default.json 的 launcher 节、
 # 本文件的兜底、web/server.py 的 /api/launcher 接口、utils/tray.py 的托盘行为
 # 都读这一份, 免得四处键名各写一遍迟早漂。
 LAUNCHER_DEFAULTS = {
@@ -22,7 +22,7 @@ LAUNCHER_DEFAULTS = {
     "exit_on_browser_close": False,  # 浏览器页面全关后是否自动退出
 }
 
-# ✨ 壁纸文案 AI (2026-09-27): OpenAI 兼容接口, 给当前壁纸生成「标题 + 一句氛围话」。
+# ✨ 壁纸文案 AI: OpenAI 兼容接口, 给当前壁纸生成「标题 + 一句氛围话」。
 # 默认**全关** —— 开了才会往用户填的那个地址发请求, 密钥也是用户自己填。
 # 详见 core/ai_text.py 顶部的设计说明 (为什么调用在服务端而不是浏览器侧)。
 AI_DEFAULTS = {
@@ -54,7 +54,7 @@ def _canonicalize(cfg: dict) -> dict:
       - paths.output (缺则回退到 paths.img_subdir 再回退 'img')
       - paths.cookies_filename (缺则从 cookies.cookies_filename 搬, 双向一致)
       - paths.img_subdir / input_subdir / db_filename 等基础项
-    避免。
+    避免代码里直接读 config['cookies']['xxx'] 而 default.json 缺该节时抛 KeyError。
     """
     # ---- 保证顶层节存在 ----
     for top_key in ('browser', 'crawler', 'reverse_search', 'local_search',
@@ -62,15 +62,15 @@ def _canonicalize(cfg: dict) -> dict:
                     'pixiv_actions', 'activity_log', 'launcher', 'ai_text'):
         cfg.setdefault(top_key, {})
 
-    # ---- pixiv_actions 账号写操作 (2026-09-18): 下载后自动收藏(♡)/公开或非公开 ----
+    # ---- pixiv_actions 账号写操作: 下载后自动收藏(♡)/公开或非公开 ----
     pa = cfg['pixiv_actions']
-    # 默认开启 : 用户明确要求"点下载就自动收藏该作品", 保守默认会让
+    # 默认开启: 点下载就自动收藏该作品, 保守默认会让
     # 他以为功能没做 —— 设置页有开关可随时关掉。
     pa.setdefault('auto_bookmark', True)       # 下载成功后自动收藏该作品
     pa.setdefault('bookmark_private', False)   # True = 非公开收藏 (只有自己可见)
     # 注: R18 作品在 _auto_bookmark_after_download 里**强制走非公开**, 不受本开关影响
 
-    # ---- activity_log 实时活动日志 (2026-09-17): 打屏 + 落盘, 按大小滚动/保留 N 天 ----
+    # ---- activity_log 实时活动日志: 打屏 + 落盘, 按大小滚动/保留 N 天 ----
     al = cfg['activity_log']
     al.setdefault('enabled', True)      # 总开关 (关掉则只打屏不落盘)
     al.setdefault('console', True)      # 是否同时在终端打屏

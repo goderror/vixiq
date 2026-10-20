@@ -2,7 +2,7 @@
 """
 Pixiv SQLite 存储层（统一入口）。
 
-P1 数据库完善版 —— 按（统一模型/索引）+ （DDL 迁移/备份恢复/损坏识别不直接删库）改造。
+统一模型与索引, 支持 DDL 迁移、备份恢复、损坏识别 (不直接删库)。
 
 向后兼容：
   - 原 create_tables / get_artwork_info / get_page_info / batch_sync_all 等全部保留签名，
@@ -99,7 +99,7 @@ class ReconcileReport:
 
 @dataclass
 class RestoreDiff:
-    """备份 vs 当前的差异对比。返回给 GUI 让恢复，避免 的"盲目覆盖丢失数据"。"""
+    """备份 vs 当前的差异对比。返回给 GUI, 恢复前由使用者确认, 避免盲目覆盖丢失数据。"""
     backup_only_authors: list[str]     # 备份有、当前没有的作者ID
     backup_only_artworks: list[str]    # 备份有、当前没有的作品ID
     current_only_authors: list[str]    # 当前有、备份没有的作者ID (恢复后会丢)
@@ -115,12 +115,11 @@ class RestoreDiff:
 def now_stamp() -> str:
     """库内**唯一**的时间戳写法: UTC + 空格分隔, 与 schema 默认值 `datetime('now')` 完全一致。
 
-    千万别用 `datetime.datetime.now().isoformat()` —— 那是**本地时间 + 'T' + 微秒**,
+    千万别用 `datetime.datetime.now.isoformat` —— 那是**本地时间 + 'T' + 微秒**,
     与库里的 'YYYY-MM-DD HH:MM:SS' 混在一起时, 所有按时间排序的地方(图库「按修改时间」/
     作者「最后更新」)都会错乱: 字符串比较到第 11 个字符时 'T'(0x54) > ' '(0x20),
-    于是带 'T' 的行**无条件**排在所有正常时间戳前面 (用户 2026-09-18 报:
-    —— 就是 merge_author_into
-    等 6 处仍在写 isoformat)。
+    于是带 'T' 的行**无条件**排在所有正常时间戳前面, 旧记录会一直顶在最上面 ——
+    merge_author_into 等 6 处曾仍在写 isoformat。
     """
     return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
@@ -152,10 +151,10 @@ def guess_foreign_source(rel: str) -> str:
     bili@/b站/哔哩 → bilibili; twi@/twitter/推特/x.com → twitter; GGAC@ → ggac;
     artstation/deviantart/niconico/skeb/yandere/konachan/gelbooru/sankaku/
     safebooru 等画师站与 booru 族关键词 → 对应站点
-    ;
+    (2026-09-13 精简: 去掉 nijie/pawoo/furaffinity/e621);
     32位hex文件名(danbooru 标准命名)/danbooru/donmai → danbooru; 其余 → other。
-    用户归档文件夹命名约定: 「来源@作者名」(如 bili@徐尤点、twi@qing0ying0、GGAC@毒瘤)。
-    sample(rsk) 文件夹为 danbooru 下载但文件夹名无关键词, 特判为 danbooru。"""
+    归档文件夹命名约定: 「来源@作者名」(如 bili@徐尤点、twi@qing0ying0、GGAC@毒瘤)。
+    个别文件夹名不含站点关键词、但可确认来自 danbooru 的, 按 danbooru 处理。"""
     import re as _re
     p = str(rel).replace("\\", "/")
     low = p.lower()
@@ -170,12 +169,12 @@ def guess_foreign_source(rel: str) -> str:
         return "artstation"
     if "deviantart" in low or "deviant" in low:
         return "deviantart"
-    # 常用画师站 (2026-09-10 三扩; 2026-09-13 用户精简: 去掉 nijie/pawoo/furaffinity)
+    # 常用画师站 (2026-09-10 三扩; 2026-09-13 精简: 去掉 nijie/pawoo/furaffinity)
     if "niconico" in low or "nicovideo" in low or "nico静" in p:
         return "niconico"
     if "skeb" in low:
         return "skeb"
-    # booru 族 
+    # booru 族 (2026-09-13 精简: 去掉 e621)
     if "yande.re" in low or "yandere" in low:
         return "yandere"
     if "konachan" in low:
@@ -218,7 +217,7 @@ def guess_foreign_source(rel: str) -> str:
     if "drawr" in low:
         return "drawr"
     if (_re.fullmatch(r"[0-9a-f]{32}", stem) or "danbooru" in low
-            or "donmai" in low or "sample" in low):
+            or "donmai" in low):
         return "danbooru"
     return "other"
 
@@ -256,13 +255,13 @@ _SITE_TO_SOURCE = {
 def parse_foreign_account(rel: str) -> "tuple[str, str] | None":
     """从相对路径(文件夹/文件名)解析「来源@源站账号」约定 → (source, account)。
 
-    取路径中【最后一个】匹配(通常即作者文件夹/文件名), 账号遇 / \\ () ：: 终止:
+    取路径中【最后一个】匹配(通常即作者文件夹/文件名), 账号遇 / \\：: 终止:
       twi@qing0ying0/xx.png      → ('twitter', 'qing0ying0')
       bili@徐尤点/bili@徐尤点：x.png → ('bilibili', '徐尤点')
       GGAC@毒瘤/GGAC@毒瘤：x.png   → ('ggac', '毒瘤')
       X图/D.I.S.H（twi@Dishwasher1910）_13408193/xx.png
                                 → ('twitter', 'Dishwasher1910')  (pixiv 文件夹内标注也可解析)
-    无法解析(无站点键、或 @ 前不是站点键如 pixiv 昵称 MAIRO@xxx) → None。
+    无法解析(无站点键、或 @ 前不是站点键, 如 pixiv 昵称 作者@社团) → None。
     调用方只对【非 pixiv 作品】落 source_author, 并遵守「只增不覆盖」。"""
     ms = list(_FOREIGN_ACCOUNT_RE.finditer(str(rel).replace("\\", "/")))
     if not ms:
@@ -308,8 +307,8 @@ def folder_author_name_usable(name: str) -> bool:
 def foreign_author_id(source: str, handle: str) -> str:
     """外来源作者的**唯一**稳定键: `local_` + md5('foreign:{站点}:{账号}')[:12]。
 
-    背景 : 原先有**两套**本地作者建键算法 ——
-    `create_or_get_local_author()` 用 md5(名字), `backfill_foreign_authors()` 用
+    背景: 原先有**两套**本地作者建键算法 ——
+    `create_or_get_local_author` 用 md5(名字), `backfill_foreign_authors` 用
     md5('foreign:站点:账号')。同一个人于是被拆成两条作者记录、一键整理摆出两个作者夹
     (实例: `local_d62077f02230`=md5('ying yi') 与 `local_3155a34b4d66`=foreign:twitter:qing0ying0)。
     现在全库统一走这一个函数: 身份认「站点 + 账号」(账号是稳定的), 显示名只是名字。"""
@@ -338,7 +337,7 @@ def stem_is_readable(stem: str) -> bool:
     return any(ch.isalpha() for ch in s)
 
 
-# 内部键/文件名样式的标题。
+# 内部键/文件名样式的标题 (合并→拆分后标题停在 merged_86126bd0e0de_p0)。
 # 这类标题是「文件主干/内部主键」被灌进 title 的结果, 不是人读信息 —— 自检与来源确认时
 # 必须回填成可读标题。注意 stem_is_readable 认它会返回 True (含字母), 所以单独判一次。
 _INTERNAL_KEY_TITLE_RE = re.compile(
@@ -352,7 +351,7 @@ def title_is_internal_key(title: str) -> bool:
     return bool(_INTERNAL_KEY_TITLE_RE.match(str(title or "").strip()))
 
 
-# ---------- 作者「来源链接」 ----------
+# ---------- 作者「来源链接」(链接不能只是记录, 要有结构、能关联) ----------
 # 一条链接 = {"site": "twitter", "url": "https://x.com/foo", "handle": "foo", "label": "X / Twitter"}
 #   site/handle 由 web 层用 _classify_url 解析后写入 —— handle 才是"关联"的关键:
 #   它等于该作品在该站的 source_author, 也是外来作者唯一身份键 foreign_author_id(site, handle)
@@ -431,7 +430,7 @@ def foreign_title_fallback(source: str, source_author: str, rel: str = "") -> st
 def _connect(path: "str | Path") -> sqlite3.Connection:
     """统一的 SQLite 连接: 长任务并发时"等锁"而不是直接报错。
 
-    背景 : 自检/下载这类后台长任务持续写库时，用户在前端点
+    背景: 自检/下载这类后台长任务持续写库时，用户在前端点
     「锁定文件名」拿到 HTTP 500 —— 默认 5s 等不到写锁就抛 `database is locked`。
     这里 ① `timeout`/`busy_timeout` 放宽到 30s（等锁重试而不是立刻失败）；
     ② 打开 WAL 日志模式（读不阻塞写、写不阻塞读，长任务期间照常改图库；
@@ -497,7 +496,7 @@ class PixivDatabase:
 
         # 2) 再跑迁移器（必须复用 self.conn: :memory: 时若另开连接建表, 两个连接
         #    就是两个互相隔离的内存库 → 应用连接里查不到 pages/artworks 等表。
-        #     记此坑。）
+        #    :memory: 下尤其要注意这一点。）
         try:
             migrator = MigrationManager(self.db_path)
             new_versions = migrator.ensure_migrations_applied(conn=self.conn)
@@ -589,7 +588,7 @@ class PixivDatabase:
              file_size_bytes=COALESCE(excluded.file_size_bytes, pages.file_size_bytes),
              origin=COALESCE(?, pages.origin)
         """
-        # 页一落库 = 这个作品被改动了 → 顺手刷 updated_at 
+        # 页一落库 = 这个作品被改动了 → 顺手刷 updated_at (
         # 「导入图片的操作不会更新最近修改时间」)。此前只有 change_work_status 与
         # 合并/拆分(_refresh_work_progress) 会刷 —— 于是往一个**已有作品**补页
         # (导入散图 / 补缺页)时 updated_at 一动不动, 按「修改时间」排序里它不会提前,
@@ -609,7 +608,7 @@ class PixivDatabase:
                            title=None, author_id=None, illust_type=None,
                            tags=None, bookmark_count=None, publish_date=None,
                            is_r18=None, thumb_url=None, ai_type=None):
-        # 时间戳必须与 schema 默认值 (datetime('now') = UTC 空格格式) 完全一致 (2026-09-16):
+        # 时间戳必须与 schema 默认值 (datetime('now') = UTC 空格格式) 完全一致 
         # 旧代码写的是本地时间 isoformat (UTC+8 + 'T' 分隔), 与其它行混在一起按文本排序时
         # 'T'(0x54) > ' '(0x20) 会让本地格式的行**无条件**排在前面, 且还有 8 小时偏差,
         # 「按修改时间排序」会严重错乱 (生产库实测 1381 行 T 格式 / 70 行空格格式)。
@@ -708,7 +707,7 @@ class PixivDatabase:
                         self.mark_page_status(aid, page, PSt.FAILED, None)
             except sqlite3.Error as e:
                 self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
-        # 登记页后补齐作品状态 (2026-09-15): 旧实现只写 pages 不同步 artworks,
+        # 登记页后补齐作品状态: 旧实现只写 pages 不同步 artworks,
         # 手动/外部放入的图会永远停在 NOT_YET 且 exist_list 为空 (实测 128028374/130720548)
         if newly:
             n = self.promote_completed_works(newly)
@@ -745,7 +744,7 @@ class PixivDatabase:
         input_ids: set[str] = set()
         for p in input_path.rglob('*'):
             if p.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp', '.gif'}:
-                # 统一身份识别 (2026-09-15): 旧正则 re.search(r'(\d+)') 会把文件名里
+                # 统一身份识别: 旧正则 re.search(r'(\d+)') 会把文件名里
                 # 任意第一段数字 (毫秒时间戳/顺序号/哈希片段) 当 pid, 建出垃圾下载任务。
                 nkey = pixiv_natural_key(p.name)
                 if nkey:
@@ -775,7 +774,7 @@ class PixivDatabase:
     def bump_created_at(self, aid: str) -> None:
         """把作品的「入库时间」刷成当前时刻 —— 有新图片真正落盘时调用。
 
-        动机 : created_at 原本只在 `init_works`(加入清单)时写入,
+        动机: created_at 原本只在 `init_works`(加入清单)时写入,
         于是「按入库排序」反映的是加清单时刻而非入库时刻; R18 作品常只下到部分页
         (状态 NOT_YET), 若只在「完整下载完成」时刷新, 它们永远排不到前面。
 
@@ -817,7 +816,7 @@ class PixivDatabase:
             if total_pages:
                 # 已知原网页页数: 完整性只看 0..tp-1 这 tp 页; **超出 tp 的行是用户手动
                 # 并入的「附加页」(origin='merged') 或陈旧占位行** —— 前者必须保留
-                # (2026-09-17: 旧逻辑见 all_pages_count != tp 就把 total_pages 置 None,
+                # (2026-09-17: 旧逻辑见 all_pages_count!= tp 就把 total_pages 置 None,
                 # 附加页会让「原 N 页」元数据永久丢失、作品被误降级), 后者才清理。
                 tp = int(total_pages)
                 done_set = set(done_pages)
@@ -968,7 +967,7 @@ class PixivDatabase:
     def dismiss_issue(self, kind: str, ref: str, note: str = "") -> None:
         """把一条体检条目记为「已忽略」(立即提交), 之后不再出现在报告里。
 
-        用途 : 「缺作者名」这类待办项要等用户逐条处理, 不处理就
+        用途: 「缺作者名」这类待办项要等用户逐条处理, 不处理就
         每轮自检重新列一遍, 看起来"清单永远不减少"。忽略机制让用户能主动清掉不关心的条目。
         """
         with self.conn:
@@ -1061,7 +1060,7 @@ class PixivDatabase:
         page_count: 作品原网页总页数 (作品视图「原 N 页」展示用)。
         bookmark_count: 收藏数 (统计/排序用)。
         ai_type: pixiv 官方 AI 判定 (1=非AI, 2=AI); 取不到(0/None)时**不写**,
-                 免得把已经标记好的行覆盖回「未知」(2026-09-20)。
+                 免得把已经标记好的行覆盖回「未知」。
         work_status 默认 NOT_YET: 作品行不存在时建壳, 下载/对账流程随后收敛状态。"""
         self.change_work_status(str(aid), work_status,
                                 title=title,
@@ -1229,7 +1228,7 @@ class PixivDatabase:
         2. 旧版「（作品已删除 xxx）」占位文案 —— 「已删除」这个事实自 v011 起存在
            `deleted_at` 字段里, 标题不必再当占位仓库, 换成可读标题；
         3. **内部键/文件名样式的标题**（`merged_86126bd0e0de_p0` / `ext_xxx` / `88007979_p0`）
-           —— 合并/拆分会把文件主干直接当标题写进库, 2026-09-16 用户实测。
+           —— 合并/拆分会把文件主干直接当标题写进库, 2026-09-16 实测。
 
         护栏 (2026-09-14 单向闭环审计): 只在文件主干**是人读信息**时才拿它当标题 ——
         否则会把 `-7a93b54c836a829` 这类哈希名当标题灌进库 (比原来的作品 ID 更难认)。
@@ -1279,7 +1278,7 @@ class PixivDatabase:
                                    only_aid: "str | None" = None) -> "list[tuple[str, str]]":
         """把「已确认是外部来源」的合并产物从 `merged_` 改成 `ext_` 身份, 并修掉内部键标题。
 
-        动机 : 合并/拆分会生成 `merged_<hash>` 主键, 之后即使用户给它
+        动机: 合并/拆分会生成 `merged_<hash>` 主键, 之后即使用户给它
         填了真实来源 (如推特链接), 主键与标题仍停在 `merged_xxx` —— 语义上它已经是
         「其他来源作品」, 与 `ext_` 是同一类东西, 不该永远背着「合并产物」的身份。
         触发条件: `artwork_id` 以 merged_ 开头 **且** 已确认外部来源
@@ -1341,7 +1340,7 @@ class PixivDatabase:
     def works_missing_metadata(self, limit: int = 1000) -> list[str]:
         """图库补全: 返回缺标签/标题/缩略图的作品 ID (优先旧的先补)。
 
-        **只返回 pixiv 正式作品(纯数字 ID)** :
+        **只返回 pixiv 正式作品(纯数字 ID)** (噪声源):
         这个队列的用途是「联网问 pixiv 要元数据」, 而 ext_/merged_ 这类非 pixiv 作品
         pixiv 上根本没有, 去问必然 404 —— 旧实现把它们也塞进来, 于是在自检报告里
         永远挂着「元数据补全失败」, 用户以为是自己没修好的 bug。非 pixiv 作品的标题/
@@ -1349,7 +1348,7 @@ class PixivDatabase:
 
         已删除的作品(deleted_at 非空)同样排除 —— 作品页都没了, 联网也补不回来。
 
-        **ai_type IS NULL 也进这个队列** :
+        **ai_type IS NULL 也进这个队列** (过滤 AI 作品):
         图库要按 AI 筛选, 就得先把全库刷上 pixiv 的 aiType。而"缺标题/标签/封面"
         这个老口径对老库是空的 (用户 1514 个作品元数据都齐) → 光加解析不补数据
         等于没做。纳入后用户点一次现有「补全元数据」即可一次性回填。
@@ -1387,7 +1386,7 @@ class PixivDatabase:
 
         **与 upsert_artwork_metadata 的区别**: 那边对 0/None 是"不写"(绝不把已标记的
         行降级回未知); 这里是补全循环专用 —— 联网问过一次就必须落一个值, 否则
-        `ai_type IS NULL` 的作品永远排在补全队列头部, 每轮都重复请求同一批 (2026-09-20)。
+        `ai_type IS NULL` 的作品永远排在补全队列头部, 每轮都重复请求同一批。
 
         **刻意不刷 updated_at**: 回填是"给 1500+ 个老作品补一个分类标记", 不是内容
         变了。刷了会把「按修改时间」排好的图库顺序整批打乱 (用户对时间戳很敏感)。
@@ -1513,7 +1512,7 @@ class PixivDatabase:
     def normalize_all_timestamps(self) -> int:
         """把历史上写歪的 ISO 时间戳纠正成库内统一格式 (幂等)。
 
-        症状 (用户 2026-09-18 报): 图库「按修改时间」排序时, 那几条写歪的记录
+        症状: 图库「按修改时间」排序时, 那几条写歪的记录
         (如 '2026-09-18T05:38:35.586132') **一直顶在最前面**, 之后怎么改别的图都排不到
         前面 —— 因为排序是**字符串比较**, 第 11 个字符 'T'(0x54) > ' '(0x20),
         同一天内带 'T' 的无条件排第一。
@@ -1878,7 +1877,7 @@ class PixivDatabase:
     def merge_author_into(self, src_id: str, dst_id: str) -> dict:
         """把作者 src 整个并入 dst (作品/队列跟着走, 作者行合并后删除 src)。
 
-        场景 : 作者记了 pixiv 主页链接 → 明确他其实是 pixiv 作者
+        场景: 作者记了 pixiv 主页链接 → 明确他其实是 pixiv 作者
         (ID 就在链接里) → 一键把「本地作者 local_xxx」的身份换成真实 pixiv ID,
         作品不再挂在一个假 ID 上, 之后体检的作者改名同步/存续状态也认得他。
         合并规则: 名字以 dst 为准(dst 无名则用 src 的); 曾用名/来源链接合并去重。
@@ -2041,16 +2040,16 @@ class PixivDatabase:
         支持排序(sort: date/title/author/id/bookmark)与分页。返回带 tags/作者名的完整行。
         file_missing_ids: 给定则只返回这些 artwork_id (磁盘文件缺失筛选, 与其他条件 AND)。
         deleted: 只显示已确认失效的 pixiv 作品 (deleted_at 字段非空, 元数据补全时 404 落的)。
-        trashed: False(默认) 只显示图库里的(排除回收站); True 只显示回收站里的 (2026-09-17)。
+        trashed: False(默认) 只显示图库里的(排除回收站); True 只显示回收站里的。
         author_status: 'alive' 作者活跃中 / 'gone' 作者已注销 / 'unknown' 未知作者(作品无 author_id)。
-        ai: '2' 只看 AI 作品 / '0' 只看非 AI (未标记的按非 AI 算) / 空 = 全部 (2026-09-20)。
+        ai: '2' 只看 AI 作品 / '0' 只看非 AI (未标记的按非 AI 算) / 空 = 全部。
         source: 'pixiv' / 'danbooru' / 'other' 等来源筛选 (artworks.source, 空值视为 pixiv)。"""
         where, params = [], []
         # 回收站是「软件内的软删除」: 图库任何查询默认都必须排除它, 否则删掉的东西还在列表里。
         # 这条过滤放在最前面、无条件生效 —— 漏掉任何一条查询路径都会让回收站内容"复活"。
         where.append("a.trashed_at IS NOT NULL" if trashed else "a.trashed_at IS NULL")
         if only_aid:
-            # 「仅查看该作品」: 精确 ID 硬过滤 (2026-09-16), 不能用 q 的 LIKE 误伤
+            # 「仅查看该作品」: 精确 ID 硬过滤, 不能用 q 的 LIKE 误伤
             where.append("a.artwork_id = ?")
             params.append(str(only_aid))
         if file_missing_ids is not None:
@@ -2155,7 +2154,7 @@ class PixivDatabase:
         # 与 list_artworks 同一条回收站过滤 (两处必须一致, 否则页码/总数对不上)
         where.append("a.trashed_at IS NOT NULL" if trashed else "a.trashed_at IS NULL")
         if only_aid:
-            # 「仅查看该作品」: 精确 ID 硬过滤 (2026-09-16), 不能用 q 的 LIKE 误伤
+            # 「仅查看该作品」: 精确 ID 硬过滤, 不能用 q 的 LIKE 误伤
             where.append("a.artwork_id = ?")
             params.append(str(only_aid))
         if file_missing_ids is not None:
@@ -2263,10 +2262,10 @@ class PixivDatabase:
         """
         where, params = [], []
         # 图片视图同样必须排除回收站: ① 已软删的页 (单图软删) 不能还显示在图库;
-        # ② 整个作品被软删时它的页也不能显示。两条缺一条, 删掉的图就会"复活"(2026-09-17)。
+        # ② 整个作品被软删时它的页也不能显示。两条缺一条, 删掉的图就会"复活"。
         where.append("p.trashed_at IS NULL AND a.trashed_at IS NULL")
         if only_aid:
-            # 「仅查看该作品」: 精确 ID 硬过滤 (2026-09-16)
+            # 「仅查看该作品」: 精确 ID 硬过滤 
             where.append("a.artwork_id = ?")
             params.append(str(only_aid))
         if q and q.strip():
@@ -2357,10 +2356,10 @@ class PixivDatabase:
         """list_images 同条件的图片总数 (分页用, 按页去重计数)。"""
         where, params = [], []
         # 图片视图同样必须排除回收站: ① 已软删的页 (单图软删) 不能还显示在图库;
-        # ② 整个作品被软删时它的页也不能显示。两条缺一条, 删掉的图就会"复活"(2026-09-17)。
+        # ② 整个作品被软删时它的页也不能显示。两条缺一条, 删掉的图就会"复活"。
         where.append("p.trashed_at IS NULL AND a.trashed_at IS NULL")
         if only_aid:
-            # 「仅查看该作品」: 精确 ID 硬过滤 (2026-09-16)
+            # 「仅查看该作品」: 精确 ID 硬过滤 
             where.append("a.artwork_id = ?")
             params.append(str(only_aid))
         if q and q.strip():
@@ -2816,7 +2815,7 @@ class PixivDatabase:
         ]
         if emptied:
             self.delete_artworks(emptied)
-        # 仍有剩余页的作品 → 重算状态 
+        # 仍有剩余页的作品 → 重算状态 (手动删掉多页作品的一页后,
         # 作品还挂着 DONE, 搜索页按钮仍显示「✓ 已入库」而不是「⬇ 补下缺失页」)。
         # 与拆分/合并走同一个 _refresh_work_progress: 保留 total_pages, 缺页即 NOT_YET。
         for aid in sorted(affected):
@@ -2825,7 +2824,7 @@ class PixivDatabase:
         return rel_paths, emptied
 
     # ==================================================================
-    # 应用内回收站 (软删除) —— 2026-09-17 需求
+    # 应用内回收站 (软删除)
     # ==================================================================
     # 双层保护:
     #   ①「删除」只做**软删除** —— 打标记 + 把文件搬进 data_root/trash/, 一条记录都不删,
@@ -2834,7 +2833,7 @@ class PixivDatabase:
     #      (永远可还原), 并写操作日志留痕。
     # 两条设计铁律 (踩过坑, 别改):
     #   · 磁盘隔离: 回收站放 `trash/` 于 img/ **之外** → 对账/自检/散落图整理等所有
-    #     `img_root.rglob()` 扫描天然看不到它, 不会被当散落图搬走或被当孤儿清掉。
+    #     `img_root.rglob` 扫描天然看不到它, 不会被当散落图搬走或被当孤儿清掉。
     #   · 路径不变: `local_path` 始终保持「原图库相对路径」不变 —— 它是"恢复时该搬回
     #     哪里"的权威答案, 软删只搬文件、绝不改它 → 恢复时 DB 路径一处都不用动。
     #   · 两套相对路径别搞混: `local_path` 相对 img_root; `trash_rel_path` 相对
@@ -2844,7 +2843,7 @@ class PixivDatabase:
     def _trash_rel(self, artwork_id: str, page_num: int, local_path: str) -> str:
         """该页在**回收站根目录内**的相对路径: <作品ID>/p<页码>__<原文件名>。
 
-        不含 "trash/" 前缀 —— 回收站根目录由 server 层 `_trash_root()`(= data_root/trash)
+        不含 "trash/" 前缀 —— 回收站根目录由 server 层 `_trash_root`(= data_root/trash)
         决定, 这里只给它在内部的相对位置 (2026-09-17 踩过坑: 带前缀会和根目录叠成
         data_root/trash/trash/...)。
         """
@@ -2896,7 +2895,7 @@ class PixivDatabase:
         """按「页」软删除单张图片 (图片视图的删除粒度)。
 
         items: [{"artwork_id","page_num"}, ...]
-        关键 : **不级联把整个作品也标记进回收站** ——
+        关键: **不级联把整个作品也标记进回收站** ——
         删一张图就只是少一张图。若某作品因此变成 0 个有效页, 把它列进 would_empty,
         由调用方弹窗让用户选「保留作品(0页)」还是「一并进回收站」。
         返回 {"rel_moves", "would_empty", "count"}。
@@ -2951,8 +2950,8 @@ class PixivDatabase:
     def pages_would_empty(self, items: "list[dict]") -> "list[str]":
         """预检(只读): 若删掉这些页, 哪些作品会变成 **0 个有效页**。
 
-        供「删除图片会导致作品全空」时弹窗让用户选「保留作品(0页)/一并进回收站」
-。不改任何数据。
+        供「删除图片会导致作品全空」时弹窗让用户选「保留作品(0页)/一并进回收站」。
+        不改任何数据。
         """
         by: "dict[str, set]" = {}
         for it in (items or []):
@@ -2971,7 +2970,7 @@ class PixivDatabase:
             alive = {int(r[0]) for r in self.conn.execute(
                 "SELECT page_num FROM pages WHERE artwork_id=? AND trashed_at IS NULL",
                 (aid,)).fetchall()}
-            # alive 为空 = 本来就 0 有效页 (不是"这次删成空"); 只有"删完变空"才需要设计约定
+            # alive 为空 = 本来就 0 有效页 (不是"这次删成空"); 只有"删完变空"才需要询问
             if alive and alive <= pns:
                 out.append(aid)
         return sorted(out)
@@ -3076,10 +3075,10 @@ class PixivDatabase:
                         trash_root: "Path | None" = None) -> dict:
         """恢复**之前**的冲突预检 (只读, 不改任何东西)。
 
-        为什么必须有 : 软删除只是标记, 从"删"到"想恢复"
+        为什么必须有: 软删除只是标记, 从"删"到"想恢复"
         之间数据库/磁盘可能已经变了 —— 原页号被补下的页占了、原磁盘路径被新文件占了。
         恢复**绝不能覆盖库中现有内容**, 所以先体检、把冲突项列出来, 恢复时只**跳过**它们
-        (用户明确只接受这一种策略)。
+        (恢复只跳过、绝不覆盖)。
         返回 {"ok": [...], "conflicts": [...]}。
         """
         ok, conflicts = [], []
@@ -3248,7 +3247,7 @@ class PixivDatabase:
         return {"artworks": int(a or 0), "pages": int(p or 0)}
 
     # ==================================================================
-    # 壁纸库 
+    # 壁纸库
     # ==================================================================
     # 「壁纸」= 从图库某一页**派生**到壁纸夹的成品, 一行 = 一张壁纸。
     # 与 pages/artworks 的关系是普通列 + 索引, **刻意没建外键** —— 理由见
@@ -3642,7 +3641,7 @@ class PixivDatabase:
                          img_root: "Path | None" = None) -> dict:
         """把一个本地占位作品 (merged_xxx / ext_xxx) **认领转正**为真正的 pixiv 作品。
 
-        场景 : 两张图被拆成 merged_ 作品, 反搜/文件名都
+        场景 (作品 88007979): 两张图被拆成 merged_ 作品, 反搜/文件名都
         指向 pixiv #88007979, 但「确认来源」只写 source_url, 作品 ID/标题/作者/页数都
         没变。用户要的是"合并回来": 占位作品直接变成 #pixiv_id 本体。
 
@@ -3864,14 +3863,14 @@ class PixivDatabase:
     def split_pages(self, items: "list[dict]", img_root: "Path | None" = None) -> dict:
         """把选中的图片页从各自作品里**拆出**, 每张独立成一个新作品。
 
-        与 merge_pages 相反的方向。
+        与 merge_pages 相反的方向 (2026-09-16 需求: 合并后反悔要能拆开)。
         注意: 合并时源页记录已被搬走, **原归属无法还原**, 所以拆出只能新建作品,
         不会回到合并前的那个作品。
 
         items: [{"artwork_id", "page_num"}, ...]（至少 1 张, 单张也能拆）。
         - 新作品 ID = merged_<uuid>（非 pixiv 命名, 不会被对账误认回源作品）;
         - 标题取原文件名(去扩展名); **继承源作品的作者/来源/来源作者/R18 标记**
-          ;
+          (不继承会显示「未知作者」);
         - **文件不移动**(新作品目录 = 原文件所在目录), 只改数据库归属;
         - pixiv 作品的**原网页页**(origin='web')不允许被拆走 —— 会让原作品缺页;
           合并附加页(origin='merged')可以拆, 那正是「反悔合并」的正常用法;
@@ -3921,7 +3920,7 @@ class PixivDatabase:
                     "FROM pages WHERE artwork_id=? AND page_num=?", (aid, pn)).fetchone()
                 if not r:
                     continue
-                # 继承源作品的身份信息 
+                # 继承源作品的身份信息 (不继承会显示「未知作者」)
                 meta = self.conn.execute(
                     "SELECT author_id, source, source_author, is_r18 FROM artworks "
                     "WHERE artwork_id=?", (aid,)).fetchone()
@@ -3930,7 +3929,7 @@ class PixivDatabase:
                                   (aid, pn))
                 src_aids.append(aid)
                 # 2) 建独立单页作品; 文件留在原地, 只改归属
-                # 身份前缀按**真实来源**给 
+                # 身份前缀按**真实来源**给 (拆出来的图明明已标了推特等
                 # 外部来源, 却一直背着 merged_ 合并产物前缀): 外来源 = ext_ 稳定键; 其余
                 # (pixiv 页/未确认) = merged_ 合并产物, 等「认领散落页」转正。
                 import hashlib as _hl
@@ -3989,13 +3988,13 @@ class PixivDatabase:
     def reorder_pages(self, aid: str, new_order: "list | None" = None,
                       img_root: "Path | None" = None,
                       assign: "list | None" = None) -> dict:
-        """调整一个作品内部的**页序** : 手动认领/自动溯源可能把
+        """调整一个作品内部的**页序** (2026-09-17 需求): 手动认领/自动溯源可能把
         页挂反, 用户要能事后调。两种玩法 (二选一):
 
         ① new_order (排列): 现有页码的完整排列, 如 [2,0,1] = 旧 p2/p0/p1 依次成为
            新 p0/p1/p2 → 页号被**压实成 0..n-1**。要求页号原本就连续 (没洞)。
         ② assign (点对点改号): [{"old": 旧页码, "new": 新页码}, ...], 只动被点名的页,
-           **未提及的页连同页码空洞原样保留**。两条必需的能力都靠它 :
+           **未提及的页连同页码空洞原样保留**。两条必需的能力都靠它:
              - 有空洞的作品 (删过页/认领后留洞) 也该能"移动一页" —— 用
                [{old:A,new:B},{old:B,new:A}] 表达"交换两页", 洞不被抹掉;
              - 把「附加页」(origin=merged, 用户自己并进来、页号超出原网页的那几张)
@@ -4164,7 +4163,7 @@ class PixivDatabase:
         if assign:
             # 改号(可能是纯交换, 也可能是把附加页填进洞): 老实按现有行重算完整性/状态 ——
             # 不能沿用下面"行数 >= 原页数就算完整"的捷径, 有洞时那个判据会骗人。
-            # 填对洞后 0..tp-1 齐全 → 自动回到 DONE; 只是交换则状态不变 (2026-09-17)。
+            # 填对洞后 0..tp-1 齐全 → 自动回到 DONE; 只是交换则状态不变。
             self._refresh_work_progress(aid)
         elif full:
             self.change_work_status(aid, WSt.DONE,
@@ -4207,7 +4206,7 @@ class PixivDatabase:
         tp = tp_row[0] if tp_row else None
         # 完整 = 「原网页那 tp 页 (0..tp-1) 全 DONE」。**不能用 len(rows)==tp** ——
         # 作品可以带「附加页」(origin='merged', 用户自己并进来的、超出原网页页数的那几张),
-        # 那时页行数 > tp, 旧判据会让一个其实已下全的作品永远停在「缺页」(2026-09-17)。
+        # 那时页行数 > tp, 旧判据会让一个其实已下全的作品永远停在「缺页」。
         full = bool(tp) and all(i in done for i in range(int(tp)))
         if not tp:
             # 连"原网页有几页"都不知道时 (ext_/merged_ 作品, 或元数据还没补到页数),
@@ -4363,7 +4362,7 @@ class PixivDatabase:
             _urls_compact = "REPLACE(COALESCE(au.urls_json,''), ' ', '')"
             if src == 'pixiv':
                 # pixiv 作品 source 列存空字符串 ''(见 stats_breakdown 口径), 需特判;
-                # 另外: 作者**记过 pixiv 主页链接**也算他有 pixiv 来源 (2026-09-17 需求
+                # 另外: 作者**记过 pixiv 主页链接**也算他有 pixiv 来源 (
                 # "记了链接来源列要有反应" —— 作品来源与主页链接取并集)
                 conds.append("(EXISTS (SELECT 1 FROM artworks x WHERE x.author_id = au.author_id "
                              "AND COALESCE(x.source,'') = '')"
@@ -4426,7 +4425,7 @@ class PixivDatabase:
     def same_name_pixiv_authors(self, names: "list[str]") -> dict:
         """给一批作者名 → 返回 {名字: {"author_id","name","count"}}：**同名且是真实 pixiv 作者**。
 
-        场景 : 外来作者 (bilibili/X 账号, local_ 键)
+        场景 (同一作者出现两条记录): 外来作者 (bilibili/X 账号, local_ 键)
         与真实 pixiv 作者同名, 会显示成两行 —— 这是**对的**, 站点账号与 pixiv ID 本就是两种
         身份。但界面要看得出来、并给一键绑定。这里只做"同名 + 纯数字 pixiv ID"的匹配,
         **绝不自动合并**(同名不等于同一人)。count = 名下在库作品数, 供用户判断是不是同一人。
@@ -4635,9 +4634,9 @@ class PixivDatabase:
         if status:
             sql += " WHERE status = ?"
             params = (status,)
-        # 先入先跑 : 引擎按本顺序取 pending 项执行, 最旧的最先下。
+        # 先入先跑: 引擎按本顺序取 pending 项执行, 最旧的最先下。
         # 此前是 DESC (最新入队的先跑), 那是「加入清单即自动下载」的配套 —— 刚点的那条
-        # 不被积压挡住。但反直觉、看不出谁先谁后, 改为 FIFO。
+        # 不被积压挡住。但按倒序排会反直觉、看不出谁先谁后, 改为 FIFO。
         # added_at 只到秒, 同秒入队用 id ASC 兜底 (先加的 id 小)。
         # 前端列表不走这条 SQL (自己在 renderTaskTable 里按 added_at 排序), 故无界面副作用。
         sql += " ORDER BY added_at ASC, id ASC"
@@ -4669,7 +4668,7 @@ class PixivDatabase:
         expired 优先级最高, 其次是 in_queue (即使作品已 DONE, 只要队列还在跑就如实显示)。
 
         完整性**只看 pages**(原网页那 tp 页是否都 DONE), 不再拿 artworks.status 当闸门 ——
-        后者是可能陈旧的缓存, 两处实测都会被它卡住 :
+        后者是可能陈旧的缓存, 两处实测都会被它卡住:
           - 87881705: 本地补进缺失的那页后, reconcile_output 只会把 page 刷成 DONE,
             从不去提升 artworks.status(它停在 NOT_YET) → 卡片永远显示「补全页数」,
             点「刷新 / 同步」都不变, 非得点一次「补全页数」联网下载才收敛;
@@ -4679,7 +4678,7 @@ class PixivDatabase:
         `trashed_at IS NULL` 不能省: 软删掉一页后若仍算 DONE 数, 又会谎报「已入库」。
         total_pages 为空的外来作品没有「完整」概念, 退回只看 status。
 
-        **已失效(404)单独成一态** : 这类作品在 pixiv 上再也拿不到,
+        **已失效(404)单独成一态**: 这类作品在 pixiv 上再也拿不到,
         既不能说「已入库」(来源不可靠), 也不能说「补全页数」(点了必然失败) ——
         前端据此改显示「🔎 搜索来源」, 引导用户去别处找来源。"""
         ids = [str(a) for a in aids if a is not None and str(a) != ""]
@@ -4752,7 +4751,7 @@ class PixivDatabase:
     def queue_clear_scope(self, scope: str = "all") -> int:
         """按分组清空下载队列, 返回删除条数。
 
-        scope 与「下载任务」页的四个筛选栏一一对应 :
+        scope 与「下载任务」页的四个筛选栏一一对应 (「清空」跟随筛选):
           all(全部) / running(未完成 = pending+running) / done(已完成) / failed(失败)。
         未知 scope 一律当 all —— 用户点了按钮却静默什么都不做, 比多清更糟。
         """
@@ -4769,8 +4768,7 @@ class PixivDatabase:
     def queue_item_alive(self, item_id: int) -> bool:
         """这条队列项是否仍处于「进行中」(行还在 + status='running')。
 
-        2026-09-20 
-        。所以下载引擎把它注册成 PixivDownloader 的 abort 回调,
+        清空一个进行中的任务, 等于撤销这次下载。所以下载引擎把它注册成 PixivDownloader 的 abort 回调,
         **逐页**回查: 用户清空队列 → 行没了 → 当前这一项立刻中止, 而不是照旧下完。
         (以前只有全局 _cancel_event, 且只在作品之间检查 → 单作品多页时点停止也傻下完。)
         """
@@ -4789,10 +4787,10 @@ class PixivDatabase:
     def queue_claim_item(self, item_id: int) -> int:
         """下载引擎「认领」一条任务 (pending → running), 返回受影响行数。
 
-        **返回 0 就是「这条不该再下」的信号** (2026-09-20): 引擎开跑时拿的是
+        **返回 0 就是「这条不该再下」的信号**: 引擎开跑时拿的是
         `queue_list(status='pending')` 快照, 用户清空队列后快照里还留着这些项 ——
         所以每项开跑前先认领一次, 行已被清掉/已被别人改过 → 命中 0 行 → 直接跳过,
-        绝不下载。这就是「清空」对用户承诺的。
+        绝不下载。这就是「清空」所对应的「撤销该次操作」。
         (本表 id 是 AUTOINCREMENT, 不会复用, 所以不存在"认领打到新任务上"的问题;
         这道闸门管的是「只改自己认领过、且仍在自己手里的那一行」。)
         """
@@ -4910,7 +4908,7 @@ class PixivDatabase:
 
         作者统计口径: 只计「有作品的作者」, 避免孤儿作者行 (手动删完作品、
         authors 表残留) 让用户看到 「明明没文件了还显示 3 个作者」 的幻觉。
-        回收站口径 (2026-09-17): 四大数字都**排除回收站内容**, 与图库列表一致;
+        回收站口径: 四大数字都**排除回收站内容**, 与图库列表一致;
         回收站自己的数量单独用 trashed_artworks 提供 (导航角标用)。
         """
         total_artworks = self.conn.execute(
@@ -5016,7 +5014,7 @@ class PixivDatabase:
         finally:
             tmp_db.unlink(missing_ok=True)
 
-    # --- 2. 从备份恢复 (对比差异后再确认,  不盲目覆盖) ---
+    # --- 2. 从备份恢复 (对比差异后再确认, 不盲目覆盖) ---
     def compare_backup(self, zip_path: Path) -> RestoreDiff:
         """对比备份 vs 当前 DB, 返回 RestoreDiff。不会执行恢复操作。"""
         if not zipfile.is_zipfile(zip_path):
@@ -5088,7 +5086,7 @@ class PixivDatabase:
         )
         return diff
 
-    # --- 3. 修复损坏的库 : 绝不直接删库) ---
+    # --- 3. 修复损坏的库 (绝不直接删库) ---
     def repair_corrupt(self) -> dict:
         """
         三步修复:
@@ -5289,7 +5287,7 @@ class PixivDatabase:
                 ).fetchone()
                 if existing and existing[1]:
                     # 该页在回收站里: local_path 是"恢复时要搬回哪里"的权威答案, 绝不能
-                    # 被重建映射覆盖 (否则恢复就搬错地方了)。直接跳过这一页 (2026-09-17)。
+                    # 被重建映射覆盖 (否则恢复就搬错地方了)。直接跳过这一页。
                     continue
                 rel = str(p.relative_to(img_root))
                 if existing and existing[0] == rel:

@@ -1,14 +1,14 @@
 # utils/tray.py
-"""Windows 托盘常驻 + 壁纸切换事件 (2026-09-24)
+"""Windows 托盘常驻 + 壁纸切换事件
 
 exe 的生命周期原本是**围着浏览器转**的: 双击强制弹浏览器, 页面全关就自杀。壁纸却是
-纯本地场景, 它像普通桌面小工具那样**缩在右下角任务栏**, 鼠标一悬停就能看到
+纯本地场景, 需要它像普通桌面小工具那样**缩在右下角任务栏**, 鼠标一悬停就能看到
 「现在桌面这张是谁画的」。
 
 本模块只做两件事, 都不碰业务/数据库:
 
 1. **托盘图标** (``Shell_NotifyIconW``): 悬停 tooltip 显示当前壁纸溯源结论, 右键菜单给出
-   打开图库 / 打开所在文件夹 / 设置 / 退出。(原来还有一项「图像溯源」, 2026-09-25 用户判定
+   打开图库 / 打开所在文件夹 / 设置 / 退出。(原来还有一项「图像溯源」, 2026-09-25 判定
    「就弹个通知」没意义, 已删除 —— 要跑 ORB 的那个入口在小控件卡片的「图像溯源」按钮上。)
 2. **壁纸切换事件** (``RegNotifyChangeKeyValue``): 监听 ``HKCU\\Control Panel\\Desktop``,
    变了就通知托盘刷新 tooltip (事件驱动, 不轮询)。
@@ -217,7 +217,7 @@ def tray_window_action(msg, *, taskbar_created: int = 0) -> "str | None":
 
     这些动作**不能丢给子线程**: ``TrackPopupMenu`` 与 ``SetForegroundWindow`` 都要求
     目标窗口属于调用线程, 从别的线程调用时表现为「右键毫无反应 / 菜单一闪就没」——
-    这正是 2026-09-24 用户实测「点托盘图标没反应」的根因。
+    这正是点托盘图标没反应的根因。
     """
     try:
         m = int(msg)
@@ -457,7 +457,7 @@ else:
 
 class Tray:
     """托盘图标 + 隐藏消息窗。``start()`` 起一个 daemon 线程, 建窗与消息循环都在该线程内
-    (HWND 线程亲和性天然满足; 主线程已被 ``app.run()`` 占用)。
+    (HWND 线程亲和性天然满足; 主线程已被 ``app.run`` 占用)。
 
     窗口是**隐藏的普通顶层窗** (``CreateWindowExW`` 且不带 WS_VISIBLE), **不是**
     ``HWND_MESSAGE`` —— message-only 窗口上 ``TrackPopupMenu``/``SetForegroundWindow``
@@ -494,9 +494,8 @@ class Tray:
 
         ⚠ 这里**绝不能投 WM_CLOSE**: ``handle_tray_message`` 把 WM_CLOSE 翻成 ``("quit",)``,
         那是「退出 Vixiq」的语义 (→ ``_request_quit`` → ``on_quit`` → 整个进程退出, 浏览器
-        跟着没)。2026-10-20 就是这么来的 ——
-        关闭开关时调的正是本方法。所以直接投线程消息 ``WM_QUIT`` 让消息循环收工,
-        ``_run()`` 的 finally 照常 NIM_DELETE + DestroyWindow (不留幽灵图标)。
+        也跟着关掉)。关闭开关时调的正是本方法, 所以直接投线程消息 ``WM_QUIT`` 让消息循环收工,
+        ``_run`` 的 finally 照常 NIM_DELETE + DestroyWindow (不留幽灵图标)。
         系统关机 / 右键「退出 Vixiq」仍走 WM_CLOSE → ``_request_quit`` (那条路要 on_quit)。
         """
         self._wall_stop.set()
@@ -543,7 +542,7 @@ class Tray:
             if not self.hwnd:
                 return
             self.hicon = _load_icon()
-            # 防幽灵图标 :
+            # 防幽灵图标 (「托盘经常出现多个图标, 鼠标移上去才消失」):
             # 上一次进程被强杀时 explorer 会在通知区留一个空壳, 那壳认的就是这组身份
             # (窗口句柄 + uID 1); 句柄值会被系统回收再分配, 本进程的托盘窗有可能拿到同一个
             # 值 —— 先按同一身份删一下, 正好把旧壳顶掉。删一个不存在的图标是无副作用的

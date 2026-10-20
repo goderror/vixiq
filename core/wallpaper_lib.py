@@ -1,11 +1,11 @@
 # core/wallpaper_lib.py
-"""🖼 壁纸库 (2026-09-27): 把图库里**够格当桌面**的那些页, 原样复制进壁纸夹并登记到 wallpapers 表。
+"""🖼 壁纸库  把图库里**够格当桌面**的那些页, 原样复制进壁纸夹并登记到 wallpapers 表。
 
 背景: 桌面幻灯片读的是**壁纸夹** (配置 ``paths.wallpaper_dir``), 而图库里上千张图绝大多数不适合
 当桌面 —— 竖图、超宽图、小图铺上去要么留两条黑边、要么被 Windows 拉变形。手工挑是不可能挑的,
 所以按固定规则筛一遍、复制过去。
 
-规则 (用户 2026-09-27 定案):
+规则: 
 
 - **尺寸门槛** 宽 ≥ 1920 且 高 ≥ 1080。本机物理分辨率是 1920×1080, 这里写**显式常量** ——
   ``Screen.Bounds`` 在非 DPI 感知进程里遇到 125% 缩放会给 1536×864, 门槛会静默放松
@@ -16,7 +16,7 @@
   ``crop_mode`` / ``crop_x0..y1`` 留给以后「手动框选再裁一张」用 (那时同一页能派生多张,
   正是 018 表里那组「一对多」的用途), 本模块一律留空。
 - **文件名** ``{artwork_id}_p{page_num}.{ext}``: 名字里带血缘, 看一眼就知道这张从哪来,
-  也天然幂等 —— 同一页重复扫, 名字不变, 不会越跑越多 (见 :meth:`store.add_wallpapers` 的幂等)。
+  也天然幂等 —— 同一页重复扫, 名字不变, 不会越跑越多 (见:meth:`store.add_wallpapers` 的幂等)。
 
 **为什么是手动按钮而不是入库钩子**: 510 张得先跑一遍才知道规则挑得对不对; 钩子挂上去就不好收了。
 入口在设置页「桌面与壁纸 → 壁纸库」, 接口见 ``web/server.py`` 的 ``/api/wallpaper/lib/scan``。
@@ -63,7 +63,7 @@ def wallpaper_gate(width, height) -> str:
 
 
 def wallpaper_worthy(width, height) -> bool:
-    """够格当桌面 (两道门槛都过)。判定口径只有 :func:`wallpaper_gate` 一份。"""
+    """够格当桌面 (两道门槛都过)。判定口径只有:func:`wallpaper_gate` 一份。"""
     return wallpaper_gate(width, height) == "ok"
 
 

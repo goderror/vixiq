@@ -7,7 +7,7 @@
 - 已执行版本记入 schema_migrations 表, 下次启动跳过
 
 用法:
-    MigrationManager(db_path).ensure_migrations_applied()
+    MigrationManager(db_path).ensure_migrations_applied
     → 返回 list[applied_version_str]
 """
 import re
@@ -49,7 +49,7 @@ class MigrationManager:
     def ensure_migrations_applied(self, conn: "sqlite3.Connection | None" = None) -> list[str]:
         """扫描 + 按顺序执行未完成的迁移。返回本次新执行的版本号列表。
 
-        conn: 可选。传入时复用该连接(解决 :memory: 库"不同连接=不同库"的隔离问题);
+        conn: 可选。传入时复用该连接(解决: memory: 库"不同连接=不同库"的隔离问题);
               不传则自建连接(与旧版行为一致)。
         """
         own_conn = False
@@ -97,7 +97,7 @@ class MigrationManager:
         - 检测旧 pages 表存在 且 缺新列(md5/width/height/file_size_bytes)  → ALTER 补列
         - 检测有旧 works 表、也有新 artworks(空) → 数据 copy 后删旧 works
 
-        conn: 可选。传入时复用该连接(配合 :memory: 共享连接),不传则自建。
+        conn: 可选。传入时复用该连接(配合: memory: 共享连接),不传则自建。
         """
         own_conn = False
         if conn is None:

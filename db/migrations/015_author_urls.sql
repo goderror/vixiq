@@ -1,6 +1,6 @@
 -- UP:
 -- =============================================================
--- 作者「来源链接」可多条 :
+-- 作者「来源链接」可多条:
 --   authors.urls_json = JSON 数组, 形如
 --   [{"site":"pixiv","url":"https://www.pixiv.net/users/123","handle":"123","label":"Pixiv 插画站"},
 --    {"site":"twitter","url":"https://x.com/foo","handle":"foo","label":"X / Twitter"}]

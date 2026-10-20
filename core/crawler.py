@@ -96,15 +96,15 @@ def convert_to_png(src_path: str) -> "str | None":
 # (分辨率还是缩过的), 真正的动图在 `ajax/illust/{id}/ugoira_meta` 里 —— 一个 zip
 # (每帧一张 png) + `frames: [{file, delay}]`(每帧延迟毫秒, **可变延迟**)。
 # 以前下载器不分动图/静图, 一律走 pages 通道, 于是动图被下成一张低分辨率静态图
-#。这里把动图单独走 zip → 合成 gif 的路。
+# 这里把动图单独走 zip → 合成 gif 的路。
 
 
 class UgoiraError(RuntimeError):
     """动图专用通道失败。
 
-    **为什么单独定义**: `download_artwork()` 里 HTTP 通道失败会回退浏览器通道,
+    **为什么单独定义**: `download_artwork` 里 HTTP 通道失败会回退浏览器通道,
     而浏览器通道同样只有一张静态帧图 —— 回退等于把「动图下成低分辨率单张」这个
-    的 bug 再演一遍。动图失败必须如实报错, 不能悄悄换通道。
+    同一个 bug 再演一遍。动图失败必须如实报错, 不能悄悄换通道。
     """
 
 
@@ -161,13 +161,13 @@ def compose_ugoira_gif(zip_bytes: bytes, frames: "list[tuple[str, int]]",
 
 
 class DownloadCancelled(Exception):
-    """当前作品的下载被中止 (2026-09-20)。
+    """当前作品的下载被中止。
 
-    中止来源有两个, 都由 `PixivDownloader._should_abort()` 判定:
-      - 全局「■ 停止任务」→ `reporter.is_cancelled()`
+    中止来源有两个, 都由 `PixivDownloader._should_abort` 判定:
+      - 全局「■ 停止任务」→ `reporter.is_cancelled`
       - 购物车里这一条被清空 → 下载引擎注册的逐项回调 (`set_abort_callback`)
 
-    **为什么必须单独定义一个异常**: `download_artwork()` 里有一层
+    **为什么必须单独定义一个异常**: `download_artwork` 里有一层
     `except Exception` → 「HTTP 直连失败, 改用浏览器兜底」。若用 ValueError 之类
     表示中止, 会被这层吃掉, 结果变成「换个通道接着下」—— 用户点了清空/停止,
     下载却从浏览器又跑一遍。所以中止异常要在那层 except 之前显式 re-raise。
@@ -199,7 +199,7 @@ class PixivDownloader:
             xp = json.load(f)
         self.xp = xp["pixiv"]
 
-        # 浏览器**懒加载** (2026-09-16): 下载默认走 cookies 直连 pixiv ajax (零浏览器、
+        # 浏览器**懒加载**: 下载默认走 cookies 直连 pixiv ajax (零浏览器、
         # 不怕 headless 登录态丢失), 只有 HTTP 不可用/失效时才真的起 Edge 兜底。
         # 购物车执行一次以前也会固定启动一次浏览器, 纯浪费 3~5 秒还多一批残留进程。
         self._headless = headless
@@ -217,7 +217,7 @@ class PixivDownloader:
         # download_engine 绑回调时把 item_id 封装进闭包 → reporter.item_progress 上报。
         # scope: 'artwork_page' / 'artwork_in_list' / 'list_fetch' (新增的上层级)
         self._progress_cb = None
-        # 2026-09-20 需求: 引擎注册一个逐项回调,
+        # 「清空进行中的任务 = 撤销下载」: 引擎注册一个逐项回调,
         # 逐页回查「这条队列项还在不在」→ 行被清掉就立刻中止当前作品。
         # 以前只有全局 _cancel_event, 且只在作品之间检查 → 单作品多页时点了停止也傻下完。
         self._abort_cb = None
@@ -228,7 +228,7 @@ class PixivDownloader:
 
     def set_abort_callback(self, cb):
         """设置「是否应中止当前作品」回调 cb() -> bool。None 清除。
-        下载引擎把传进来; 逐页检查。"""
+        下载引擎把「这一条队列项是否仍是本进程认领的 running 行」传进来; 逐页检查。"""
         self._abort_cb = cb
 
     def _should_abort(self) -> bool:
@@ -492,7 +492,7 @@ class PixivDownloader:
                 raise
             except UgoiraError as e:
                 # 动图失败也**不能**回退浏览器: 浏览器通道只有一张静态帧图,
-                # 下下来就是的「动图变低分辨率单张」。如实报错让他重试。
+                # 下下来就是「动图变低分辨率单张」。如实报错让他重试。
                 self.reporter.error(f"动图 {artwork_id} 下载失败: {str(e).splitlines()[0]}")
                 raise
             except Exception as e:
@@ -653,7 +653,7 @@ class PixivDownloader:
 
     def _download_ugoira_http(self, artwork_id: str, ctx, info,
                               *, force_overwrite: bool = False):
-        """动图 (ugoira): `ugoira_meta` → 下 zip → 合成单个 gif → 落库 (2026-09-21)。
+        """动图 (ugoira): `ugoira_meta` → 下 zip → 合成单个 gif → 落库。
 
         命名用**裸作品 ID** `{pid}.gif`(不是 `{pid}_p0.gif`): 动图是"一张会动的图",
         没有页序; `db.pixiv_natural_key` 认这种裸名(见其 docstring 里的 `119194561.gif`),
@@ -805,7 +805,7 @@ class PixivDownloader:
             else:
                 self.reporter.warn("❗ 未检测到图片链接,跳过此作品")
             return 0, 0
-        # 页数以「实际抓到的原图链接」为准 (2026-09-15): 「查看全部」点击失败/R18 页面
+        # 页数以「实际抓到的原图链接」为准: 「查看全部」点击失败/R18 页面
         # 结构差异时, DOM 声明的 pages 可能只有 1, 但 urls 才是真实可下载的页;
         # 反之 urls 少于声明时保留声明值, 交给下面的 URL 规律补齐。
         if len(urls) > pages:

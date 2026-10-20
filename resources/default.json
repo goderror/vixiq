@@ -43,9 +43,9 @@
     "minimum_version": 1
   },
   "paths": {
-    "_note1": "output 是最终图保存的根目录(默认 data/img 子目录), 你可以改成绝对路径比如 D:/Pixiv 让图不占 C 盘。",
+    "_note1": "output 是最终图保存的根目录(默认 data/img 子目录), 可改成绝对路径, 例如 D:/vixiq-img。",
     "_note2": "其它 *_subdir 都是相对 data/ 可写区的子目录名。",
-    "_note3": "★【放 F 盘】不想占系统盘时,把下面两个字段改成绝对路径即可(留空=默认写项目 data/ 下)。\n    data_root_override: 整个 data/ (图/DB/日志/cookies) 迁到哪里,例 D:/vixiq-data\n    temp_root_override: Selenium 临时 profile/Python 临时文件迁到哪里,例 D:/vixiq-temp\n    两个都改到 F 盘后,项目产生的一切文件不会再写到 C 盘。",
+    "_note3": "不想占系统盘时, 把下面两个字段改成绝对路径即可(留空=默认写项目 data/ 下)。\n    data_root_override: 整个 data/ (图/DB/日志/cookies) 的存放位置, 例 D:/vixiq-data\n    temp_root_override: Selenium 临时 profile/Python 临时文件的存放位置, 例 D:/vixiq-temp\n    两项都改到非系统盘后, 项目产生的文件不再写入系统盘。",
     "data_root_override": "",
     "temp_root_override": "",
     "temp_max_age_h": 24,
@@ -80,7 +80,7 @@
     "exit_on_browser_close": false
   },
   "ai_text": {
-    "_note": "✨ 壁纸文案 (2026-09-27): 用 OpenAI 兼容接口给当前壁纸生成「标题 + 一句衬托气氛的话」, 显示在桌面小控件卡片上。base_url 填到 /v1 为止, 只改 base_url + model 就能换服务商(DeepSeek/Moonshot/智谱/通义 compatible-mode/OpenAI 都是这一套)。enabled=false 时完全不走网络, 卡片用本地按画面明暗色调推的那句兜底。vision=true 会把壁纸缩略图(压到 512px)一起发给服务商, 认内容更准、也更贵; false 只发标题/作者/画面色调这些文字线索。api_key 明文存在本文件里, 只在本机使用, 别把这个文件传到别处。生成结果按「路径+改动时间+大小」缓存, 同一张图只生成一次。",
+    "_note": "✨ 壁纸文案 (2026-09-27): 用 OpenAI 兼容接口给当前壁纸生成「标题 + 一句衬托气氛的话」, 显示在桌面小控件卡片上。base_url 填到 /v1 为止, 只改 base_url + model 就能换服务商(DeepSeek/Moonshot/智谱/通义 compatible-mode/OpenAI 都是这一套)。enabled=false 时完全不走网络, 卡片用本地按画面明暗色调推的那句兜底。vision=true 会把壁纸缩略图(压到 512px)一起发给服务商, 认内容更准、也更贵; false 只发标题/作者/画面色调这些文字线索。api_key 明文存在本文件里, 仅在本机使用, 该文件不应外传。生成结果按「路径+改动时间+大小」缓存, 同一张图只生成一次。",
     "enabled": false,
     "base_url": "https://api.deepseek.com/v1",
     "model": "deepseek-chat",
@@ -94,7 +94,7 @@
     "blur_mode": true
   },
   "pixiv_actions": {
-    "_note": "对 pixiv 账号的写操作。auto_bookmark=true 时, 单个作品下载成功后会调用 pixiv 网页端的收藏接口 (原网页点 ♡ 红心)。bookmark_private=true 表示非公开收藏 (只有自己可见)。R18 作品一律走非公开收藏, 与 bookmark_private 无关。注意: 「点赞(いいね)」不做 —— pixiv 官方说明点赞无法取消、每作品每天仅一次。已收藏的作品一律跳过, 绝不改你原本的公开/非公开设置。",
+    "_note": "对 pixiv 账号的写操作 (下载完成后自动收藏作品)。auto_bookmark=true 时, 单个作品下载成功后会调用 pixiv 网页端的收藏接口 (原网页点 ♡ 红心)。bookmark_private=true 表示非公开收藏 (只有自己可见)。R18 作品一律走非公开收藏, 与 bookmark_private 无关。注意: 「点赞(いいね)」不做 —— pixiv 官方说明点赞无法取消、每作品每天仅一次。已收藏的作品一律跳过, 不改动原有的公开/非公开设置。",
     "auto_bookmark": true,
     "bookmark_private": false
   },

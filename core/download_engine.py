@@ -62,7 +62,7 @@ def run_cart(
         def _task_progress(cur: int, status: str) -> None:
             """总进度条: **只按「第几个任务 / 共几个任务」推进**。
 
-            2026-09-20 : 爬虫每下一页也会 reporter.progress
+            「进度条像摆设」: 爬虫每下一页也会 reporter.progress
             (那个 total 是**作品的页数**), 和这里的任务条数口径互相覆盖 —— 批量下载时
             第一个作品下完就把条子冲到 100% 并自动隐藏, 下一个任务开始又跳回 33%,
             看着就像没在跟进度。现改为: 页级进度只走 item_progress 喂行内那一格,
@@ -92,10 +92,10 @@ def run_cart(
                 _task_progress(i - 1,
                     f"[{i}/{total}] 开始: {it.get('title') or it.get('item_type','')[:20]}")
                 item_id = int(it.get('id') or 0)
-                # 「认领」= 每项开跑前的闸门 (2026-09-20): 引擎手里这份 items 是开跑时的
+                # 「认领」= 每项开跑前的闸门: 引擎手里这份 items 是开跑时的
                 # 快照, 用户清空队列改不到它 —— 所以每项都先回查一次:
                 # 行还在且仍是 pending → 认领成功, 照跑; 行已被清空/已被别人改过 →
-                # 命中 0 行 → 直接跳过。**这就是的兑现点。**
+                # 命中 0 行 → 直接跳过。**这就是「清空 = 撤销该次操作」的兑现点。**
                 claimed = 1
                 with PixivDatabase(None) as _db0:
                     try: claimed = _db0.queue_claim_item(item_id)
@@ -182,7 +182,7 @@ def _make_abort(db: PixivDatabase, item_id: int):
 def _only_pages_of(it: dict) -> "set | None":
     """队列项 pages 列 → 只下哪几页的集合; NULL/空/坏数据一律当「整部」(返回 None)。
 
-    按页下载 (2026-10-20): pages 存 JSON 数组字符串 ("[0, 3]")。解析失败不报错而是退回
+    按页下载: pages 存 JSON 数组字符串 ("[0, 3]")。解析失败不报错而是退回
     整部 —— 队列项是用户能看见的历史数据, 一条脏值不该让整个任务失败。"""
     raw = it.get('pages')
     if not raw:
@@ -226,7 +226,7 @@ def _run_item(db: PixivDatabase, d: PixivDownloader, it: dict,
         if not str(aid).isdigit():
             raise ValueError(f"作品 {aid} 非 pixiv 数字 ID, 无法从原站下载")
         page_count = int(it.get('page_count') or 1)
-        # 按页下载 : pages 列 = JSON 数组字符串,
+        # 按页下载: pages 列 = JSON 数组字符串,
         # NULL/空 = 整部作品 (老口径, 一字不改)。
         only = _only_pages_of(it)
         # 仅下载本地没有的: 策略先在 db 里跳过的判断。
@@ -245,7 +245,7 @@ def _run_item(db: PixivDatabase, d: PixivDownloader, it: dict,
             reporter.log(f"⬇ 按页下载作品 {aid}: 共 {len(only)} 页 "
                          f"({', '.join('p' + str(p) for p in sorted(only))})")
         # 作者信息随队列项透传, 下载器直接建「作者名_ID」文件夹, 不再依赖爬 DOM
-        # 按页下载 (2026-10-20): pages 只在页级任务才带上 —— 整部的老签名一字不改
+        # 按页下载: pages 只在页级任务才带上 —— 整部的老签名一字不改
         # (外部的打桩/子类 download_artwork 未必收 pages 形参, 多传一个关键字会炸)。
         kw = dict(author_id=it.get('author_id'),
                   author_name=it.get('author_name'),
@@ -253,7 +253,7 @@ def _run_item(db: PixivDatabase, d: PixivDownloader, it: dict,
         if only is not None:
             kw['pages'] = only
         done_cnt, total_cnt = d.download_artwork(str(aid), **kw)
-        # 静默「成功」是 2026-09-15 的根因:
+        # 静默「成功」是「点了下载、任务显示完成、图库里却没有」的根因:
         # 未抓到图片时 download_artwork 只 warn 然后 return (0, 0), 不抛异常, 而本函数
         # 只在抛异常时才把队列项标 failed → 任务显示 done, 用户反复点击(实测 109766089
         # 连点 3 次, 队列留下 3 条 done 却一张图都没下)。

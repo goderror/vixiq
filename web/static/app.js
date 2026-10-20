@@ -217,7 +217,7 @@ async function wallCopyLink(aid) {
 }
 // ============ 🧹 壁纸副本清理 (「省空间」) —— 2026-09-24 ============
 // 壁纸夹里有 784 张和图库某页**字节一致**的副本 (约 5.37 GB): 删掉壁纸夹里那份不丢任何东西。
-// 设计约定的两条硬规矩就落在这里 —— ① 绝不自动删, 逐条勾选; ② 只走 Windows 电脑回收站, 可还原。
+// 两条硬规矩就落在这里 —— ① 绝不自动删, 逐条勾选; ② 只走 Windows 电脑回收站, 可还原。
 let wallDupesTimer = null, wallDupesSel = new Set(), wallDupesLast = null;
 
 async function wallDupesOpen() {
@@ -515,7 +515,7 @@ function authorsSortArrow(key) {
 function renderAuthors(items) {
   const rows = items.map(x => {
     const aliases = (x.aliases || []).length ? `<div class="c-alias">曾用名：${x.aliases.map(esc).join('、')}</div>` : '';
-    // 来源列 = 名下作品的来源 ∪ 作者主页链接的站点。
+    // 来源列 = 名下作品的来源 ∪ 作者主页链接的站点 (记了链接来源列没反应)。
     // 链接带来的站点加 * 并用虚线框标出, 与"真的有这个来源的作品"区分开。
     const workSrc = (x.sources || []);
     const linkSites = [...new Set((x.urls || []).map(u => u.site).filter(Boolean))];
@@ -523,12 +523,12 @@ function renderAuthors(items) {
     const srcBadges = workSrc.map(s => `<span class="tag src-tag">${esc(sourceLabel(s))}</span>`).join(' ')
       + onlyLink.map(s => `<span class="tag src-tag link-src" title="来自「编辑作者」里记的主页链接">${esc(sourceLabel(s))}*</span>`).join(' ');
     const lastUpd = x.last_updated ? x.last_updated.replace('T', ' ').slice(0, 19) : '—';
-    // 作者名点击 = 查看该作者的图片 
+    // 作者名点击 = 查看库内该作者的图片 (以前是跳查询页搜 pixiv)
     const disp = esc(x.name || x.author_id);
     const aidEsc = esc(x.author_id);
     const nameCell = `<span class="w-author" data-name="${disp}" title="点击：在图库中只看该作者的作品"` +
       ` onclick="libFilterByAuthor('${aidEsc}', this)">${disp}</span>`;
-    // 同名 ≠ 同一人 : 本地作者(站点账号, local_xxx)
+    // 同名 ≠ 同一人 (同一作者出现两条记录): 本地作者(站点账号, local_xxx)
     // 与真 pixiv 作者同名时会各占一行 —— 这是对的, 但要让用户看得见并给「一键绑定」的出路。
     const same = x.same_name_pixiv;
     const sameWarn = same ? `<div class="c-warn">⚠ 与 pixiv 作者《${esc(same.name)}》同名（${same.count ?? 0} 作品）` +
@@ -539,7 +539,7 @@ function renderAuthors(items) {
     const homeBtn = home
       ? `<a class="btn ghost icon-btn" href="${esc(home)}" target="_blank" rel="noopener" title="打开作者主页">🌐</a>`
       : '';
-    // 关注按钮 : 只有真 pixiv 作者(纯数字 ID)能关注, 本地作者(站点账号)没有可关注的账号
+    // 关注按钮: 只有真 pixiv 作者(纯数字 ID)能关注, 本地作者(站点账号)没有可关注的账号
     const isPixivAuthor = /^\d+$/.test(String(x.author_id));
     const followBtn = isPixivAuthor
       ? `<button class="btn ghost icon-btn" data-follow-aid="${aidEsc}" data-follow-icon="1"` +
@@ -553,7 +553,7 @@ function renderAuthors(items) {
       <td>${authorStatusTag(x.status)}</td>
       <td>${srcBadges || '—'}</td>
       <td class="cell-path none" style="white-space:nowrap">${esc(lastUpd)}</td>
-      <td>${followBtn}<button class="btn ghost icon-btn" data-name="${disp}" onclick="libFilterByAuthor('${aidEsc}', this)" title="查看我库里该作者的图片（切到图库并按该作者筛选）">📚</button><button class="btn ghost icon-btn" onclick="openReconcile('${aidEsc}')" title="🗂️ 作者对账台：把 TA 在 pixiv 主页的作品与「我库里来源未定的图」并排对照，点一下就认领转正（不需要登录也能看本地清单）">🗂️</button><button class="btn ghost icon-btn" onclick="refreshAuthor('${aidEsc}')" title="🔄 只刷新这一个作者：联网核对现用名与存续状态（轻量定向，不用跑全量自检）">🔄</button>${homeBtn}<button class="btn ghost icon-btn" onclick="showAuthorDetail('${aidEsc}')" title="作者详情（主页链接/曾用名）">📇</button><button class="btn ghost icon-btn" onclick="editAuthor('${aidEsc}')" title="编辑作者">✏️</button></td>
+      <td>${followBtn}<button class="btn ghost icon-btn" data-name="${disp}" onclick="libFilterByAuthor('${aidEsc}', this)" title="查看我库里该作者的图片（切到图库并按该作者筛选）">📚</button><button class="btn ghost icon-btn" onclick="openReconcile('${aidEsc}')" title="🗂️ 作者对账台：把 TA 在 pixiv 主页的作品与「库内来源未定的图」并排对照，点一下就认领转正（不需要登录也能看本地清单）">🗂️</button><button class="btn ghost icon-btn" onclick="refreshAuthor('${aidEsc}')" title="🔄 只刷新这一个作者：联网核对现用名与存续状态（轻量定向，不用跑全量自检）">🔄</button>${homeBtn}<button class="btn ghost icon-btn" onclick="showAuthorDetail('${aidEsc}')" title="作者详情（主页链接/曾用名）">📇</button><button class="btn ghost icon-btn" onclick="editAuthor('${aidEsc}')" title="编辑作者">✏️</button></td>
     </tr>`;
   }).join('');
   $('#authors-result').innerHTML = `<table class="table lib-list">
@@ -568,8 +568,8 @@ function renderAuthors(items) {
     <tbody>${rows}</tbody></table>`;
 }
 
-// 作者主页链接 (danbooru 式): 优先用**你记的第一条来源链接**, 其次 pixiv 官方主页。
-// (链接是多条的, 顺序即优先级 —— 想让它打开哪个站就把它放第一条)
+// 作者主页链接 (danbooru 式): 优先用**记录的第一条来源链接**, 其次 pixiv 官方主页。
+// (链接是多条的, 顺序即优先级 —— 要它打开哪个站就把它放第一条)
 function authorHomeUrl(x) {
   const first = ((x && x.urls) || []).find(u => u && u.url);
   if (first) return first.url;
@@ -621,14 +621,14 @@ async function showAuthorDetail(authorId) {
           onclick="closeLibModal(); libFilterByAuthor('${esc(a.author_id)}', this)">📚 查看我库里该作者的图片（${a.count ?? 0}）</button>
         ${bindBtn}
         <button class="btn ghost" onclick="closeLibModal(); openReconcile('${esc(a.author_id)}')"
-          title="把 TA 在 pixiv 主页的作品与「我库里来源未定的图」并排对照，点一下就认领转正">🗂️ 作者对账台</button>
+          title="把 TA 在 pixiv 主页的作品与「库内来源未定的图」并排对照，点一下就认领转正">🗂️ 作者对账台</button>
         <button class="btn ghost" onclick="closeLibModal()">关闭</button>
       </div>
     </div>`, { lg: true });
 }
 
 // 🔄 定向刷新**单个作者** (轻量自检): 只联网核对这一个人的现用名与存续状态。
-// 用户 2026-09-17: 编辑完作者还要等全量自检才更新状态 —— 不合理; 这里 1 次 HTTP 就够。
+// 编辑完作者还要等全量自检才更新状态 —— 不合理; 这里 1 次 HTTP 就够。
 window.refreshAuthor = async function (authorId, opts) {
   const silent = !!(opts && opts.silent);
   if (!/^\d+$/.test(String(authorId))) {
@@ -656,11 +656,11 @@ window.refreshAuthor = async function (authorId, opts) {
   }
 };
 
-// ===== 🗂️ 作者对账台  =====
+// ===== 🗂️ 作者对账台 (同日追加: 多选 + 两种批量认领) =====
 //   场景: 一批外来源图挂着本地 ID (ext_xxx)、作者已指定成 pixiv 画师, 但作品不是正式 pixiv 卡片。
 //   全站以图搜图太慢、逐张翻 pixiv 太贵 → 把候选集限定在**这个作者**:
 //   左列"我库里来源未定的图", 右列"TA 在 pixiv 主页的作品", 点一下就认领转正。
-//   多选(用户 2026-09-17 追加, 两种都要):
+//   多选(两种认领方式都要):
 //     ① 合并认领: 左选 N 张 + 右点 1 个 → 依次挂到该作品的连续页
 //        (适用于"一组散图其实来自同一个 pixiv 多页作品")
 //     ② 顺序配对: 开「⇄ 顺序配对」后左右各选 N 个 → 按**点击顺序** 1:1 配对
@@ -702,7 +702,7 @@ window.reloadReconcile = async function () {
 };
 
 // 弹窗是整块 innerHTML 重画的 → 重建 DOM 会让两个网格的滚动条归零。
-// (2026-09-17): 只是点选一张图, 左右两边都跳回顶部。两手处理:
+//  只是点选一张图, 左右两边都跳回顶部。两手处理:
 //   ① 点选只切换 .on 类, 根本不重建 DOM  → paintReconcileSelection();
 //   ② 真要整块重画时(重新拉取/认领后), 按"第几个网格"记住并还原滚动位置。
 function _rcGrids(box) { return Array.from(box.querySelectorAll('.rc-grid')); }
@@ -862,7 +862,7 @@ window.rcPickPixiv = function (tid) {
     // 单张: 选页确认。除了固定的"第 N 页", 必须再给一条**自动追加**的路 ——
     // 目标若是「已入库」的作品(前 total 页全占着), 只给固定页号的话: 选第 N 页会撞已有文件,
     // 选"附加页"那张塞到第 2 张时又会撞上刚加的附加页 → 满屏 409 失败, 看着就像"错乱"
-    //。「自动」= 交给服务端挑第一个空位, 没有空位就往后追加为附加页。
+    // 「自动」= 交给服务端挑第一个空位, 没有空位就往后追加为附加页。
     const opts = Array.from({ length: total },
       (_, i) => `<option value="${i}">第 ${i + 1} 页</option>`).join('')
       + `<option value="${total}">附加页（超出原 ${total} 页）</option>`
@@ -882,7 +882,7 @@ window.rcPickPixiv = function (tid) {
   }
   // 多张: 合并认领 —— 依次挂到连续页; 超出该作品原页数的部分自动成为「附加页」。
   // 起始页除了原页, 还给「从附加页开始」和「自动」两条路: 目标是已入库作品时,
-  // 从第 1 页开始会一路撞已有文件 → 一片 409 失败。
+  // 从第 1 页开始会一路撞已有文件 → 一片 409 失败 (表现为"错乱")。
   const n = L.length;
   const startOpts = Array.from({ length: Math.max(1, total) },
     (_, i) => `<option value="${i}">从第 ${i + 1} 页开始</option>`).join('')
@@ -1180,7 +1180,7 @@ function safeThumb(u, w) {
 // 必然失败(pixiv 无此作品, crawler 检测 404 后标 ERROR), 直接不给「加入清单」入口。
 // 双保险: ① 非数字 ID (ext_/merged_) 一律排除; ② 有 source 且非 pixiv 的排除;
 // ③ 作品页已确认失效(404, deleted_at) 的也排除 —— 原站再也拿不到, 只能去别处找来源
-//。
+//    (这类作品既不该显示「已入库」也不该显示「补全页数」)。
 function canRedownload(w) {
   if (!w) return false;
   if (/^(ext|merged)_/.test(String(w.artwork_id || ''))) return false;
@@ -1280,7 +1280,7 @@ function appendLog(level, msg) {
 let searchSeq = 0;
 let searchScope = 'artwork';           // 当前激活子页: 'artwork' | 'author'
 const searchCache = {};                // { scope: { q, html } } 切页恢复, 避免重复查询
-// 🚫 隐藏 AI 作品 :
+// 🚫 隐藏 AI 作品 (「查询结果里排除 AI 作品卡片」, 默认开):
 // 判定一律用 pixiv 官方 aiType (ai_type===2); 0(没标记) 按非 AI 处理 —— 绝不误藏。
 let searchHideAi = true;
 try { searchHideAi = localStorage.getItem('vixiq.searchHideAi') !== '0'; } catch (e) {}
@@ -1297,7 +1297,7 @@ function aiHiddenHint(n) {
   return n > 0 ? `<div class="hint ai-hidden-hint">🤖 已隐藏 ${n} 个 AI 作品（点右上「🚫 隐藏 AI 作品」可显示）</div>` : '';
 }
 
-// ===== 没输入内容时的推荐  =====
+// ===== 没输入内容时的推荐 (排行榜 / 为你推荐 可切换) =====
 // 两个来源的差别: 🏆 排行榜 = pixiv 日榜(内容确定, 但接口不给 AI 标记);
 //                ✨ 为你推荐 = 按你的浏览/收藏算(自带 AI 标记)。
 let feedKind = 'ranking';
@@ -1407,7 +1407,7 @@ function fullHintHtml() {
 async function doSearch(text, opts = {}) {
   const q = (text || '').trim();
   if (!q) {
-    // 空输入 → 回到推荐 (2026-09-20)。翻批(带 offset)时不该走这条, 那是异常调用
+    // 空输入 → 回到推荐。翻批(带 offset)时不该走这条, 那是异常调用
     if (opts.offset) { toast('请输入搜索内容', 'err'); return; }
     await backToFeed();
     return;
@@ -1438,7 +1438,7 @@ async function doSearch(text, opts = {}) {
 }
 
 // ===== 作者结果里的作品列表: 共 N 件 + 上一批/下一批  =====
-// 以前后端写死只取最新 12 个、界面也没有翻页入口, 用户看到的是"为什么不是全部作品"。
+// 以前后端写死只取最新 12 个、界面也没有翻页入口, 永远只看到最新 12 个。
 const AUTHOR_WORKS_PAGE = 60;
 
 function worksPagerHtml(res, bottom = false) {
@@ -1451,7 +1451,7 @@ function worksPagerHtml(res, bottom = false) {
   const hasPrev = off > 0;
   // 拿不到总数(DOM 兜底)时: 本批满页就当还有更多
   const hasNext = hasTotal ? (off + AUTHOR_WORKS_PAGE < total) : (n >= AUTHOR_WORKS_PAGE);
-  // 只有一批 → 不摆那两个常驻禁用的按钮, 只在顶部留一行作品数 (用户 2026-09-18 问「一直显示吗」)
+  // 只有一批 → 不摆那两个常驻禁用的按钮, 只在顶部留一行作品数 
   if (!hasPrev && !hasNext) {
     if (bottom) return '';
     return `<div class="works-pager wp-single"><span class="wp-info">${
@@ -1692,9 +1692,9 @@ function authorBackBarHtml() {
   </div>`;
 }
 
-// ===== 关注画师  =====
+// ===== 关注画师 (「增加关注该作者的按钮」) =====
 // 状态不预取也行: 点一下先查当前关注状态, 已关注→二次确认后取关, 未关注→直接关注。
-// 这样绝不会出现"我以为在关注, 结果把人家取关了"。
+// 这样绝不会出现"以为在关注, 结果反而取关"。
 function paintFollowBtn(btn, followed) {
   if (!btn) return;
   const icon = followed ? '♥' : '♡';
@@ -1783,7 +1783,7 @@ async function loadVersionInfo() {
   // 前端资源版本串读当前页面的 script 标签 (服务端会注入成「手写标签-mtime指纹」)。
   // 只显示前面的**手写标签**(如 20260920j): 指纹尾巴是给浏览器做缓存失效用的,
   // 两个文件 mtime 相同时会重复成 `20260920j-1789967658-1789967658`, 摆给人看没意义
-  //。
+  // (2026-09-21: 版本处只写版本号)。
   const src = (document.querySelector('script[src*="app.js?v="]') || {}).src || '';
   const m = src.match(/[?&]v=([^&]+)/);
   const feTag = (m ? m[1] : '').split('-')[0];
@@ -1809,7 +1809,7 @@ async function loadSafemode() {
   if (btn) { btn.textContent = safemode ? '🛡 关闭' : '🛡 开启'; btn.classList.toggle('danger', safemode); }
   // 打码态一变, **所有**画缩略图的视图都得按新状态重画。放在这里(而不是各自调用方)
   // 是为了覆盖全部路径: 手动切换 / SSE 从别处改了设置 / 未来别的新入口。
-  // 
+  // (关了安全模式切回来还是打码的, 刷新也没用 —— 就是漏了这一步。)
   if (_safemodeInited && prev !== safemode) await refreshAllThumbViews();
   _safemodeInited = true;
   return safemode;
@@ -1830,7 +1830,7 @@ async function toggleSafemode() {
   finally { if (btn) btn.disabled = false; }
 }
 
-// ===== 下载后自动收藏 : 设置页开关 + 公开/非公开 =====
+// ===== 下载后自动收藏: 设置页开关 + 公开/非公开 =====
 let autoBookmark = false;
 
 async function loadPixivActions() {
@@ -1893,7 +1893,7 @@ async function setBookmarkVisibility(v) {
   finally { if (vis) vis.disabled = false; }
 }
 
-// ===== 启动与托盘 (2026-09-24): 托盘常驻 / 自动开浏览器 / 壁纸小控件等开关 =====
+// ===== 启动与托盘  托盘常驻 / 自动开浏览器 / 壁纸小控件等开关 =====
 // 键集与后端 utils/config.py 的 LAUNCHER_DEFAULTS 一一对应, 界面文案写在这里,
 // 免得新增一个开关要同时改 HTML 的按钮和 JS 的状态表。
 const LAUNCHER_KEYS = {
@@ -1959,11 +1959,11 @@ async function toggleLauncher(key) {
   finally { if (btn) btn.disabled = false; }
 }
 
-// ===== 壁纸夹 (2026-09-26): 「上一张/下一张/幻灯片」的候选目录 =====
+// ===== 壁纸夹  「上一张/下一张/幻灯片」的候选目录 =====
 // 未设置 = 跟随当前桌面壁纸所在文件夹 (老口径); 设置了就听用户的。存到 paths.wallpaper_dir。
 // 目录**只能由服务端弹系统对话框选** —— 浏览器拿不到用户选中目录的绝对路径
-// (<input webkitdirectory> 只给相对路径), 之前让用户手打路径 + 再点保存, 用户实测报障:
-// 「选择文件夹为什么要有两个按钮, 一个不就足够了, 而且为什么点了没反应」。
+// (<input webkitdirectory> 只给相对路径), 所以只能由服务端弹原生对话框。
+// 早期版本是手打路径 + 保存按钮, 点了常常没反应, 已整体替换。
 async function loadWallDir() {
   const inp = $('#wall-dir-input'), st = $('#wall-dir-state'), clr = $('#wall-dir-clear');
   if (!inp) return;
@@ -1981,7 +1981,7 @@ async function pickWallDir() {
   const btn = $('#wall-dir-pick');
   if (btn) btn.disabled = true;
   // 这个请求会一直挂着, 直到用户在那个系统对话框里选完或取消。先给一句反馈,
-  // 否则对话框要是弹在别的窗口后面, 看着就是「点了没反应」。
+  // 否则对话框要是弹在别的窗口后面, 看着就是点了没反应。
   toast('已打开系统「选择文件夹」窗口，请在弹出的窗口中选择', 'ok');
   try {
     const r = await api('/api/wallpaper/dir/pick', { method: 'POST' });
@@ -1999,8 +1999,8 @@ async function pickWallDir() {
   finally { if (btn) btn.disabled = false; }
 }
 
-// ===== 📁 路径 
-//       以及「数据、配置、缓存要向正常软件看齐, 但别占 C 盘太多」) =====
+// ===== 📁 路径 (所有路径都要有设置入口),
+//       以及数据/配置/缓存不占系统盘) =====
 // 按「体积 × 增量」分层: 图片单独可指定(大且会涨, 建议非系统盘) / 数据根(数据库+日志+缩略图,
 // 默认随程序目录, 也可整根搬) / 临时目录(可一键清)。选目录只能由服务端弹系统对话框 ——
 // 浏览器拿不到选中目录的绝对路径。改动**要重启**才生效 (utils/paths 有进程内缓存,
@@ -2058,7 +2058,7 @@ async function pickPathDir(which) {
   const btn = $('#' + (which === 'img' ? 'path-img-pick'
                       : which === 'data' ? 'path-data-pick' : 'path-temp-pick'));
   if (btn) btn.disabled = true;
-  // 对话框会一直挂着直到用户选完 —— 先给一句反馈, 否则弹在别的窗口后面看着像「点了没反应」
+  // 对话框会一直挂着直到用户选完 —— 先给一句反馈, 否则弹在别的窗口后面看着像点了没反应
   toast('已打开系统「选择文件夹」窗口，请在弹出的窗口中选择', 'ok');
   try {
     const r = await api('/api/paths/pick', {
@@ -2102,11 +2102,11 @@ async function clearPathDir(which) {
   finally { if (btn) btn.disabled = false; }
 }
 
-// ===== ✨ 壁纸文案 (2026-09-27): 「测试连接」+「上传当前壁纸」两颗按钮 =====
+// ===== ✨ 壁纸文案  「测试连接」+「上传当前壁纸」两颗按钮 =====
 // 「上传当前壁纸」点一次 = 存下地址/模型/密钥 + 把当前壁纸缩到 512px 连图上传 + 当场拿回
 // 「标题 + 氛围句」(后端同时写进缓存, 桌面小控件随即显示)。换壁纸**不自动**再调接口 ——
-// 设计约定, 免得每翻一张就烧一次钱。
-// 「测试连接」 只验地址/密钥/
+// 「只在点按钮时生成当前这张」, 免得每翻一张就烧一次钱。
+// 「测试连接」(接口报错时加回) 只验地址/密钥/
 // 模型名, 不发图、不要求有当前壁纸 —— 生成失败时先用它把「配置错」和「模型不配合」分开。
 // 密钥**不回显**: GET 只给「填过没有 + 后四位」, 输入框留空 = 沿用已存的那把。
 let aiState = {};
@@ -2148,7 +2148,7 @@ async function runAiText() {
       body: aiFormBody() });
     if (!r || r.ok !== true) throw new Error((r && r.error) || '生成失败');
     // 生成等了好几秒, 结果**先上屏**再说 —— 表单状态 (密钥尾号等) 后台慢慢刷,
-    // 别让一次多余的 GET 挡在标题前面 (2026-09-29)。loadAiText 里的 paintAiText
+    // 别让一次多余的 GET 挡在标题前面。loadAiText 里的 paintAiText
     // 会拿「已配置:…」盖掉刚显示的标题, 所以刷完再恢复一次。
     const got = `「${r.title || '—'}」 ${r.mood || ''}`;
     if (st) st.textContent = got;
@@ -2177,7 +2177,7 @@ async function testAiText() {
   } finally { if (btn) btn.disabled = false; }
 }
 
-// ===== 🖼 壁纸库 (2026-09-27): 从图库按规则生成壁纸 =====
+// ===== 🖼 壁纸库  从图库按规则生成壁纸 =====
 // 规则在 core/wallpaper_lib.py (尺寸 + 比例两道门槛, 原样复制不缩放不裁剪)。上千行判定
 // 加上几百 MB 的复制, 放在请求里等不起 → 后端后台线程跑, 这里轮询进度。
 let wallLibTimer = null;
@@ -2288,8 +2288,8 @@ ${authorCellHtml(w, gallery)}
   }).join('') + `</div>`;
 }
 
-// 「这张是不是附加页」的统一判据 —— 一律走**位置**，不看当初的记录 (2026-09-17 
-// 「删页 + 随意调序后显示有 bug」)。原网页只有 0..total_pages-1 这几页，超出的才是附加页；
+// 「某页是否附加页」的统一判据 —— 一律走**位置**，不看当初的记录 (
+// 删页 + 随意调序后曾出现显示错乱)。原网页只有 0..total_pages-1 这几页，超出的才是附加页；
 // `pages.origin` 只是"这张图当初从哪来"的痕迹，而页号会被调序/填空位换来换去 —— 拿它当
 // 显示判据就会出现「p1*（附加）」这种一看就不对的标记（真实用例：94992683 原 2 页却把 p1
 // 标成附加、114518913 原 2 页却把 p2 标成原网页页）。页数未知(外来源作品)时才退回看 origin。
@@ -2327,7 +2327,7 @@ function onlyThisWorkBtnHtml(w) {
     onclick="libOnlyThisWork('${esc(w.artwork_id)}')">👁️</button>`;
 }
 
-// 作者显示: 图库卡片上单击 = 在库中筛选该作者 (用户 2026-09-16 要求); 查询页卡片上单击 = 搜 pixiv 作者
+// 作者显示: 图库卡片上单击 = 在库中筛选该作者; 查询页卡片上单击 = 搜 pixiv 作者
 // 双击 = 有 pixiv PID 时直接打开作者主页。260ms 延迟用于区分单击/双击。
 let _authorClickTimer = null;
 function authorLabel(w) { return w.author_name || w.author_id || '未知作者'; }
@@ -2382,9 +2382,9 @@ function jumpAuthor(authorId) {
   doSearch(authorId);
 }
 
-// 📚 查看该作者的图片 :
-//   以前点作者名是跳「查询」页去 pixiv 搜 —— 但我想看的往往是自己库里存了什么。
-//   现在改成: 切到图库页 + 按该作者精确筛选, 并清掉会把他作品挡住的筛选条件。
+// 📚 查看该作者库内的图片:
+//   以前点作者名是跳「查询」页去 pixiv 搜 —— 但常看的往往是自己库里存了什么。
+//   现在改成: 切到图库页 + 按该作者精确筛选, 并清掉会挡住其作品的筛选条件。
 //   第二参传元素(this, 读 data-name) 或直接传名字字符串 —— 名字里的引号走 data 属性, 不会破坏 onclick。
 window.libFilterByAuthor = function (authorId, elOrName) {
   const aid = String(authorId || '').trim();
@@ -2402,7 +2402,7 @@ window.libFilterByAuthor = function (authorId, elOrName) {
     .forEach(id => { const el2 = $(id); if (el2) el2.value = ''; });
   // 清空搜索框 + 标签框, 并把作者框回填成这位作者 —— 全部走 combo 自己的方法,
   // **不能派发假 input 事件**: input 事件是下拉面板的展开触发器, 会一并把
-  // 作者/标签两个下拉框弹开。
+  // 作者/标签两个下拉框弹开 (「点作者名会自动跳出两个下拉框」)。
   if (comboTag) comboTag.clear();
   const tagEl = $('#lib-f-tag-input');
   if (tagEl) { tagEl.value = ''; if (tagEl._clearSync) tagEl._clearSync(); }
@@ -2427,13 +2427,13 @@ async function autoStartDownload() {
   refreshCart();
 }
 
-// ============ pixez 式下载状态回显 (2026-09-15) ============
+// ============ pixez 式下载状态回显 ============
 // 作品: downloaded(已完成,按钮禁用) / in_queue(下载列表中,禁用) /
 //       partial(在库但缺页,文案变「补全页数」仍可点) /
 //       expired(原站已失效404,改成可点的「搜索来源」) / none(保持加入清单)
 // 作者: 仅 in_queue 一种拦截态。
 // 文案与图标集中一份, 初始渲染(cartActionHtml)与异步回显(_applyWorkCartState)共用,
-// 避免两处各写一份导致状态切换时文字/图标跳变。
+// 避免两处各写一份导致状态切换时文字/图标跳变 (图标更美观)。
 const CART_BTN = {
   downloaded: { text: '✅ 已入库', title: '该作品已完整入库，无需重复下载' },
   in_queue: { text: '⏳ 已在下载列表', title: '已在下载任务列表中，请勿重复添加' },
@@ -2709,7 +2709,7 @@ async function retryFailedTasks() {
 // 清空下载任务: 清哪一栏 = 看当前筛选 (全部/进行中/完成/失败), 与筛选栏共用一套语义。
 // 四个 scope 与后端 queue_clear_scope 一一对应; 文案里的「未完成」= pending+running。
 // 清掉的行**真的不会被下载** (后端: 每项开跑前认领 + 正在跑的逐页回查) —— 所以文案是
-// 「会中止」而不是「不会停下」。
+// 「会中止」而不是「不会停下」(清空进行中就该等于撤销该次操作)。
 const TASK_CLEAR_SCOPE = {
   all: { label: '全部', warn: true },
   running: { label: '未完成', warn: true },
@@ -2829,7 +2829,7 @@ let libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', au
 let libPage = 1;                 // 图库当前页码 (从 1 起)
 const LIB_PAGE_SIZE = 60;        // 每页固定张数 (网格/列表)
 let libTotal = 0, libPages = 0;  // 当前筛选下的总条数/总页数 (供分页栏)
-// 「仅查看该作品」特殊筛选 (2026-09-16): 精确 ID 过滤 + 图片视图平铺, 可整体撤销
+// 「仅查看该作品」特殊筛选  精确 ID 过滤 + 图片视图平铺, 可整体撤销
 let libOnlyAid = null;           // 当前正在单独查看的作品 ID (null=未启用)
 let libOnlyPrev = null;          // 启用前的快照 (筛选/视图/页码/搜索词/滚动位置), 撤销时还原
 let safemode = false;            // 安全模式: R18 缩略图模糊打码 + Lightbox 需解锁 (从 /api/safemode 加载)
@@ -3187,8 +3187,8 @@ async function importLocalImages(mode) {
   if (!pre || pre.error) { toast((pre && pre.error) || '扫描失败', 'err'); return; }
   if (!pre.total) { toast('这里没有可导入的图片', 'info'); return; }
 
-  // 导入前先判定 : 含作品ID 的直接入库, 不用问;
-  // 只有"不是标准 P 站作品"的那部分才需要设计约定 —— 转反搜 还是 建自定义作品。
+  // 导入前先判定: 含作品ID 的直接入库, 不用问;
+  // 只有"不是标准 P 站作品"的那部分才需要选择 —— 转反搜 还是 建自定义作品。
   const nonPixiv = pre.without_id || 0;
   let makeCustom = false;
   if (nonPixiv > 0) {
@@ -3226,7 +3226,7 @@ async function importLocalImages(mode) {
   } catch (e) { toast('导入失败: ' + e.message, 'err'); }
 }
 
-// 「不是标准 P 站作品」的那部分怎么处理? 弹窗二选一 (需求"导入前就判定")。
+// 「不是标准 P 站作品」的那部分怎么处理? 弹窗二选一 ("导入前就判定")。
 // 返回 'reverse' | 'custom' | null(取消)。
 function _askImportMode(pre) {
   const n = pre.without_id || 0;
@@ -3276,7 +3276,7 @@ function paintLibHealth() {
   const todoN = rc ? (rc.todos || []).length : 0;
   const liveN = susN + todoN;
   // 一件待处理都没有(问题都解决了), 或用户点过「✕ 收起」→ 不再挂这条汇总。
-  // 
+  // (这条"上次体检：…"一直显示 —— 它是上次的快照, 现在: 解决完了自动消失,
   //  没解决但不想看也能收起; 下次真跑体检会重新显示。)
   const showReport = !!rc && liveN > 0 && !rc.bar_dismissed;
   const visible = $('#tab-library').classList.contains('active')
@@ -3444,7 +3444,7 @@ function paintCheckPanel() {
     recheckHintHtml(rc);
 }
 
-// ⑥ 复检结论 : 让"已解决的被清掉 / 变了的更新"看得见,
+// ⑥ 复检结论: 让"已解决的被清掉 / 变了的更新"看得见,
 // 而不是只给一个总数 —— 否则用户没法判断复检到底干了什么。
 function recheckHintHtml(rc) {
   const rk = (rc && rc.recheck) || null;
@@ -3652,7 +3652,7 @@ window.loadOperations = loadOperations;
 window.filterOps = filterOps;
 window.clearOperations = clearOperations;
 
-// 体检报告: 分「可疑项」(系统异常，通常能一键修) 与「待办项」(需要你决策)，每条都能单独忽略。
+// 体检报告: 分「可疑项」(系统异常，通常能一键修) 与「待办项」(需人工决策)，每条都能单独忽略。
 // 条目按钮用下标传参 (window._chkItems)，避免文件名里的引号破坏 onclick 属性。
 const CHK_GROUPS = [
   ['missing_file', '⚠ 文件丢失：数据库有记录，但磁盘图片文件已找不到（可清理记录，或重新下载）',
@@ -4018,7 +4018,7 @@ async function loadLibrary(opts = {}) {
     renderLibPagers();
     // 重画判据 = **渲染指纹**(数据载荷 + 打码态 + 视图模式), 只要影响"画出来长什么样"的
     // 输入有一个变了就必须重画。
-    // 2026-09-17 的坑: 以前指纹里只有数据载荷, 关掉安全模式后数据一个字没变
+    // 的坑: 以前指纹里只有数据载荷, 关掉安全模式后数据一个字没变
     //   → 判定"没变" → 不重画 → 打码的图还是打码, 用户以为刷新按钮坏了, 得靠
     //   "清空筛选再选回来"硬把载荷刷变才生效。所以 safemode 必须进指纹。
     // 同时: 手动点刷新 / 切换打码等**显式动作**一律 force, 用户点了就该看见重画。
@@ -4048,7 +4048,7 @@ function _libRenderSig(items) {
 
 // 打码态一变, **所有渲染过缩略图的视图**都得按新状态重画一遍。
 // 只刷图库是不够的: 搜索结果 / 回收站 / 反搜列表 / 对账台 也都画缩略图。
-// (用户 2026-09-17 报的正是"关了安全模式切回来还是打码的, 刷新也没用"。)
+// (症状: 关了安全模式切回来还是打码的, 刷新也没用。)
 async function refreshAllThumbViews() {
   const lib = $('#lib-result');
   if (lib) lib._libSig = '';                  // 清指纹 → 下次一定重画
@@ -4443,7 +4443,7 @@ function syncLibSelUI() {
   if (repairBtn) repairBtn.disabled = n === 0;
   $('#lib-batch-srcsearch').disabled = n === 0;
   // 作品视图: 选中项里若有「已入库但缺页」的作品, 这个按钮实质是"补缺失页",
-  // 文案跟着改, 免得用户以为会重下一遍 
+  // 文案跟着改, 免得误以为会重下一遍 (2026-09-16 需求: 补页也要能批量)
   const addBtn = $('#lib-batch-addcart');
   if (addBtn && libDataView === 'artwork') {
     const selW = ($('#lib-result')._lastItems || []).filter(w => libSelected.has(w._key));
@@ -4665,7 +4665,7 @@ async function libDeleteOne(id) {
   } catch (e) { toast('移入回收站失败: ' + e.message, 'err'); }
 }
 
-// 「删到作品全空」时让设计约定: 保留作品(0页) / 作品也一并进回收站 / 取消。
+// 「删到作品全空」时给出三种选择: 保留作品(0页) / 作品也一并进回收站 / 取消。
 // 为什么不用 confirm: 三选一里 true/false 说不清"取消"和"保留"的区别。
 function _askEmptyChoice(labels) {
   return new Promise((resolve) => {
@@ -4698,7 +4698,7 @@ function _emptyChoiceLabels(r) {
 }
 
 // 图片视图: 把单张图片移入回收站 (作品|页码)。
-// 后端若发现"这会把作品删空", 会先返回 need_choice 让设计约定再执行。
+// 后端若发现"这会把作品删空", 会先返回 need_choice 让使用者确认再执行。
 async function _softDeletePages(items) {
   const post = (extra) => api('/api/library/delete-pages', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4751,7 +4751,7 @@ async function libBatchDelete() {
   } catch (e) { toast('移入回收站失败: ' + e.message, 'err'); }
 }
 
-// ============ 🗑️ 回收站页 (2026-09-17) ============
+// ============ 🗑️ 回收站页 ============
 // 双层保护的前端: 删除=移进来(可恢复), 彻底删除=卸载记录且文件只进 Windows 电脑回收站。
 // 恢复遇冲突由后端判、只跳过不覆盖, 前端如实把"哪几项被跳过、为什么"摆给用户看。
 let trashKind = 'artwork';
@@ -4928,7 +4928,7 @@ async function openMergeImages() {
     byKey[w._key] = w;
   });
   const artIds = [...new Set(items.map(it => it.artwork_id))];
-  // 只有 pixiv 作品的「原网页页」(origin !== 'merged') 不能搬走 —— 会让原作品缺页,
+  // 只有 pixiv 作品的「原网页页」(origin!== 'merged') 不能搬走 —— 会让原作品缺页,
   // 且合并后无法归属回原作品; **合并附加页**(用户自己并进来的)可以搬, 那正是「反悔合并」。
   // 其他来源/未知来源的作品不受限。后端有完全相同的页级闸门, 这里提前告知免得白操作。
   const blocked = keys.filter(k => {
@@ -5141,7 +5141,7 @@ window.applyBatchSource = async function (i) {
     const r = await api('/api/library/source-set', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     // api() 对「带 JSON 的错误响应」不抛异常 → 必须显式判 status,
-    // 否则写入失败也会被标成「已写入」
+    // 否则写入失败也会被标成「已写入」(显示成功但库里没变)
     if (!r || r.status !== 'ok') throw new Error((r && r.error) || '写入失败');
     it.applied = true;
     renderBatchSourceResult({ items: _batchSourceItems });
@@ -5298,7 +5298,7 @@ function renderGallerySearchResult(aid, hits) {
         ? ' <span class="tag idx" title="这是 SauceNAO 结果卡上的名字 —— 它自己的索引快照。作者改过名，这里就一直是旧名；请以源网页为准。">⚠ 索引名·可能过时</span>'
         : (h.author_src === 'page'
           ? ' <span class="tag ok" title="作者名读取自源网页当前内容（与 pixiv 同思路）">✓ 网页当前</span>' : '');
-      // 链接必须能点  —— 站点名与 URL 都是链接
+      // 链接必须能点 (反搜给的链接只能复制粘贴) —— 站点名与 URL 都是链接
       const u = esc(h.url);
       return `<tr><td class="hint">${esc(h.file)}</td><td>🔍 命中 <a href="${u}" target="_blank" rel="noopener"><b>${esc(SITE_BADGE[h.site] || h.site)}</b></a>${nm ? ' · ' + esc(nm) : ''}${srcTag}<div class="hint"><a href="${u}" target="_blank" rel="noopener">${u}</a></div></td></tr>`;
     }
@@ -5312,7 +5312,7 @@ function renderGallerySearchResult(aid, hits) {
     && String(aid) !== String(firstPixiv.artwork_id));
   const onlyFilename = !!(firstPixiv && hits.every(h => !h || h.error
     || (h.site === 'pixiv' && h.artwork_id === firstPixiv.artwork_id && h.author_src === 'filename')));
-  // 第三方索引名绝不预填进库: SauceNAO 卡片名可能是旧名。
+  // 第三方索引名绝不预填进库: SauceNAO 卡片名可能是旧名 (例如 ying yi / qing ying)。
   // 只有「读自源网页」或「URL 里的账号」才自动带作者; 索引名仅提示, 由用户核对后自己填。
   const otherIdx = !!(firstOther && firstOther.author_src === 'saucenao_index');
   const otherName = firstOther ? (otherIdx ? '' : (firstOther.author_name || firstOther.handle || '')) : '';
@@ -5357,7 +5357,7 @@ async function claimPixiv(aid, pid) {
 }
 
 // 🪄 认领散落页 (并入「🧹 一键整理」预览): 离线扫描结果 → 弹窗内分区 HTML。
-// 勾选后批量转正, 防再次出现「被拆/错并后合不回来」。
+// 勾选后批量转正, 防再次出现「被拆/错并后合不回来」(去掉独立按钮)。
 let claimScanData = null;
 function claimSectionHtml(r) {
   claimScanData = r || { ready: [], mixed: [], no_id: 0 };
@@ -5550,9 +5550,9 @@ async function openSplitImages() {
   if (libDataView !== 'image' || !libSelected.size) return;
   const keys = [...libSelected];
   const items = keys.map(parsePageKey);
-  // 与「合并」完全相同的硬闸门: pixiv 作品(数字ID)的原网页页 (origin !== 'merged')
+  // 与「合并」完全相同的硬闸门: pixiv 作品(数字ID)的原网页页 (origin!== 'merged')
   // 不能拆 —— 后端 split_pages/merge_pages 都会拦, 这里提前硬阻断, 不让用户白填弹窗。
-  // 2026-09-16 : 旧版只在弹窗里写了行警告, 点了才报错, 应像合并一样直接拦下。
+  // 2026-09-16 旧版只在弹窗里写了行警告, 点了才报错, 应像合并一样直接拦下。
   const loaded = ($('#lib-result')._lastItems || []);
   const byKey = {};
   loaded.forEach(w => { byKey[w._key] = w; });
@@ -5704,7 +5704,7 @@ function openLibModal(title, bodyHtml, opts) {
 function closeLibModal() { $('#lib-modal').style.display = 'none'; }
 
 // ============ 💾 备份中心 (2026-09-16 合并原「一键备份」+「备份管理」) ============
-//   需求: 只留一个入口, 「一键备份」搬进里面 —— 上半是数据库备份(zip), 下半是
+//   只留一个入口, 「一键备份」搬进里面 —— 上半是数据库备份(zip), 下半是
 //   「♻ 重下修复」覆盖前自动留下的 .bak 旧文件(对比/恢复/删除)。这两件事本来就是
 //   一体两面: 一个备份"库", 一个备份"图", 出问题时都在这里找回来。
 async function openBackupCenter() {
@@ -5905,7 +5905,7 @@ window.setDeletedFlag = async function (aid, deleted) {
   } catch (e) { toast('操作失败: ' + e.message, 'err'); }
 };
 
-// 作者只填了一个「库里没有的名字」时, 先问清楚这位是不是 pixiv 作者 (用户 2026-09-16 反馈):
+// 作者只填了一个「库里没有的名字」时, 先问清楚这位是不是 pixiv 作者:
 // 以前会默默建成「自定义作者」, 明明知道他是 p 站作者却没法声明。
 function askIsPixivAuthor(aid, body, name) {
   window._pendingAuthorSave = { aid, body, name };
@@ -6110,7 +6110,7 @@ async function loadLibraryRecent() {
   libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, sort: 'updated', order: 'desc' };
   $('#lib-search-input').value = '';
   ['#lib-f-type', '#lib-f-status', '#lib-f-source'].forEach(sel => { $(sel).value = ''; });
-  $('#lib-f-sort').value = 'updated';   // 默认排序: 按修改时间 
+  $('#lib-f-sort').value = 'updated';   // 默认排序: 按修改时间 (2026-09-16 默认)
   $('#lib-f-r18').value = '0';   // 默认非 R18
   $('#lib-f-ai').value = '';     // 默认 AI: 全部 (不隐藏任何作品)
   if (comboAuthor) comboAuthor.clear();
@@ -6144,7 +6144,7 @@ window.tidyHelpToggle = function (btn) {
 
 async function openTidyPreview() {
   try {
-    // 「🪄 认领散落 pixiv 页」并入一键整理 :
+    // 「🪄 认领散落 pixiv 页」并入一键整理 (去掉独立按钮):
     // 离线认领扫描与整理预览并行, 弹窗里认领分区在上、文件归位表格在下, 各自独立执行。
     const [r, scan] = await Promise.all([
       api('/api/library/tidy/preview', { method: 'POST' }),
@@ -6411,7 +6411,7 @@ function revResultCell(t) {
     return `<span class="err-text">文件名与识别结果不一致（${esc(t.result || '')}）</span>
       <button class="btn mini" onclick="resolveReverseConflict('${esc(t.file || '').replace(/'/g, "\\'")}')">按文件名归档</button>`;
   }
-  // 没识别出来: 明确给出路 —— "没找到结果就留在那了, 我不能继续入库了"
+  // 没识别出来: 明确给出路, 不能让它一直卡在收件箱里
   const fn = String(t.file || '').replace(/'/g, "\\'");
   return `<span class="err-text">${esc(t.result || '未识别')}</span>
     <button class="btn mini" title="识别不出来也没关系：直接把这张加入图库（建自定义作品，标题=文件名）"
@@ -7009,12 +7009,12 @@ function bind() {
   // 只绑 [data-scope] 的: 推荐区的 .feed-kind 按钮也带 .sstab 样式, 不该走这条
   $$('.sstab[data-scope]').forEach(b => b.addEventListener('click', () => setSearchScope(b.dataset.scope)));
 
-  // 推荐区 (2026-09-20): 来源切换 + 刷新
+  // 推荐区  来源切换 + 刷新
   $$('.feed-kind').forEach(b => b.addEventListener('click', () => setFeedKind(b.dataset.kind)));
   const feedRefresh = $('#search-feed-refresh');
   if (feedRefresh) feedRefresh.addEventListener('click', () => loadFeed(true));
 
-  // 🚫 隐藏 AI 作品 (2026-09-20): 就地重渲染缓存里的原始响应 —— 不重新联网,
+  // 🚫 隐藏 AI 作品  就地重渲染缓存里的原始响应 —— 不重新联网,
   // 切一下按钮不该再打一次 pixiv。
   (function () {
     const btn = $('#search-hide-ai');
@@ -7041,7 +7041,7 @@ function bind() {
     });
   })();
 
-  // 搜索页作品卡点击 → 自研「远程大图」弹窗 (2026-10-20 需求,
+  // 搜索页作品卡点击 → 自研「远程大图」弹窗 (「双击图片打开大图」,
   // 不再直接跳 pixiv 原站)。原站入口保留为卡片上已有的「🔗 原网页」按钮 (它是 <a>, 由守卫放行)。
   // 保留 mousedown/mouseup 位移判定「拖选复制」→ 不打开弹窗; 推荐区 (.work-card) 同样处理。
   ['#search-result', '#search-feed-body'].forEach((sel) => {
@@ -7156,7 +7156,7 @@ function bind() {
 
   $('#reverse-run').addEventListener('click', () => runReverse(false));
   $('#reverse-run-sel').addEventListener('click', () => runReverse(true));
-  // 识别不出来的图的出路: 手动入库 / 丢弃 
+  // 识别不出来的图的出路: 手动入库 / 丢弃
   $('#reverse-adopt-sel').addEventListener('click', () => revAdopt(null));
   $('#reverse-drop-sel').addEventListener('click', () => revDiscard(null));
   $('#reverse-upload').addEventListener('click', () => $('#reverse-file-input').click());
@@ -7344,8 +7344,8 @@ function bind() {
   })();
 
   // ---- 🔍 点图 1:1 放大 + 拖动平移 (本地图库查看器与远程大图弹窗共用) ----
-  // 两处所需行为完全一样, 抽成一支装上, 免得改了这边忘了那边 
-  // 「关于点击查看大图的优化也应该适用到本地图库里面」)。调用方要保证:
+  // 两处所需行为完全一样, 抽成一支装上, 免得改了这边忘了那边 (2026-10-20:
+  // 大图的交互优化对本地图库同样生效)。调用方要保证:
   //   ① HTML 里放一个 span.lb-zoom-hint 当放大提示位 (缺了也不报错, 只是没提示);
   //   ② CSS 的 .lightbox-img-wrap.is-zoom 规则生效 —— 放大态由 CSS 把**图片元素自身**撑到
   //      自然尺寸, 于是「视口」= wrap 的 overflow:hidden, translate 才是移动视口。只写
@@ -7440,7 +7440,7 @@ function bind() {
     // 图片视图/搜索页不传 → 只有当前这一张
     // nav: {items, index} = 图库当前这一页的卡片清单 + 本卡序号。给了它就在右下角多一个
     //      「下个作品 / 下一张」按钮: 作品视图切到下一个作品, 图片视图切到下一张图片
-    //。
+    //      (左右键只在作品内翻页, 跨卡片另给入口)。
     let cur = w;
     let pages = (Array.isArray(pageList) && pageList.length) ? pageList : [w];
     const navItems = (nav && Array.isArray(nav.items) && nav.items.length) ? nav.items : null;
@@ -7536,7 +7536,7 @@ function bind() {
     };
 
     // 原图就绪 → 更新「宽×高 · 大小」信息行。
-    // 两点讲究 :
+    // 两点讲究 (「左右切换时那些文字会闪烁」):
     //   ① 只算一次字符串、**值没变不碰 DOM** —— 解码回调算出的尺寸常与库内已记录的一致,
     //      旧写法每次都先清空再重填, 于是每翻一页这行字都闪一下;
     //   ② 只取本页已知的字段拼装: 库内**没有**宽高的页(全库 318 页, 多为非首页)以前会先
@@ -7558,8 +7558,8 @@ function bind() {
         - (lbInfo ? lbInfo.offsetHeight : 0) - lb.querySelector('.lb-strip').offsetHeight - 10);
       if (zin) {
         // 放大态: wrap 只是**取景窗** (图片元素自身已是自然尺寸, 溢出由 overflow:hidden 裁掉),
-        // 所以不再跟图片比例走 —— 直接铺满可用区域 
-        // 比例稍微向外撑了一些, 我要的是直接铺满屏幕」)。竖向扣掉信息行与页序条的**实测**
+        // 所以不再跟图片比例走 —— 直接铺满可用区域 (2026-10-20: 取景窗此前
+        // 只是按比例向外撑, 现改为直接铺满屏幕)。竖向扣掉信息行与页序条的**实测**
         // 高度, 下方那两行与 ✕ / ‹ › 才不会被顶出视野。
         wrap.style.width = Math.max(1, Math.round(window.innerWidth * 0.98)) + 'px';
         wrap.style.height = Math.max(1, Math.round(capZoom)) + 'px';
@@ -7574,7 +7574,7 @@ function bind() {
     // 窗口尺寸变化: 重排 + (放大态) 按新视口重新夹一遍平移量
     const onWinResize = () => { if (curNw && curNh) z.resync(); };
     window.addEventListener('resize', onWinResize);
-    // 🔍 点图 1:1 放大 + 拖动平移 (与远程大图弹窗共用同一支; 2026-10-20 需求下沉到本地图库)
+    // 🔍 点图 1:1 放大 + 拖动平移 (与远程大图弹窗共用同一支; 下沉到本地图库)
     z = setupZoom(lb, wrap, lay, () => sizeWrap(curNw, curNh), () => [curNw, curNh]);
 
     // 把 url 放到「当前隐藏层」, 后台 Image 加载+decode 完成后才在隐藏层落 src,
@@ -7663,7 +7663,7 @@ function bind() {
     if (btnPrev) btnPrev.addEventListener('click', (ev) => { ev.stopPropagation(); showPage(idx - 1); });
     if (btnNext) btnNext.addEventListener('click', (ev) => { ev.stopPropagation(); showPage(idx + 1); });
 
-    // ---- ↔ 页序调整  ----
+    // ---- ↔ 页序调整 (2026-09-17 需求: 手动认领/自动溯源可能把页挂反, 要能事后调) ----
     // 可用性判据见 canReorderNow (跨卡片切换时由 showPage 重算显隐), 这里只管取元素。
     const reorderBtn = lb.querySelector('.lb-reorder-btn');
     const strip = lb.querySelector('.lb-strip');
@@ -7672,7 +7672,7 @@ function bind() {
     // 页码空洞 = 「原网页该有的页(0..total_pages-1)」里本地缺的那些 (删过页/认领后留洞)。
     // 有洞时服务端会拒绝整体调序 order(那会把洞悄悄压实、完整性跟着变), 所以:
     //   · ◀▶ 改发 assign(只交换这两页的页号, 洞与其它页一个都不动);
-    //   · 附加页多一个「↳ 填 pN」按钮, 把空位真正补上。
+    //   · 附加页多一个「↳ 填 pN」按钮, 把空位真正补上 (后新增)。
     const holesOf = () => {
       const have = new Set(pages.map(p => Number(p.page_num)));
       const tp = Number(cur.total_pages) || 0;   // 按当前卡片算, 换卡片后页数可能不同
@@ -7750,7 +7750,7 @@ function bind() {
         // 该走哪条路? **只有"页码正好是 0..n-1"才允许整体排列 order**(服务端就是这么要求的),
         // 否则(有洞 / 带超出原页数的附加页 → 页号像 p0,p1,p4)一律用点对点改号 assign。
         // 以前是用"tp 范围内有没有洞"判断的 → 「带附加页但没有洞」的作品被判成能走 order,
-        // 服务端一句"页号有空缺"就 400, 用户点了像没反应。
+        // 服务端一句"页号有空缺"就 400, 用户点了像没反应 ("其他作品也有问题")。
         const consecutive = numOf.every((n, k) => n === k);
         const newNum = new Map(numOf.map(n => [n, n]));   // 旧页号 → 新页号 (只记被改动的)
         let body, tip = '✅ 页序已调整';
@@ -7816,7 +7816,7 @@ function bind() {
       });
     }
 
-    // ---- 跨卡片浏览 : 不关弹窗、不重建 DOM, 直接换掉当前卡片。
+    // ---- 跨卡片浏览: 不关弹窗、不重建 DOM, 直接换掉当前卡片。
     // 作品视图 = 切下一个作品(从它的第 1 页看起); 图片视图 = 切下一张图。
     // 走同一个 Lightbox 实例(而非重新 openLightbox): 双叠层换图机制能直接复用, 不会闪一下黑底。
     const loadCard = (i) => {
@@ -7859,7 +7859,7 @@ function bind() {
     showPage(0);
   };
 
-  // ---- 远程大图预览 (查询页卡片: 单击/双击都开它, 2026-10-20 需求) ----
+  // ---- 远程大图预览 (查询页卡片: 单击/双击都开它) ----
   // 刻意**不复用** openLightbox —— 它的 canReorderNow / holesOf / 页序调序全绑「库内作品」,
   // 塞进远程模式会把那个函数撑爆、动摇既有断言。这里单写一支, 数据只来自
   // /api/artwork/<id>/pages: 大图默认低清 (regular), 点「显示原图」才叠 original;
@@ -7943,8 +7943,8 @@ function bind() {
       const capZoom = Math.max(capNorm, window.innerHeight * 0.94 - infoH - stripH - 10);
       if (zin) {
         // 放大态: wrap 只是**取景窗** (图片元素自身已是自然尺寸, 溢出由 overflow:hidden 裁掉),
-        // 所以不再跟图片比例走 —— 直接铺满可用区域 
-        // 比例稍微向外撑了一些, 我要的是直接铺满屏幕」)。竖向扣掉信息行与工具行的**实测**高度
+        // 所以不再跟图片比例走 —— 直接铺满可用区域 (2026-10-20: 取景窗此前
+        // 只是按比例向外撑, 现改为直接铺满屏幕)。竖向扣掉信息行与工具行的**实测**高度
         // (弹窗不滚动, 多给就会把下方那行顶出视口), 下方那两行与 ✕ / ‹ › 才不会被顶出视野。
         wrap.style.width = Math.max(1, Math.round(window.innerWidth * 0.98)) + 'px';
         wrap.style.height = Math.max(1, Math.round(capZoom)) + 'px';
@@ -8269,13 +8269,13 @@ loadLastSelfCheck();   // 载入上次体检报告: 页面刷新/服务重启后
 loadInterruptedTasks();  // 上次被拦腰砍断的任务 → 提示是否从断点继续
 loadVersionInfo();     // ℹ️ 版本与构建时间 (确认当前跑的是不是最新打包版)
 
-// ===== 🔔 事件驱动刷新调度器  =====
+// ===== 🔔 事件驱动刷新调度器 (覆盖整个数据库的一套机制) =====
 //   后端每次**成功的写请求**都会登记"哪些数据域变了"并经 SSE 推来 {"type":"dirty"};
 //   前端据此**只刷新对应视图** —— 图库改了刷图库/筛选项/统计, 作者改了刷作者页,
 //   下载/体检跑完各自刷相关页; 页面上任何入口都不用自己记得"改完要通知谁"。
 //   术语对照: 写侧登记 = event/state change 上报; 版本号 = revision; 这里 = 按域增量重算
 //   (scoped incremental refresh); SSE 断线时用 /api/dirty?since= 轮询补偿 = 反熵 (anti-entropy)。
-//   每个域一条「怎么把这块数据重新拉一遍」的规则 —— 后端说哪块脏了, 前端就只跑哪条。
+//   每个域一条「该域数据如何重新拉取」的规则 —— 后端说哪块脏了, 前端就只跑哪条。
 //   非图库数据的域(设置/登录/缩略图/备份/操作记录)额外加了"当前视图开着才拉"的守卫:
 //   没人看着的页面不该因为后台改动去白跑请求。
 const SCOPE_REFRESH = {
@@ -8359,7 +8359,7 @@ async function pollDirty() {
   paintSmartRefresh();   // 顺手校正提示 (lastAction 过期后按钮要回到默认文案)
 }
 
-// ===== 📜 运行日志查看  =====
+// ===== 📜 运行日志查看 (2026-09-27 从「活动现场」改名) =====
 // 后端把「接口流水 + 用户点击」都写进了 logs/activity/; 这里给一个只读的查看入口。
 async function loadActivityStats() {
   const el = $('#activity-stats');
@@ -8390,7 +8390,7 @@ window.openActivityLog = async function (n) {
   }
 };
 
-// ===== 🎯 万能刷新: 行脚医生 (轻量 / 定向, 2026-09-17 用户定位) =====
+// ===== 🎯 万能刷新: 行脚医生 (轻量 / 定向, 2026-09-17 定位) =====
 // 用户的比喻: 自检 = 医院全院普查 (多条、每条都是全量); 刷新 = 行脚医生 ——
 // 同样能筛查所有病症, 但**只诊治刚刚出问题的人**。所以:
 //   ① 每次关键改动记下 lastAction (作用域 + 目标 ID);
@@ -8443,7 +8443,7 @@ window.smartRefresh = async function () {
   const dirty = Object.keys(_dirtyScopes);
   if (b) { b.disabled = true; b.classList.add('spin'); }
   try {
-    // 「行脚医生」定位 : 刷新 = 同能力筛查、但**只诊治刚刚出问题的人**;
+    // 「行脚医生」定位: 刷新 = 同能力筛查、但**只诊治刚刚出问题的人**;
     // 全库磁盘普查是「自检」的活, 刷新不做, 保持毫秒级。
     // 但"当前视图的真实状态"必须**一步到位**: 封面改了 / 因修改在"按修改时间"里提到了最前 /
     // 新入库了 / 刚删掉了 —— 点一下就该看见 (旧实现按三分支走, 有时只刷了局部就收工)。
@@ -8468,7 +8468,7 @@ window.smartRefresh = async function () {
     }
     // ③ 当前视图重拉一遍 (列表/统计/筛选项/同步状态/回收站), 让"看得见的变化"都反映出来。
     //    手动点刷新 = 显式要求"按现在的真实状态重画一遍" → 用 force 绕过指纹跳过;
-    //    
+    //    (关了安全模式点刷新没反应 —— 指纹里漏了打码态, 已补,
     //     这里再加一层 force, 保证"用户点了就一定看得见重画"。)
     const jobs = [loadStats(), loadTrashBadge()];
     if (isTabActive('library')) {
@@ -8500,7 +8500,7 @@ window.smartRefresh = async function () {
 //   用户点了哪个按钮(CLICK) → 触发了哪个接口(HTTP) → 结果与耗时 —— 出事时照着 log 就能定位。
 // 三条纪律:
 //   ① 捕获阶段监听: 即使某处 JS stopPropagation 拦掉了冒泡, 也能记到;
-//   ② 批量攒着发(满 30 条或 0.8s 一次), **绝不逐条发请求** —— 用户明确要求不卡顿;
+//   ② 批量攒着发(满 30 条或 0.8s 一次), **绝不逐条发请求** —— 不卡顿;
 //   ③ 上报自身失败一律静默: 日志功能绝不影响正常使用。
 const _actQ = [];
 let _actTimer = null;

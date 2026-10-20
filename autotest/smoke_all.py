@@ -1,9 +1,9 @@
 # autotest/smoke_all.py
 r"""
-无人值守全自动冒烟自测脚本(参考「唯一后台任务+实时输出+报告落盘」)。
+无人值守全自动冒烟自测脚本 (唯一后台任务 + 实时输出 + 报告落盘)。
 
 用途:
-  - 新对话每改完一步代码, 直接执行:
+  - 改完代码后直接执行:
       $ .venv\Scripts\python.exe -m autotest.smoke_all
     就会自动跑完所有非交互式用例 + 生成 autotest/SMOKE_REPORT.md 报告。
 
@@ -14,7 +14,7 @@ r"""
   3) Tkinter GUI 构造不会卡住人: 主线程启动 ToolkitApp → after(600ms) 自动 destroy
      + 15s 全局 watchdog Timer 兜底（任何原因 mainloop 不退出都会被强制 destroy 退出,
      且超时写入报告 TIMEOUT）。
-  4) 进度实时 stdout + 最终落 SMOKE_REPORT.md（用户早上回来能直接打开看通过没）。
+  4) 进度实时 stdout + 最终落 SMOKE_REPORT.md（跑完直接打开报告看通过没）。
 
 用例列表:
   T1  语法全检: 全项目 .py 递归 py_compile（排除 .venv / __pycache__）
@@ -88,7 +88,7 @@ class SuiteResult:
         print(f"[{self.cases.index(self.cases[-1]) + 1:02d}/{self.cases[-1].case_id}] "
               f"{status}  {title}  ({dt_ms}ms)")
         if not ok:
-            # 实时打印错误到 stdout, 不等到报告才看见 
+            # 实时打印错误到 stdout, 不等到报告才看见
             print("--- FAIL DETAIL ---")
             print(detail)
             print("------------------")
@@ -380,7 +380,7 @@ def t7_entry_sanity() -> None:
     """T7: main.py / build.spec 基础完整性 + main 函数存在 + requirements 依赖声明无遗漏
 
     依赖那条是 2026-09-18 补的护栏: web/server.py 用了 Flask 却一直没写进 requirements.txt
-    (开发机 .venv 恰好装着 → 本地永远正常), 是典型的「只有别人 clone 才炸」的漏声明。
+    (开发机 .venv 恰好装着 → 本地永远正常), 是典型的漏声明 (只在别人 clone 时才暴露)。
     """
     # main.py
     main_py = PROJECT_ROOT / "main.py"
@@ -620,7 +620,7 @@ def t9_search_keyword_result_structure() -> None:
 def t13_ajax_data_layer() -> None:
     """T13: P4b+ · ajax 数据层 (搜索/作品/作者) —— 离线验证。
 
-    背景: 用户实测「ID/关键字搜索无结果」。探针实证 ①DOM 扫描只等第 1 个
+    背景: ID/关键字搜索无结果。探针实证 ①DOM 扫描只等第 1 个
     锚点出现就开爬 (SPA 约 2s 才渲染满) → 只出 1 条; ②xpaths.json 绝对路径
     失效 → author 爬成空。修复: ajax JSON 主通道 + DOM 兜底。
     """
@@ -707,7 +707,7 @@ def t13_ajax_data_layer() -> None:
 def t18_download_engine_writes_files() -> None:
     """T18: 下载引擎 → 本地文件写出 + run_cart 调度 (离线, 不开 Selenium)。
 
-    需求。分两层验证:
+    验证下载能力, 分两层:
       ① PixivDownloader.download_with_retry: 用本地 http.server 真实下载一个小图
          字节流 → 断言文件写出且字节一致; 404 路径返回 False (失败处理不炸)。
       ② run_cart 全调度: 临时 DB 塞 2 条 artwork + 1 条 author_all →
@@ -858,7 +858,7 @@ def t18_download_engine_writes_files() -> None:
 def t19_reverse_source_offline() -> None:
     """T19: 反搜来源 (saucenao 解析 + DB 缓存 + ReverseSource.process_one 归档) —— 离线。
 
-    需求。三层验证:
+    验证反搜来源, 分三层:
       ① saucenao 结果链接正则: 从典型 href 提取 artwork_id / author_id
       ② DB 反搜缓存 reverse_search_put/get 读写往返 (唯一键 upsert)
       ③ ReverseSource.process_one 归档: 打补丁跳过 Selenium (load_cookies_and_login /
@@ -941,7 +941,7 @@ def t19_reverse_source_offline() -> None:
 def t20_db_save_and_library() -> None:
     """T20: 数据库管理图片并保存 (入库→统计→搜索→导出/备份) —— 离线。
 
-    需求。验证:
+    验证数据库管理图片并保存:
       ① update_pages_from_output: 把本地输出目录里的 <aid>_p0.png 同步入库
          (pages DONE + artworks 自动建行)
       ② change_work_status 补元数据 (标题/作者/tags) → search_artworks 全文搜索命中
@@ -1049,7 +1049,7 @@ def t22_web_cart_and_library_api() -> None:
 
     路径隔离 (教训 2026-09): POST /api/cart 会顺带写 artworks/authors 表,
     不 mock paths 时测试数据 (作品 9001 / 作者 11「冒烟作者」) 会落进生产库
-    D:/vixiq-data/pixiv.db, 之后被后台补元数据写成「(作品已删除 9001)」空壳。
+    data/ 下的真实库, 之后被后台补元数据写成「(作品已删除 9001)」空壳。
     与 T30+ 一样把 user_data/data_root 重定向到临时目录。"""
     import tempfile
     import shutil
@@ -1466,7 +1466,7 @@ def t26_library_manage_crud() -> None:
     r = client.get("/api/library/facets")
     j = r.get_json()
     assert "tags" in j and "authors" in j, j
-    # 用真实 db 文件路径的临时库测写接口? 冒烟用 :memory: 无法跨请求共享,
+    # 用真实 db 文件路径的临时库测写接口? 冒烟用: memory: 无法跨请求共享,
     # 这里仅验证 404 缺参校验与返回结构 (写接口已由上面数据层覆盖)。
     r = client.post("/api/library/delete", json={"ids": []})
     assert r.status_code == 200 and r.get_json()["deleted"] == 0, r.status_code
@@ -1487,7 +1487,7 @@ def t26_library_manage_crud() -> None:
     assert r.status_code == 400, r.status_code
     r = client.post("/api/library/update", json={})
     assert r.status_code == 400, r.status_code
-    # 自检报告可回看 (过: 日志提示「39 个可疑项」但界面无处查看明细):
+    # 自检报告可回看 (日志提示「39 个可疑项」但界面无处查看明细):
     # 该接口必须始终返回 {running, result} 结构, result 内含 suspicious 明细供前端弹窗回显
     r = client.get("/api/library/self-check-last")
     j = r.get_json()
@@ -1640,7 +1640,7 @@ def t28_downloader_author_resolve_and_md5() -> None:
             def until(self, *a, **k):
                 raise RuntimeError("DOM 兜底也失败")
 
-        # 浏览器懒加载改造 (2026-09-16): driver/wait 是只读 property, 测试直注底层属性
+        # 浏览器懒加载改造: driver/wait 是只读 property, 测试直注底层属性
         d._driver = _FakeDriver()
         d._wait = _FakeWait()
         d._http = False
@@ -2486,13 +2486,13 @@ def t37_source_author_trace() -> None:
             "X图/niconico@赤倉/赤倉_im1234567.png": ("niconico", "赤倉"),
             "X图/skeb@alenaaenami/skeb_99.png": ("skeb", "alenaaenami"),
             "X图/yandere@momo/yande_456.png": ("yandere", "momo"),
-            # 2026-09-13 用户精简来源: nijie/pawoo/furaffinity/e621 不再识别 → None
+            # 2026-09-13 精简来源: nijie/pawoo/furaffinity/e621 不再识别 → None
             "X图/nijie@まる/nijie_12345.png": None,
             "X图/furaffinity@tiger/furaff_789.png": None,
             "X图/pawoo@tiger/pawoo_789.png": None,
             "X图/e621@fox/e621_456.png": None,
             "X图/画师甲@社团乙_4006137/84047578_p0.png": None,  # pixiv 昵称带 @, 非站点键
-            "X图/@rsk (sample)/sample_art_01.png": None,              # 无站点键
+            "X图/@某作者 (示例)/sample_art_01.png": None,              # 无站点键
         }
         for rel, want in cases.items():
             got = parse_foreign_account(rel)
@@ -2505,7 +2505,7 @@ def t37_source_author_trace() -> None:
         assert guess_foreign_source("yandere@momo/yande_456.png") == "yandere"
         assert guess_foreign_source("gelbooru@cat/gelb_123.png") == "gelbooru"
         assert guess_foreign_source("skeb@alenaaenami/skeb_99.png") == "skeb"
-        # 2026-09-13 用户精简: e621 不再识别 → other
+        # 2026-09-13 精简: e621 不再识别 → other
         assert guess_foreign_source("e621@fox/e621_456.png") == "other"
 
         # ①b 反搜结果链接识别 (detect_source_links 纯函数): 常用画师站 + booru 族 + 域名兜底
@@ -2526,7 +2526,7 @@ def t37_source_author_trace() -> None:
             assert r and r["site"] == site, (url, r)
             assert r["artwork_id"] == aid, (url, r)
             assert r["handle"] == handle, (url, r)
-        # 2026-09-13 用户精简来源: nijie/pawoo/furaffinity/e621 链接不再识别 → None
+        # 2026-09-13 精简来源: nijie/pawoo/furaffinity/e621 链接不再识别 → None
         for url in ("https://nijie.info/view.php?id=12345",
                     "https://pawoo.net/@alenaaenami/12345678901234567",
                     "https://www.furaffinity.net/view/12345678/",
@@ -2557,7 +2557,7 @@ def t37_source_author_trace() -> None:
         assert row[0] == "手动指定", row[0]
 
         # ④ 无站点键 / 无法解析的不填
-        e3 = db.register_foreign_file("X图/@rsk (sample)/sample_art_01.png")
+        e3 = db.register_foreign_file("X图/@某作者 (示例)/sample_art_01.png")
         row = db.conn.execute(
             "SELECT source_author FROM artworks WHERE artwork_id=?", (e3,)).fetchone()
         assert (row[0] or "") == ""
@@ -2993,27 +2993,27 @@ def run_suite() -> SuiteResult:
     suite.add("T113", "💥 ①磁盘对账不再把正常大图报成损坏(去掉「>60MB 一律判坏」, 只有空/极小文件与 PIL 真抛异常才算) + ①把自己校验出的损坏清单当场写进报告(单跑①也能在报告里看到是哪个文件/能一键重下) + 修好后旧条目自动消失 (离线)", t113_reconcile_corrupt_no_false_positive_and_report)
     suite.add("T114", "✅ 图库卡片态只看 pages 不看陈旧 artworks.status: 已失效(404)单独判 expired(不再谎报已入库/补全页数) + 本地补进缺失页后对账自动转已入库(不再卡在补全页数) + 反向验证(软删一页/附加页超tp都不算数仍判缺页) + tp为空退回只看status (离线)", t114_download_state_from_pages_not_stale_status)
     suite.add("T115", "🧹 下载任务「清空」跟随筛选(全部/未完成/已完成/失败 四 scope 各清各的, 未知 scope 当 all) + 清空进行中也不留后遗症(引擎写回改带原状态条件: 已清掉的行不被复活、别的操作刚写的状态不被覆盖、新任务不被波及) + 前端按钮/文案/已失效→搜索来源 静态检查 (离线)", t115_queue_clear_scope_and_writeback_guard)
-    suite.add("T116", "🛑 清空「进行中」的任务真的会中止下载: 认领闸门跳过被清空项(不下不落盘) + 逐页回查行没了就中止(已下好的页保留成缺页) + 中止后不卡 running(放回 pending)也不复活已删行 + 前端文案改「会被中止」静态检查 (离线)", t116_clear_running_task_actually_cancels)
+    suite.add("T116", "🛑 清空「进行中」的任务真的会中止下载(清空进行中=撤销该次下载): 认领闸门跳过被清空项(不下不落盘) + 逐页回查行没了就中止(已下好的页保留成缺页) + 中止后不卡 running(放回 pending)也不复活已删行 + 前端文案改「会被中止」静态检查 (离线)", t116_clear_running_task_actually_cancels)
     suite.add("T117", "🕒 导入图片会刷新「最近修改时间」: 已有作品补页导入真的刷 updated_at(不再只写 pages) + 新作品导入照旧排最前 + 重复对账不把整库刷成「刚刚」+ 按修改时间排序正确 + 新写的时间戳走 now_stamp (离线)", t117_import_bumps_updated_at)
     suite.add("T118", "📥 队列「先入先跑」+ 总进度条只按任务条数推进: queue_list FIFO(同秒按 id ASC) + 真跑 run_cart 验证下载顺序==入队顺序 + cart_progress 分母恒为队列条数(cur 覆盖 0..N) + 页级进度仍走 item_progress + 前端不认 progress 驱动总条 + 静态护栏 (离线)", t118_fifo_order_and_task_progress)
-    suite.add("T119", "🤖 AI 作品过滤: ①图库三档筛选(全部/仅AI/非AI 含未标记)+aiType 回填(解析 ajax aiType 1/2/缺=0、补全队列纳入缺 ai_type、「缺元数据」计数不纳入、无条件落值不卡队列) ②查询页(🌐 网络查询)默认隐藏 AI 卡片+就地重渲染+设置记住 ③迁移/接口/前端接线静态护栏 (离线)", t119_ai_filter_and_backfill)
-    suite.add("T120", "🔁 关键字搜索「换一批」+ 图库三个状态筛选挪到「全选」左边: 关键字结果以前写死 p=1 永远固定 → 现在按24条连续切片(不重复不跳号、跨pixiv页自动续取、续页挂掉保住已取到的) + 页级缓存(连点不重复打pixiv, 防风控) + offset 贯通到URL/DOM兜底 + 三个按钮进操作行排在「全选」左边+窄窗换行不溢出 (离线)", t120_keyword_paging_and_lib_layout)
-    suite.add("T121", "🏆✨ 查询页「没搜索时的推荐」两个来源可切换: ranking.php 老壳(unwrap=False)+无aiType→落未知 映射(字符串数字/illust_type/sexual R18/时间戳) + discovery 自带 aiType 复用 profile 映射 + AI判定三级来源(接口自带/图库/并发联网, 只在开「隐藏AI」时才花请求, 补过就记住) + 推荐内容缓存10分钟 + 前端两个来源/空输入回推荐/接推荐接口 + 限定 [data-scope] 防止误伤 searchScope (离线)", t121_search_feed)
-    suite.add("T122", "🗂 作者夹命名「全项目唯一规则」: 非法字符一律换 `_`(不再删掉) + 一键整理期望夹名==下载器==反搜一字不差 + 下载器复用磁盘已有同 ID 夹 + 全项目只留一处非法字符表 (离线)", t122_author_folder_naming_single_rule)
-    suite.add("T123", "🔎 关键词作者结果 →「📄 查看详情」进站内作者页(作品列表/翻批)并可「‹ 返回关键词结果」+ 「反搜来源」文件名捷径不再丢作者 (test_client 离线)", t123_author_detail_from_keyword_and_srcauthor)
+    suite.add("T119", "🤖 AI 作品过滤(按作品 AI 标记过滤): ①图库三档筛选(全部/仅AI/非AI 含未标记)+aiType 回填(解析 ajax aiType 1/2/缺=0、补全队列纳入缺 ai_type、「缺元数据」计数不纳入、无条件落值不卡队列) ②查询页(🌐 网络查询)默认隐藏 AI 卡片+就地重渲染+设置记住 ③迁移/接口/前端接线静态护栏 (离线)", t119_ai_filter_and_backfill)
+    suite.add("T120", "🔁 关键字搜索「换一批」+ 图库三个状态筛选挪到「全选」左边(两处调整): 关键字结果以前写死 p=1 永远固定 → 现在按24条连续切片(不重复不跳号、跨pixiv页自动续取、续页挂掉保住已取到的) + 页级缓存(连点不重复打pixiv, 防风控) + offset 贯通到URL/DOM兜底 + 三个按钮进操作行排在「全选」左边+窄窗换行不溢出 (离线)", t120_keyword_paging_and_lib_layout)
+    suite.add("T121", "🏆✨ 查询页「没搜索时的推荐」两个来源可切换(可在排行榜与个性化推荐间切换): ranking.php 老壳(unwrap=False)+无aiType→落未知 映射(字符串数字/illust_type/sexual R18/时间戳) + discovery 自带 aiType 复用 profile 映射 + AI判定三级来源(接口自带/图库/并发联网, 只在开「隐藏AI」时才花请求, 补过就记住) + 推荐内容缓存10分钟 + 前端两个来源/空输入回推荐/接推荐接口 + 限定 [data-scope] 防止误伤 searchScope (离线)", t121_search_feed)
+    suite.add("T122", "🗂 作者夹命名「全项目唯一规则」(作者甲_4997269 与 作者乙_4997269 双夹并存、一键整理每次改名都跳过): 非法字符一律换 `_`(不再删掉) + 一键整理期望夹名==下载器==反搜一字不差 + 下载器复用磁盘已有同 ID 夹 + 全项目只留一处非法字符表 (离线)", t122_author_folder_naming_single_rule)
+    suite.add("T123", "🔎 关键词作者结果 →「📄 查看详情」进站内作者页(作品列表/翻批)并可「‹ 返回关键词结果」+ 「反搜来源」文件名捷径不再丢作者(115531046 明明 ID 能打开原网页却说没识别出作者) (test_client 离线)", t123_author_detail_from_keyword_and_srcauthor)
     suite.add("T124", "🏷 按作品 ID 直查结果卡的标签不再连成一坨: .w-tags/.tag 的胶囊样式原本只写在 .work-card 作用域, .artwork-big 拿不到 → 两个作用域各补一份(flex+gap+胶囊圆角) + 前端版本号 (离线静态)", t124_artwork_big_tag_style)
-    suite.add("T125", "🎞 动图(ugoira)真下载成 GIF: ugoira_meta → zip → Pillow 合成可变延迟多帧 gif(保透明) + 裸 {pid}.gif 命名(自然键, 一键整理不动它) + 落库带宽高 + 失败绝不回退浏览器通道 (离线)", t125_ugoira_download_to_gif)
+    suite.add("T125", "🎞 动图(ugoira)真下载成 GIF(「动图下成一张低分辨率静态图」): ugoira_meta → zip → Pillow 合成可变延迟多帧 gif(保透明) + 裸 {pid}.gif 命名(自然键, 一键整理不动它) + 落库带宽高 + 失败绝不回退浏览器通道 (离线)", t125_ugoira_download_to_gif)
     suite.add("T126", "🖱 点图库作者名不再自动弹开作者/标签两个下拉框: libFilterByAuthor 不再派发假 input 事件(它正是下拉面板的展开触发器), 静默同步改走 input._clearSync + combo.setByValue/clear + pid 直查的作者卡带「📄 查看详情」与按来源分叉的返回条 (离线静态)", t126_combo_silent_sync_and_pid_author_detail)
     suite.add("T127", "🖼 当前壁纸信息窗: 读注册表拿到桌面正在播的那张 → 四档溯源(库内文件/MD5字节一致/文件名ID/ORB图像) + 形态差异(裁/转/缩) + 库内最大尺寸对比 + deep 结论缓存(轮询不来回跳) + 只读护栏(壁纸在图库内时拒绝回收/root=wall 防穿越) + 前端接线 (离线)", t127_wallpaper_current_trace)
     suite.add("T128", "🖥 托盘常驻纯函数: tooltip ≤120字符无换行 + 菜单两行灰字信息/命令顺序/缺文件灰掉 + 命令id唯一可读 + 窗口消息→动作映射全分支 + NOTIFYICONDATAW 尺寸976与字段偏移钉死实测值 (离线)", t128_tray_pure_functions)
-    suite.add("T129", "🖥 托盘生命周期策略: should_watch_browser 缺键不启用心跳守护 + second_instance_action 托盘在则弹提示否则回退 focus + 壁纸变化只刷tooltip(开了提示才弹气泡) + main.py 静态护栏(开关化/退出摘图标/托盘不自己加载整库特征) (离线)", t129_tray_lifecycle_policy)
+    suite.add("T129", "🖥 托盘生命周期策略(双击只驻托盘/退出唯一口径): should_watch_browser 缺键不启用心跳守护 + second_instance_action 托盘在则弹提示否则回退 focus + 壁纸变化只刷tooltip(开了提示才弹气泡) + main.py 静态护栏(开关化/退出摘图标/托盘不自己加载整库特征) (离线)", t129_tray_lifecycle_policy)
     suite.add("T130", "🧩 溯源抽核等价性(阶段1回归): core.wallpaper_trace 可注入 wall_path(离线不依赖本机注册表) + orb_fn 注入真的被调用/不注入只标 deep_error + 结论缓存不重复跑ORB + db_factory 每次新建连接(SQLite 绑定线程) + summary 文案 (离线)", t130_core_trace_injection)
     suite.add("T131", "🚀 启动与托盘开关: LAUNCHER_DEFAULTS 与 default.json 键集一致(默认只开托盘) + 老 user.json 缺节兜底 + save_user_config 深合并不抹掉 web.port/paths + /api/launcher 白名单过滤(丢弃_note/未知键, 全丢则400不写盘) + 设置页开关接线 + 桌面小控件(utils/widget_window.py)三态形状(补回缺口的长条便签 + 人字防滑纹路 + 缩略图/荧光色)/贴边几何/卡片键两套(文字键 3 颗 + 壁纸控制条四颗图标键, 已删「下一张壁纸·复制作品链接·图像溯源」)/main.py 接线护栏 + 「移出壁纸先换桌面再删文件」顺序 + 壁纸夹配置(paths.wallpaper_dir→candidates_dir→/api/wallpaper/dir/pick 原生目录对话框→设置页单按钮) + 没有当前壁纸时从壁纸夹一端起步 + 托盘退出向页面广播 app_quit + 「只在桌面露出来」(WindowFromPoint 爬到 Progman/WorkerW) + 换图随机档(?shuffle=1) + 设置页文案去口语/去冗长 + 网页版「当前壁纸」折叠记忆与🧹清理副本面板 + 只读副本扫描 + 旧的 Edge+wall.html 方案已彻底移除 (离线)", t131_launcher_config_switches)
-    suite.add("T132", "✨ 壁纸文案 AI: AI_DEFAULTS 与 default.json 键集一致(默认全关) + 缺节兜底 + ai_ready 四件套 + 提示词含画面线索/库外文件名不当内容 + 两行解析(去标签/序号/引号/书名号/行尾标点 + 硬夹到上限且断在断句点 + 标题一行不裁、氛围句换行塞得进卡片像素预算) + 落盘缓存按「路径+改动时间+大小」且同图只生成一次 + texts_for 只读缓存(轮询那条路一次接口都不许打) + generate_now 同步生成(表单值优先·必带图·点按钮即视为已启用) + 2026-09-27「上传失败」根因(max_tokens 被推理模型烧光)与「测试连接」共用同一套配置口径 + /api/ai 不回密钥原文/活动日志打码/旧的保存接口已删 + 小控件接线(ai_sig 进 info_key 才会刷新, 标题与氛围句 AI 优先本地兜底) (离线, generate 打桩)", t132_ai_text_pipeline)
-    suite.add("T133", "🖼 壁纸库生成: 尺寸门槛(宽≥1920 且高≥1080, 显式常量不许问屏幕)与比例门槛(偏离 16:9 ≤10%)分开回话 + 文件名 {作品ID}_p{页码}.{ext} 天然幂等 + 已标记的作品/页与无指纹页不参与 + 文件不在盘上算 missing + 幻灯片播不了的格式不倒进去 + 字节一致的原样复制(不缩放不裁剪, 裁切列留空) + 登记带 file_md5/src_md5/宽高/血缘(LEFT JOIN) + 重复跑新增 0 不翻倍 + 没配壁纸夹一律报错绝不猜 + /api/wallpaper/lib/scan 后台跑 + /api/wallpaper/lib 轮询 (离线)", t133_wallpaper_lib_generate)
-    suite.add("T134", "🚀📁 启动与托盘「立即生效」+ 📁 路径设置(用户: 开关为何要重启才生效 / 数据库路径没有设置选项, 我说的是所有路径 / 双击托盘快速打开图库 / 数据·配置·缓存向正常软件看齐但别占C盘): 除「启动自动开浏览器」外全部存盘即生效(热应用钩子 set_launcher_apply→main._apply_launcher 就地起停托盘/小控件, 心跳守护按代次门控——关了不许再自杀) + auto_open_browser 如实回报 startup_only + /api/paths 三处可改目录(图片目录可填单段相对名或绝对路径, 数据根/临时目录只收绝对路径; 空=回默认, 相对名拒绝400) + 落盘后当场回新落点(不靠带缓存的 paths.data_root) + 占用检测(数据库/图片/缩略图/特征库/临时各回 MB, 目录有上限地数) + /api/paths/temp/clean 一键清临时目录 + /api/paths/pick 复用系统目录对话框(取消不改/失败必回 JSON 不能当取消) + 位置一览含壁纸夹 + 文案只留一句「重启 Vixiq 后生效」不摆理由 (离线)", t134_launcher_hotapply_and_paths)
-    suite.add("T135", "🖼 查询页「按页下载」之一(用户: 点加入清单会整个作品下载, 我希望能分别单个下载 / 双击图片打开大图, 右下角要显示原图和下载该页, 下面还要像调整页序那样的缩略图多选区): 迁移 020 给队列加 pages TEXT(NULL=整部, 向后兼容, 且不塞 strategy——那列被当 DownloadStrategy 枚举解析) + queue_add(pages) 落排序去重 JSON 串 + GET /api/artwork/<id>/pages(未登录 200+need_login 不是401 / low=regular high=original / 合并库内页状态 / 超远端页数的标 is_extra / 不存在404) + POST /api/cart 带 pages 入队且 page_count 仍写远端总页数 (离线)", t135_artwork_pages_api_and_queue_pages)
-    suite.add("T136", "🖼 查询页「按页下载」之二 + 🔍 大图 1:1 放大 + ↔ 图库遮挡修复: _only_pages_of 纯函数(脏数据退回整部) + 引擎页级绕过「整部已下完就跳过」(否则点补某页被静默跳过) + 爬虫只下选中页且页级拒绝回落浏览器通道(它会按URL规律把未选页补齐) + init_pages 仍按远端总页数 + 前端 openRemoteLightbox(默认低清/显示原图/下载该页/🔗原网页, 没有上个下个作品) + 点图 1:1 放大(元素自身撑到自然尺寸 + 拖拽平移, 换页收缩放/同页切原图保留) + 原图只在点按钮后才加载 + 缩略图多选条(全选/已入库灰掉) + 卡片点击不再开原站 + 进调整页序收起那两颗按钮 + 拖拽夹取改用容器实际渲染尺寸 + 放大态图片元素自身撑到自然尺寸 + 缩略图多选条可折叠且跨打开记忆(折叠后大图高度 0.56→0.72, 修「✕ 只露一半 / 缩略图吃掉半屏」+ 放大态视口横向 97vw/竖向按实测行高吃满, 并用 capNorm 兜住「放大反而变小」+ 「点击查看大图」下沉本地图库查看器(同装 setupZoom, ✕ 一起改锚视口, is-remote 死代码已删) + 缩略图条 loading=lazy / 去掉相邻页原图预取 / /api/img 改流式转发带 Cache-Control) (离线静态)", t136_page_download_engine_and_frontend)
+    suite.add("T132", "✨ 壁纸文案 AI(2026-09-27 改成「一颗按钮·上传当前壁纸」): AI_DEFAULTS 与 default.json 键集一致(默认全关) + 缺节兜底 + ai_ready 四件套 + 提示词含画面线索/库外文件名不当内容 + 两行解析(去标签/序号/引号/书名号/行尾标点 + 硬夹到上限且断在断句点 + 标题一行不裁、氛围句换行塞得进卡片像素预算) + 落盘缓存按「路径+改动时间+大小」且同图只生成一次 + texts_for 只读缓存(轮询那条路一次接口都不许打) + generate_now 同步生成(表单值优先·必带图·点按钮即视为已启用) + 2026-09-27「上传失败」根因(max_tokens 被推理模型烧光)与「测试连接」共用同一套配置口径 + /api/ai 不回密钥原文/活动日志打码/旧的保存接口已删 + 小控件接线(ai_sig 进 info_key 才会刷新, 标题与氛围句 AI 优先本地兜底) (离线, generate 打桩)", t132_ai_text_pipeline)
+    suite.add("T133", "🖼 壁纸库生成(扫图库→原样复制进壁纸夹→登记): 尺寸门槛(宽≥1920 且高≥1080, 显式常量不许问屏幕)与比例门槛(偏离 16:9 ≤10%)分开回话 + 文件名 {作品ID}_p{页码}.{ext} 天然幂等 + 已标记的作品/页与无指纹页不参与 + 文件不在盘上算 missing + 幻灯片播不了的格式不倒进去 + 字节一致的原样复制(不缩放不裁剪, 裁切列留空) + 登记带 file_md5/src_md5/宽高/血缘(LEFT JOIN) + 重复跑新增 0 不翻倍 + 没配壁纸夹一律报错绝不猜 + /api/wallpaper/lib/scan 后台跑 + /api/wallpaper/lib 轮询 (离线)", t133_wallpaper_lib_generate)
+    suite.add("T134", "🚀📁 启动与托盘「立即生效」+ 📁 路径设置(开关存盘即生效 / 所有路径均可配置 / 双击托盘开图库 / 数据目录不占系统盘): 除「启动自动开浏览器」外全部存盘即生效(热应用钩子 set_launcher_apply→main._apply_launcher 就地起停托盘/小控件, 心跳守护按代次门控——关了不许再自杀) + auto_open_browser 如实回报 startup_only + /api/paths 三处可改目录(图片目录可填单段相对名或绝对路径, 数据根/临时目录只收绝对路径; 空=回默认, 相对名拒绝400) + 落盘后当场回新落点(不靠带缓存的 paths.data_root) + 占用检测(数据库/图片/缩略图/特征库/临时各回 MB, 目录有上限地数) + /api/paths/temp/clean 一键清临时目录 + /api/paths/pick 复用系统目录对话框(取消不改/失败必回 JSON 不能当取消) + 位置一览含壁纸夹 + 文案只留一句「重启 Vixiq 后生效」不摆理由 (离线)", t134_launcher_hotapply_and_paths)
+    suite.add("T135", "🖼 查询页「按页下载」之一(支持只下选中页 / 双击开大图 / 原图与下载按钮 / 缩略图多选区): 迁移 020 给队列加 pages TEXT(NULL=整部, 向后兼容, 且不塞 strategy——那列被当 DownloadStrategy 枚举解析) + queue_add(pages) 落排序去重 JSON 串 + GET /api/artwork/<id>/pages(未登录 200+need_login 不是401 / low=regular high=original / 合并库内页状态 / 超远端页数的标 is_extra / 不存在404) + POST /api/cart 带 pages 入队且 page_count 仍写远端总页数 (离线)", t135_artwork_pages_api_and_queue_pages)
+    suite.add("T136", "🖼 查询页「按页下载」之二 + 🔍 大图 1:1 放大 + ↔ 图库遮挡修复(调整页序时「上个作品/下个作品」挡住「完成」; 低清与原图看不出区别 / 是否一打开就取原图): _only_pages_of 纯函数(脏数据退回整部) + 引擎页级绕过「整部已下完就跳过」(否则点补某页被静默跳过) + 爬虫只下选中页且页级拒绝回落浏览器通道(它会按URL规律把未选页补齐) + init_pages 仍按远端总页数 + 前端 openRemoteLightbox(默认低清/显示原图/下载该页/🔗原网页, 没有上个下个作品) + 点图 1:1 放大(元素自身撑到自然尺寸 + 拖拽平移, 换页收缩放/同页切原图保留) + 原图只在点按钮后才加载 + 缩略图多选条(全选/已入库灰掉) + 卡片点击不再开原站 + 进调整页序收起那两颗按钮 + 拖拽夹取改用容器实际渲染尺寸(修「并不能拖动」: curNw 存的是自然尺寸, 拿它当视口上限恒为 0) + 放大态图片元素自身撑到自然尺寸(修「只是把这个块拖动 / 不是查看其他区域」: 只给 object-fit:none 时裁剪窗口锚在元素盒子上) + 缩略图多选条可折叠且跨打开记忆(折叠后大图高度 0.56→0.72, 修「✕ 只露一半 / 缩略图吃掉半屏」+ 放大态视口横向 97vw/竖向按实测行高吃满, 并用 capNorm 兜住「放大反而变小」+ 「点击查看大图」下沉本地图库查看器(同装 setupZoom, ✕ 一起改锚视口, is-remote 死代码已删) + 缩略图条 loading=lazy / 去掉相邻页原图预取 / /api/img 改流式转发带 Cache-Control) (离线静态)", t136_page_download_engine_and_frontend)
     suite.write_report()
     return suite
 
@@ -3935,7 +3935,7 @@ def t55_readable_labels_and_title_repair() -> None:
         assert db.get_artwork_metadata("merged_x1")["title"] == "miku with flower"
         assert db.get_artwork_metadata("merged_x2")["title"] == "旧占位标题图"
         assert db.repair_id_titles() == 0     # 幂等: 再跑没有可修的
-        # schema 已无 name_locked 列 (v009 引入的锁定机制按要求整体移除, v010 删列)
+        # schema 已无 name_locked 列 (v009 引入的锁定机制整体移除, v010 删列)
         assert "name_locked" not in [r[1] for r in db.conn.execute("PRAGMA table_info(artworks)")]
         db.close()
 
@@ -4001,7 +4001,7 @@ def t56_waifu2x_special_format() -> None:
     assert _WAIFU_TAIL_RE.search("sample_art_10_w2x2x")
     assert _WAIFU_TAIL_RE.search("20250722_102048_waifu2x_noise1")
     assert not _WAIFU_TAIL_RE.search("abc_waifu2x_final")
-    # 整个名字就是标记 (匹配起点=0, 没有主体) → 调用处靠 `start() > 0` 跳过, 不该动
+    # 整个名字就是标记 (匹配起点=0, 没有主体) → 调用处靠 `start > 0` 跳过, 不该动
     assert _WAIFU_TAIL_RE.search("waifu2x").start() == 0
 
     # ③ 计划级: 畸形放大版产出计划; 已规范的放大版不产生计划
@@ -4150,7 +4150,7 @@ def t57_deleted_flag_is_a_field() -> None:
 
 
 def t58_one_way_loop() -> None:
-    """T58: 单向闭环 用户 → 数据库 → 磁盘  ——
+    """T58: 单向闭环 用户 → 数据库 → 磁盘 ——
     ① 磁盘与数据库不一致时 **绝不自动改库**: 只出「待确认」并带上两边证据, 争议夹整夹冻结;
     ② 唯一回流写入入口 /api/library/tidy/adopt-claim: 作者未建档才用夹名建, 已建档**不改其名**;
     ③ 非 pixiv 乱码文件名规范成 `{站点@账号}_{序号}` (不写作者名、不写假页码) (离线)。"""
@@ -4240,7 +4240,7 @@ def t58_one_way_loop() -> None:
 
 
 def t59_one_way_audit_fixes() -> None:
-    """T59: 单向闭环审计的四处修正 (2026-09-14) ——
+    """T59: 单向闭环审计的四处修正 ——
     ① 单来源 local_ 作者的文件已在 `作者夹/站点@账号` 里 → 目标是**平铺回作者夹**,
        不再是 `作者夹/作者夹` 自我套娃 (真实图库实测撞到);
     ② 标题回填只在文件主干是「人读信息」时用它, 否则「未命名作品」(不把哈希名灌进库);
@@ -4348,7 +4348,7 @@ def t59_one_way_audit_fixes() -> None:
 
 def t60_foreign_author_from_source_page() -> None:
     """T60: 外来源作者名必须取**源网页当前值**, 不再直接采信 SauceNAO 结果卡
-    (第三方索引快照 —— 作者改过名就永远是旧名; 用户实测: 卡片「ying yi」,
+    (第三方索引快照 —— 作者改过名就永远是旧名; 卡片「ying yi」,
     而 artstation.com/artwork/DAJVOE 当前作者是「qing ying」/账号 qing0ying0) ——
     ① 网页读得到 → 用网页名 + 账号, author_src='page';
     ② 网页读不到但有 URL 账号 → 用账号, author_src='handle';
@@ -4395,7 +4395,7 @@ def t60_foreign_author_from_source_page() -> None:
 
 
 def t61_single_author_identity() -> None:
-    """T61: 本地作者身份只认一套键  ——
+    """T61: 本地作者身份只认一套键 (同一个人被拆成两条作者、两个夹) ——
     ① `foreign_author_id(站点,账号)` 是唯一稳定键 (与 backfill 同一套);
     ② 同 (站点,账号) 用不同显示名建两次 → **同一条**作者, 且不覆盖已有现用名;
     ③ 已有作品用 (站点,账号) 归属过 → 复用那条, 不再新算一个 id;
@@ -4468,7 +4468,7 @@ def t61_single_author_identity() -> None:
 
 
 def t62_tidy_removes_empty_dirs() -> None:
-    """T62: 一键整理自带「清理空夹」 ——
+    """T62: 一键整理自带「清理空夹」(一键整理要自带清空夹) ——
     ① 真·空夹 / 只剩系统杂物(Thumbs.db)的夹 → 产生 rmdir 计划 (auto, 默认勾选);
     ② 含任何真实文件(.txt/.psd…)的夹 → **不**删 (比健康面板"不含图片即删"更保守);
     ③ 嵌套空夹只列最外面那一处 (子夹随它一起删, 不刷一排重复行);
@@ -4888,7 +4888,7 @@ def t68_missing_page_url_inference() -> None:
 
 
 def t69_jpg_to_png_convert() -> None:
-    """T69: convert_to_png 入库格式统一 (2026-09-15)。"""
+    """T69: convert_to_png 入库格式统一。"""
     import tempfile, shutil
     from PIL import Image
     from core.crawler import convert_to_png
@@ -4980,7 +4980,7 @@ def t70_promote_completed_after_output_sync() -> None:
 
 
 def t71_search_local_status_injection() -> None:
-    """T71: 搜索结果注入本地状态。
+    """T71: 搜索结果注入本地状态 (库里有图却缺本地文件标记)。
 
     搜索结果来自 pixiv 实时抓取, 本身不含本地信息; 旧接口不补 → 前端一律显示
     「📁 无本地文件」, 已入库作品还显示可点的「加入清单」, 点了才被告知已下载完成。"""
@@ -5024,7 +5024,7 @@ def t71_search_local_status_injection() -> None:
 
 
 def t72_bump_created_at_sorting() -> None:
-    """T72: 入库时间刷新。
+    """T72: 入库时间刷新 (下载后按入库排序不在前面)。
 
     created_at 原本只在加入清单时写入 → 排序反映的是加清单时刻。R18 作品常只下到
     部分页(状态 NOT_YET), 若只在「完整完成」时刷新就永远排不到前面 —— 故改为
@@ -5182,7 +5182,7 @@ def t74_import_from_folder_moves_files() -> None:
         assert (tmp / "img" / "900001_p0.png").exists(), "未落到图库 img/"
         assert (tmp / "input" / "screenshot.png").exists(), "无作品ID未转反搜收件箱"
 
-        # ②b 同名重复 → 跳过, **源文件留在原处** 
+        # ②b 同名重复 → 跳过, **源文件留在原处** (宁可不导也不动源文件)
         dup = tmp / "downloads2"
         dup.mkdir(parents=True)
         (dup / "900001_p0.png").write_bytes(b"content-differs" * 4)
@@ -5237,10 +5237,10 @@ def t74_import_from_folder_moves_files() -> None:
 
 
 def t75_split_pages_creates_single_artworks() -> None:
-    """T75: 图片拆分。
+    """T75: 图片拆分 (2026-09-16 需求 + 实测)。
 
     ① 非 pixiv 作品可自由拆 → 每张独立成新作品，源作品保留 total_pages、只改归属;
-    ② 新作品**继承源作品的作者/来源/R18**（用户实测：不继承会显示「未知作者」）;
+    ② 新作品**继承源作品的作者/来源/R18**(不继承会显示「未知作者」);
     ③ pixiv 作品的**原网页页**(origin='web')禁止拆出（会让原作品缺页），且拦下时不动库;
     ④ pixiv 作品的**合并附加页**(origin='merged')允许拆 —— 那是「反悔合并」;
     ⑤ 源作品被拆空 → 级联删除；文件不移动。"""
@@ -5296,8 +5296,7 @@ def t75_split_pages_creates_single_artworks() -> None:
         j = r.get_json()
         assert r.status_code == 200 and j["pages_moved"] == 1, j
         new_id = j["created"][0]
-        # 非 pixiv 来源拆出的新作品直接是 ext_ 身份 
-        # 已确认外来源的作品不该一直背着 merged_ 合并产物前缀)
+        # 非 pixiv 来源拆出的新作品直接是 ext_ 身份, 不该一直背着 merged_ 合并产物前缀
         assert new_id.startswith("ext_"), new_id
         db3 = PixivDatabase(str(tmp / "pixiv.db"))
         nm = db3.get_artwork_metadata(new_id)
@@ -5328,10 +5327,10 @@ def t75_split_pages_creates_single_artworks() -> None:
 
 
 def t76_merge_keeps_source_status_in_sync() -> None:
-    """T76: 合并的两条铁律 (2026-09-16)。
+    """T76: 合并的两条铁律。
 
     ① pixiv 作品(纯数字 ID)的页**不允许**被合并走 —— 保持 pixiv 作品页数完整，
-       以后某张图找到 pixiv 来源才能归属回去 (需求，后端硬拦);
+       以后某张图找到 pixiv 来源才能归属回去 (后端硬拦);
     ② 非 pixiv 作品之间自由合并时，源作品被搬走页后必须同步状态（旧实现漏了这一步，
        源作品仍显示 DONE → 界面谎报「✓ 已入库」且点不到「补下缺失页」），
        且源/目标的 total_pages 都不能被清。"""
@@ -5399,7 +5398,7 @@ def t76_merge_keeps_source_status_in_sync() -> None:
 def t77_version_endpoint() -> None:
     """T77: /api/version 返回构建信息。
 
-    用途: 用户怀疑「改了怎么没生效 / 是不是忘了打包」时，先看这个接口 ——
+    用途: 排查「改动没生效 / 忘了重新打包」时，先看这个接口 ——
     built_at 是可执行文件时间(打包时刻)，frontend 是 index.html 引用的前端资源版本串
     (用于确认浏览器加载的是不是新前端)。"""
     from web.server import create_app
@@ -5415,7 +5414,7 @@ def t77_version_endpoint() -> None:
     assert j["frontend"], f"应能读出前端资源版本串: {j}"
     assert isinstance(j["frozen"], bool), j
     assert j["python"], j
-    # 前端版本串 = index.html 手写标签 + app.js/style.css 的 mtime 指纹 (2026-09-16):
+    # 前端版本串 = index.html 手写标签 + app.js/style.css 的 mtime 指纹 
     # 自动指纹是为了根治「改了前端但浏览器用缓存旧文件」——以前靠人手 bump, 漏一次就白改。
     # 同时校验: 页面 "/" 实际注入的 app.js/style.css ?v= 必须与接口报的完全一致,
     # 否则这个指示器就是在骗人。
@@ -5454,7 +5453,7 @@ def t77_version_endpoint() -> None:
 
 def t78_merge_self_no_fake_conflict() -> None:
     """T78: 把占位作品并入它自己时, 磁盘上还没挪走的源文件不能被当成"别人的占用"
-    而加 " (2)" .png")。"""
+    而加 " (2)" (88007979 手动合并后 p0/p1 全变 "xxx (2).png")。"""
     import tempfile
     from db.store import PixivDatabase, PSt, WSt
 
@@ -5509,7 +5508,7 @@ def t78_merge_self_no_fake_conflict() -> None:
 
 def t79_upsert_author_rejects_garbage_name() -> None:
     """T79: 控制台编码损坏产生的 '????????' / '???' 绝不能顶掉作者真名
-。"""
+    (山田の性活が第一 被顶成????????, 真名沉进别名)。"""
     from db.store import PixivDatabase
 
     db = PixivDatabase(":memory:")
@@ -5726,7 +5725,7 @@ def t84_delete_page_marks_partial_and_stale_done_guard() -> None:
     """T84: 手动删掉多页作品的一页后, 作品必须立即变「缺页」——
     ① delete_pages 重算状态 (status DONE→NOT_YET, total_pages 保留);
     ② artwork_download_states 对「status 陈旧 DONE 但页数不齐」的历史脏数据
-       也要判 partial (旧版按钮永远显示「✓ 已入库」,  2026-09-16);
+       也要判 partial (旧版按钮永远显示「✓ 已入库」);
     ③ 删光最后一页 → 整作品级联删除, 不留幽灵作品。"""
     from db.store import PixivDatabase, PSt, WSt
 
@@ -5819,8 +5818,8 @@ def t85_only_aid_filter_and_updated_sort() -> None:
 
 
 def t86_merged_external_reidentify_and_junk_titles() -> None:
-    """T86: 合并产物的身份纠正 + 内部键标题修复 
-    「合并后 id/标题一直是 merged，即使标了真实来源」)。
+    """T86: 合并产物的身份纠正 + 内部键标题修复
+    (合并后 id/标题一直是 merged, 即使标了真实来源)。
     ① `merged_` + 已确认外部来源 (source 或 source_url) → 主键改 `ext_`、
        pages 随外键级联、queue 项跟随、内部键标题换成「站点 · @账号」;
     ② 纯 pixiv 页的合并产物 (source 为 NULL/pixiv) **不动** —— 那属于「认领散落页」;
@@ -6026,7 +6025,7 @@ def t88_check_split_steps_and_status() -> None:
 
 
 def t89_check_report_split_and_ignore() -> None:
-    """T89: 报告分「可疑项 / 待办项」+ 条目可忽略 (用户: "清单怎么不见少")。
+    """T89: 报告分「可疑项 / 待办项」+ 条目可忽略。
 
     ① 「文件丢失」= 可疑项, 「缺作者名」= 待办项, 两边分开放 (旧版混在一起,
        于是补不回来的"待办"永远挂在"可疑"里, 数字看着永远不降);
@@ -6199,9 +6198,9 @@ def _t9x_env(tmp: Path):
 
 
 def t91_cart_repair_force_and_intent() -> None:
-    """T91: 「♻ 重下修复」= 显式声明"覆盖重下"的接口 (用户 2026-09-16 方案)。
+    """T91: 「♻ 重下修复」= 显式声明"覆盖重下"的接口。
 
-    的矛盾: 加入下载遇到库里已有的图, 代码没法自行判断"该覆盖还是跳过"。
+    设计上的矛盾: 加入下载遇到库里已有的图, 代码没法自行判断"该覆盖还是跳过"。
     解法 = 意图由用户显式选:
       ① 「加入下载」(单个/批量) 语义永远是"有则跳过、缺页补全" —— DONE 一律拦下, 永不覆盖;
       ② 「重下修复」语义永远是"用官方源覆盖" —— 允许 DONE 入队, 且固定 overwrite 策略,
@@ -6282,7 +6281,7 @@ def t91_cart_repair_force_and_intent() -> None:
 
 
 def t92_pixiv_author_declare_and_fill_name() -> None:
-    """T92: 手动填作者时"明确告诉数据库他是 pixiv 作者" (用户 2026-09-16 要求)。
+    """T92: 手动填作者时"明确告诉数据库他是 pixiv 作者"。
 
     以前: 库里没有的名字一律建成「自定义作者」, 没有任何途径声明"这是 pixiv 作者"。
     现在:
@@ -6353,7 +6352,7 @@ def t92_pixiv_author_declare_and_fill_name() -> None:
 
 
 def t93_author_links_structured_and_bind_pixiv() -> None:
-    """T93: 作者「来源链接」不只是记录 —— 要结构化、要产生关联 (用户 2026-09-16 要求)。
+    """T93: 作者「来源链接」不只是记录 —— 要结构化、要产生关联。
 
     ① 可多条, 保存时自动识别站点与账号 (site/label/handle), 非 URL 直接丢弃;
     ② 链接**产生关联**: 记了 https://x.com/foo → 该作者名下「来源=X 且没记账号」的作品
@@ -6467,7 +6466,7 @@ def t93_author_links_structured_and_bind_pixiv() -> None:
 
 
 def t94_scoped_light_refresh() -> None:
-    """T94: 🎯 轻量/定向刷新 (用户 2026-09-17: "自检拆成小项后每项仍是全量, 能不能只刷这一块")。
+    """T94: 🎯 轻量/定向刷新 ("自检拆成小项后每项仍是全量, 能不能只刷这一块")。
 
     ① 单作者刷新: 本地作者无 pixiv 账号 → 明确拒绝; pixiv 作者但没登录 → 明确提示 (不静默失败);
     ② 定向刷新作品: 状态/页数重算 + 来源 URL 归类 (只在"未知/other"时改写) + 磁盘文件缺失报告;
@@ -6560,7 +6559,7 @@ def t94_scoped_light_refresh() -> None:
 
 
 def t95_author_reconcile_and_claim_image() -> None:
-    """T95: 🗂 作者对账台 + ✅ 配对认领 (用户 2026-09-17: 未知来源/本地 ID 的图转正成 pixiv 卡片)。
+    """T95: 🗂 作者对账台 + ✅ 配对认领 (未知来源/本地 ID 的图转正成 pixiv 卡片)。
 
     场景: 一堆外来源图挂着本地 ID (ext_xxx)、作者已手动指定成 pixiv 画师, 但作品不是正式
     pixiv 卡片。全站以图搜图太慢、逐张翻 pixiv 太贵 → 候选集限定在**这个作者**。
@@ -6669,7 +6668,7 @@ def t95_author_reconcile_and_claim_image() -> None:
             with PixivDatabase(str(tmp / "pixiv.db")) as db3:
                 assert db3.get_work_info("999001").done, "两页都齐了 → 应重算成 DONE"
 
-            # ⑤ 附加页 :
+            # ⑤ 附加页:
             #    999001 原 2 页, 把 ext_cccc 认领到 p2 → 不再失败, 自动是 origin='merged'
             #    的附加页; 作品保持 DONE, total_pages 保持 2 (不被降级/不被改写)
             with PixivDatabase(str(tmp / "pixiv.db")) as db4:
@@ -6706,7 +6705,7 @@ def t95_author_reconcile_and_claim_image() -> None:
                     "同步时不许因附加页把 total_pages 置空"
                 assert db5.get_work_info("999001").done, "同步后作品仍应是完整"
 
-            # ⑥ 「塞进已入库作品」不再把状态搞乱 
+            # ⑥ 「塞进已入库作品」不再把状态搞乱 (对账台里把多余图片
             #    塞进显示「已入库」的作品会错乱):
             #    ⑥a 目标 DONE 但 total_pages 未知 → 塞一张后**必须仍是 DONE**
             #        (旧实现的完整判据 bool(tp) and ... 在 tp 未知时一律打 NOT_YET,
@@ -6795,7 +6794,7 @@ def t95_author_reconcile_and_claim_image() -> None:
 
 
 def t99_page_reorder_and_safemode_mask() -> None:
-    """T99: ↔ 作品内页序调整 +  安全模式「不加载 R18 像素」(用户 2026-09-17)。
+    """T99: ↔ 作品内页序调整 +  安全模式「不加载 R18 像素」。
 
     ① reorder-pages: 手动认领/自动溯源可能把页序挂反, 事后要能调。换序后 pages 行
        page_num 跟着换, 但 md5/origin/尺寸**跟文件走**、total_pages(原网页页数)绝不动、
@@ -6804,11 +6803,11 @@ def t99_page_reorder_and_safemode_mask() -> None:
     ③ 用户自命名的文件只调库内顺序, 一个字符都不碰用户的文件名。
     ④ 安全模式打码 (静态): 前端必须走 imgSrc(u,w)/safeThumb(u,w) 出图 —— 安全模式下直接返回
        占位图, 浏览器从不请求 R18 真实像素; 不许再有绕过这两个函数的裸图片地址。
-    ⑤ 缓存穿透 (的根因): 图片 URL 必须带内容版本令牌
+    ⑤ 缓存穿透 (封面一直是旧图的根因): 图片 URL 必须带内容版本令牌
        v=(mtime+size) —— 「同名路径换内容」时 URL 必变, 否则浏览器吃 30 天旧缓存;
        且前端不许猜文件名改 URL, 必须回服务端重取页清单。
     ⑥ 原子性: 磁盘改名失败 → 400, 库与磁盘都不许变 (先改名后写库 + 失败回滚)。
-    ⑦ 图库列表「不闪」(): 条目必须带
+    ⑦ 图库列表「不闪」(「删一个作品时整个列表的按钮都会闪一下」): 条目必须带
        dl_state(首屏即终态, 不靠异步纠正), 前端载荷没变时不许重建 DOM; Lightbox 左右
        翻页按钮必须 fixed 锚在视口两端(不随图片宽高移动)。"""
     import tempfile
@@ -6925,9 +6924,9 @@ def t99_page_reorder_and_safemode_mask() -> None:
                 encoding="utf-8")
             assert "不加载原图" in idx_html, "安全模式说明要写清「不加载」而非「模糊」"
 
-            # ⑤ 缓存穿透 : 调页序是「文件名不变、内容互换」,
+            # ⑤ 缓存穿透 (根因): 调页序是「文件名不变、内容互换」,
             #    URL 里的 p= 是路径 → 不变; 而响应带 max-age=2592000(30天), 浏览器
-            #    会一直显示旧图 → 用户看到「调了却没调 / 封面还是那样」。所以图片 URL
+            #    会一直显示旧图 → 看起来像改动没生效。所以图片 URL
             #    必须带内容版本令牌 v=(mtime+size), 同一路径内容变了 URL 必变。
             import web.server as wsrv3
             rel_a = "有江リリ_63051477/manual_a.png"
@@ -6950,7 +6949,7 @@ def t99_page_reorder_and_safemode_mask() -> None:
             assert "refetchPages" in appjs and "view=artwork" in appjs, \
                 "页序调整后必须回服务端重取该作品的页清单"
 
-            # ⑦ 图库列表「不闪」:
+            # ⑦ 图库列表「不闪」(删一个作品, 整个列表的按钮都闪一下):
             #    ① 图库条目必须带 dl_state —— 不带的话卡片按钮先按默认样式渲染, 再被
             #       decorateCartButtons 异步改成「✔ 已下载 / ⏳ 已在下载列表」, 每次都闪;
             #    ② 前端一次刷新若载荷没变就不许重建 DOM —— 删除后本地刷一次、350ms 后
@@ -6967,7 +6966,7 @@ def t99_page_reorder_and_safemode_mask() -> None:
             nav = css.split(".lightbox-prev, .lightbox-next {")[1].split("}")[0]
             assert "position: fixed" in nav, \
                 f"翻页按钮必须 fixed 定位(否则竖图/宽图会把它拽得左右乱跑): {nav}"
-            # ④ 翻页时信息行文字不许闪 :
+            # ④ 翻页时信息行文字不许闪 (「左右切换时那些文字会闪烁」):
             #    不许再"先清空再回填", 且首屏就要带上本页已知的 file_size(否则库内没记
             #    宽高的 318 页会先空白、等原图解码再冒出尺寸); 动态那两段文字要固定宽度。
             assert "lbFile.textContent = ''" not in appjs, \
@@ -6980,8 +6979,7 @@ def t99_page_reorder_and_safemode_mask() -> None:
                     f"{sel} 缺少 {need}(位数变化会把整行文字推来推去)"
 
             # ⑧ 页码空洞: 删过页的作品(页号不连续)也 must 能移动 + 能用附加页填洞
-            #    
-            #     准确来说我甚至无法移动附加图片的排序」—— 旧实现一遇空洞就整体 400)
+            #    (旧实现一遇空洞就整体 400, 附加页完全没法参与排序)
             _Image.new("RGB", (64, 96), (200, 10, 10)).save(d / "888020_p0.png")
             _Image.new("RGB", (64, 96), (10, 200, 10)).save(d / "888020_p1.png")
             _Image.new("RGB", (64, 96), (10, 10, 200)).save(d / "888020_p3.png")
@@ -7042,7 +7040,7 @@ def t99_page_reorder_and_safemode_mask() -> None:
             # 「附加页」的显示判据必须**只有一处**(pageIsExtra, 按页号位置判定):
             # 删页/调序会把页号换来换去, 再拿当初的 origin 当显示判据就会出现
             # 「原 2 页却把 p1 标成附加」「原 2 页却把 p2 标成原网页页」这类错乱显示
-            # 
+            # (「删页+随意调序后显示有 bug」, 真实用例 94992683 / 114518913)
             assert "function pageIsExtra" in appjs, "缺少统一的「是否附加页」判据"
             assert appjs.count("origin === 'merged'") == 1, \
                 "「附加页」显示判据必须统一走 pageIsExtra(按位置), 不能再散着看 origin"
@@ -7050,7 +7048,7 @@ def t99_page_reorder_and_safemode_mask() -> None:
                 "「填入空位」必须走点对点改号 assign"
             # 走 order 还是 assign, 必须按「页码是否正好 0..n-1」判断 —— 服务端的 order 就是这么
             # 要求的; 用"tp 范围内有没有洞"判断会漏掉「带附加页但没洞」的作品(p0,p1,p4 / 原 2 页),
-            # 那种作品发 order 会被 400 顶回来, 用户点了像没反应 (2026-09-17)
+            # 那种作品发 order 会被 400 顶回来, 用户点了像没反应 
             assert "const consecutive = numOf.every((n, k) => n === k)" in appjs and \
                 "if (!consecutive) {" in appjs, \
                 "order/assign 的选择条件必须是「页码是否正好 0..n-1」"
@@ -7104,7 +7102,7 @@ def t99_page_reorder_and_safemode_mask() -> None:
 
 
 def t96_event_driven_dirty_scopes() -> None:
-    """T96: 🔔 事件驱动刷新 (用户 2026-09-17: 要一套覆盖整个数据库的机制, 不只某个页面)。
+    """T96: 🔔 事件驱动刷新 (要一套覆盖整个数据库的机制, 不只某个页面)。
 
     机制三件套: ① 写请求经 after_request 自动登记受影响的数据域 + 实体 id;
     ② 每个域维护版本号, 登记时经 SSE 广播 {"type":"dirty"};
@@ -7191,7 +7189,7 @@ def t96_event_driven_dirty_scopes() -> None:
 
 
 def t97_event_driven_coverage_and_noise() -> None:
-    """T97: 🔔 事件驱动"全覆盖 + 不空转" (用户 2026-09-17 追加: 不只作者页, 整个库都要)。
+    """T97: 🔔 事件驱动"全覆盖 + 不空转" (追加: 不只作者页, 整个库都要)。
 
     ① 覆盖: 设置(安全模式)/缩略图缓存/登录态/备份/操作记录 这些"非图库数据"的域也要登记,
        且图库类写操作现在会连带 ops (设置页操作记录表);
@@ -7276,7 +7274,7 @@ def t97_event_driven_coverage_and_noise() -> None:
 
 
 def t98_frontend_icon_variation_selector() -> None:
-    """T98: 前端图标「变体选择符」体检 (用户 2026-09-17: 对账台的 🗂 图标又显示错误了)。
+    """T98: 前端图标「变体选择符」体检 (对账台的 🗂 图标又显示错误了)。
 
     背景: 🗂 / 🗑 / 🖼 / 🏷 / ❓ 这些码位在 Unicode 里**默认是「文字呈现」** —— 不加
     U+FE0F 变体选择符时, Windows 上会渲染成黑白线条甚至方框 (2026-09-06 的 🏷/🗑、
@@ -7470,7 +7468,7 @@ def t100_trash_soft_delete_and_custom_import() -> None:
                               "cascade_choice": "keep"}).get_json()
         assert r["pages_deleted"] == 1 and r["artworks_trashed"] == 0, r
         assert any(x["artwork_id"] == "777777" for x in items("view=artwork")), \
-            "选「保留作品」时作品必须留在图库"
+            "选「保留作品」时作品必须留在图库(删图不级联拖走整个作品)"
         # ⑥ 零页选择 trash: 作品一并进回收站
         client.post("/api/library/trash/restore",
                     json={"items": [{"artwork_id": "777777", "page_num": 0}]})
@@ -7495,7 +7493,7 @@ def t100_trash_soft_delete_and_custom_import() -> None:
         assert all(x["artwork_id"] != "654321"
                    for x in client.get("/api/library/trash/list?kind=artwork").get_json()["items"])
 
-        # ⑧ 导入: 标准作品直接入库; 非标准作品由设计约定 (默认转反搜 / 可选建自定义作品)
+        # ⑧ 导入: 标准作品直接入库; 非标准作品由使用者决定 (默认转反搜 / 可选建自定义作品)
         src = tmp / "src_in"
         src.mkdir()
         (src / "888888_p0.png").write_bytes(b"SYNTH-PIXIV")
@@ -7529,7 +7527,7 @@ def t100_trash_soft_delete_and_custom_import() -> None:
         assert 'data-tab="trash"' in indexh and 'id="tab-trash"' in indexh, "导航要有回收站页"
         assert 'id="trash-badge"' in indexh, "回收站角标要存在"
         assert "不知道刷什么时就点它" not in (indexh + appjs), \
-            "刷新提示语要简化 "
+            "刷新提示语要简化 (这个提示很蠢)"
         for fn in ("function loadTrash", "window.trashRestoreArtwork", "window.trashPurgeArtwork",
                    "function loadTrashBadge", "window.trashPurgeAll", "window.trashRestoreAll"):
             assert fn in appjs, f"缺回收站前端函数: {fn}"
@@ -7544,7 +7542,7 @@ def t100_trash_soft_delete_and_custom_import() -> None:
 def t101_render_state_invariants() -> None:
     """T101: 「渲染态」不变量 —— 钉住"漏了渲染态导致界面不刷新 / 漏了打码导致走光"这一整类 bug。
 
-    来由 : 关掉安全模式后切回来图片还是打码的, 点刷新也没用, 必须
+    来由: 关掉安全模式后切回来图片还是打码的, 点刷新也没用, 必须
     清空筛选再选回来才生效。根因 = 图库的重画判据只用"数据载荷"当指纹, 而**打码态**这种
     "渲染态"没进指纹 → 数据一个字没变就判定"不用重画" → 用户看到旧样子。
     同一类问题还有两个走光口子(回收站页/对账台直接把真实图片地址写进 <img>, 绕过了打码)。
@@ -7606,7 +7604,7 @@ def t101_render_state_invariants() -> None:
     # ④ 不许把「人读字符串」字段当数组用。
     #    2026-09-18 事故: `(r.would_empty_labels || r.would_empty || []).join('、')` ——
     #    would_empty_labels 是字符串, .join 抛 TypeError 被外层 catch 吞掉, 表现为
-    #    「移入回收站失败…」toast + 界面毫无变化 = 的"点删除没反应, 点几次都一样"。
+    #    「移入回收站失败…」toast + 界面毫无变化，点删除没反应、点几次都一样。
     #    这类"服务端字段形状与前端假设不一致"的 bug 静态就能拦。
     assert "r.would_empty_labels || r.would_empty || []).join" not in appjs, \
         "would_empty_labels 是字符串, 不能 .join —— 必须走 _emptyChoiceLabels() 做形状容错"
@@ -7616,7 +7614,7 @@ def t101_render_state_invariants() -> None:
 
 
 def t102_activity_monitor() -> None:
-    """T102: 📡 实时活动日志  —— 打屏 + 落盘、按大小滚动、按期保留、
+    """T102: 📡 实时活动日志 —— 打屏 + 落盘、按大小滚动、按期保留、
     回读接口, 以及"服务端 HTTP 流水 + 前端行为上报"两条来源与噪声路径过滤。
     """
     import tempfile
@@ -7720,7 +7718,7 @@ def t102_activity_monitor() -> None:
         indexh = (PROJECT_ROOT / "web/static/index.html").read_text(encoding="utf-8")
         assert 'id="activity-stats"' in indexh and "openActivityLog()" in indexh, \
             "设置页要有运行日志卡片"
-        # 2026-09-27 用户: 「活动现场(可回放)是什么鬼…为什么要叫这么莫名其妙的名字」→ 改名
+        # → 改名
         assert "活动现场" not in indexh, "旧名字又回来了"
         assert "📜 运行日志" in indexh, "设置页该叫「运行日志」"
         css = (PROJECT_ROOT / "web/static/style.css").read_text(encoding="utf-8")
@@ -7738,7 +7736,7 @@ def t102_activity_monitor() -> None:
 
 
 def t103_check_recheck_report() -> None:
-    """T103: ⑥「汇总报告」→「复检报告」(用户 2026-09-18 要求): 把上一版报告逐条重新核对 ——
+    """T103: ⑥「汇总报告」→「复检报告」: 把上一版报告逐条重新核对 ——
     已解决的**清理掉**、变了的**更新**、仍存在的保留; 且本次没条件复检的来源(对应步骤没跑)
     必须原样保留并标注, **绝不许当成"已解决"清掉**(否则单跑 ⑥ 会静默丢掉联网类问题)。"""
     import tempfile
@@ -7860,7 +7858,7 @@ def t103_check_recheck_report() -> None:
 
 
 def t104_reverse_inbox_outlet() -> None:
-    """T104: 反搜收件箱的"出路"(用户 2026-09-18 报"没找到结果就留在那了, 我不能继续入库了")。
+    """T104: 反搜收件箱的"出路" —— 没找到结果的图必须还有下一步, 不能卡在收件箱里。
 
     ① 未命中被挪进 input/not_found/ 的图必须**仍出现在待反搜列表**里(以前只扫顶层 →
        它们从界面消失、再也勾不到); ② 单张/批量「手动入库」→ 收进 img/#其他来源#/ 并登记
@@ -7998,7 +7996,7 @@ def t104_reverse_inbox_outlet() -> None:
 
 
 def t105_same_name_author_and_gather_files() -> None:
-    """T105: 「同名 ≠ 同一人」与「绑定后文件跟着走」(用户 2026-09-18 报「测试画师有两条记录」)。
+    """T105: 「同名 ≠ 同一人」与「绑定后文件跟着走」(同一作者出现两条记录)。
 
     ① 本地作者(bilibili 账号, local_ 键) 与真 pixiv 作者同名时会各占一行 —— 这是**对的**
        (站点账号与 pixiv ID 本就是两种身份), 但**必须看得出来**: 作者列表给本地作者行带上
@@ -8133,7 +8131,7 @@ def t105_same_name_author_and_gather_files() -> None:
 
 
 def t106_author_works_paging() -> None:
-    """T106: 作者搜索结果里的作品列表「为什么不是全部 + 为什么不能换一批」(用户 2026-09-18 报)。
+    """T106: 作者搜索结果里的作品列表要能看到全部, 并且能换一批。
 
     以前后端写死 `fetch_author(limit=12)`, 界面也没有翻页入口 —— 永远只看到最新 12 个。
     ① profile/all 的**全部**作品 id 参与切片, offset 生效, 且返回总数 works_total;
@@ -8221,7 +8219,7 @@ def t106_author_works_paging() -> None:
 
 
 def t107_auto_bookmark_and_follow() -> None:
-    """T107: 「下载后自动收藏(♡)」+「关注画师」(用户 2026-09-18 要求)。
+    """T107: 「下载后自动收藏(♡)」+「关注画师」。
 
     写接口的契约是从 pixiv 前端 JS 里挖出来的, 这里用**假传输层**把它钉死:
     ① 收藏 = POST /ajax/illusts/bookmarks/add, JSON 体, restrict 0=公开/1=非公开,
@@ -8233,7 +8231,7 @@ def t107_auto_bookmark_and_follow() -> None:
     ⑤ 关注 = POST /bookmark_add.php(mode=add&type=user), 取关 = /rpc_group_setting.php
        (mode=del&type=bookuser), 状态读 /ajax/user/:id 的 isFollowed;
     ⑥ 接口护栏: 非 pixiv 作者/未登录 → 400; ⑦ 前端与设置页接线(静态);
-    ⑧ 默认值: 设计约定(保守默认会让他以为功能没做)。
+    ⑧ 默认值: 「默认开启 + R18 自动非公开」(保守默认会让他以为功能没做)。
     """
     import json as _json
     import tempfile
@@ -8465,7 +8463,7 @@ def t107_auto_bookmark_and_follow() -> None:
         assert "hydrateFollowButtons(box, type === 'author' || type === 'artwork')" in appjs, \
             "作品页只有一个作者, 关注状态该预取(否则已关注的也显示成「♡ 关注」)"
 
-        # ⑧ 默认值: 设计约定(保守默认 → 用户以为功能没做, 2026-09-18 )
+        # ⑧ 默认值: 「默认开启」(保守默认 → 用户以为功能没做)
         assert ucfg._canonicalize({})["pixiv_actions"]["auto_bookmark"] is True, \
             "_canonicalize 兜底里自动收藏必须默认开启"
         dflt = _json.loads((PROJECT_ROOT / "resources/default.json").read_text(encoding="utf-8"))
@@ -8486,7 +8484,7 @@ def t107_auto_bookmark_and_follow() -> None:
 
 
 def t108_rev_task_clear_failed_and_settings_layout() -> None:
-    """T108: 反搜任务表「只清空失败」+ 设置页卡片被内容顶破的布局 (用户 2026-09-18 报)。
+    """T108: 反搜任务表「只清空失败」+ 设置页卡片被内容顶破的布局。
 
     ① 任务表除「清空全部」外要有「🧹 清空失败」，且只摘掉失败/待确认的行（文件与图库记录都不动）；
        摘掉的行在新一轮反搜开始、或结果换代(last_result.time 变了)时**必须失效**，
@@ -8521,11 +8519,11 @@ def t108_rev_task_clear_failed_and_settings_layout() -> None:
 
 
 def t109_author_keyword_search_fast_path() -> None:
-    """T109: 关键词作者搜索的**快路** (用户 2026-09-18 问「为什么这么慢」)。
+    """T109: 关键词作者搜索的**快路** (避免每次都掉进慢路)。
 
     根因: 老代码拿 `/ajax/search/users/<kw>`（**路径版**, pixiv 早已下架 → 404）去试，
     永远失败 → 每次都掉进 DOM 爬页面那条慢路（2 次页面加载 + 最长 4.8s 等 SPA 渲染收敛
-    + 逐个 ajax 补名字）。实测 `示例画师` 要 2.5s，而作品搜索只要 0.3s。
+    + 逐个 ajax 补名字）。实测作者搜索要 2.5s，而作品搜索只要 0.3s。
     正确端点是 **`/ajax/search/users?nick=<kw>`**（查询参数），一次就返回
     userIds + 名字 + 头像 + 简介，HTTP 直连 ~0.2s。
     这里用离线假响应把三件事钉住: 端点写法、形状解析（含老形状兼容/兜底）、
@@ -8550,17 +8548,17 @@ def t109_author_keyword_search_fast_path() -> None:
 
     # ① 现代形状: users 一次带齐 (名字/头像/简介)
     modern = {"data": [], "page": {"userIds": ["1", "2", "3"], "total": "3"},
-              "users": [{"userId": "1", "name": "示例画师", "image": "http://a.jpg",
+              "users": [{"userId": "1", "name": "テスト", "image": "http://a.jpg",
                          "comment": "自我介绍"},
-                        {"userId": "2", "name": "示例画师き", "image": "http://b.jpg"},
+                        {"userId": "2", "name": "テストき", "image": "http://b.jpg"},
                         {"userId": "3", "name": "无关的人"}]}
     state["search_body"] = modern
-    aus, ok = sc._search_users_ajax("示例画师", limit=30)
+    aus, ok = sc._search_users_ajax("テスト", limit=30)
     assert ok is True, "现代形状必须判定为「接口可用」"
     assert [a.author_id for a in aus] == ["1", "2"], f"只留名字匹配的两位: {[a.name for a in aus]}"
-    assert aus[0].name == "示例画师" and aus[0].avatar_url == "http://a.jpg", aus[0]
+    assert aus[0].name == "テスト" and aus[0].avatar_url == "http://a.jpg", aus[0]
     assert aus[0].bio == "自我介绍", f"接口给的简介要带上: {aus[0].bio}"
-    assert seen_urls == ["https://www.pixiv.net/ajax/search/users?nick=%E3%81%BF%E3%82%89%E3%81%A4&blt=0&lang=zh"], \
+    assert seen_urls == ["https://www.pixiv.net/ajax/search/users?nick=%E3%83%86%E3%82%B9%E3%83%88&blt=0&lang=zh"], \
         f"端点必须是 ?nick= 查询参数版(路径版 404): {seen_urls}"
 
     # ② users 为空但给了 userIds → 逐个 ajax/user 补名字再过滤
@@ -8592,7 +8590,7 @@ def t109_author_keyword_search_fast_path() -> None:
     state["search_body"] = modern
     sc.reporter = _NullReporter()
     sc.login_ok = True
-    got = sc.search_authors("示例画师")
+    got = sc.search_authors("テスト")
     assert dom_calls == [], f"ajax 成功时不该再爬页面(这就是慢的原因): {dom_calls}"
     assert len(got) == 2, got
 
@@ -8600,8 +8598,8 @@ def t109_author_keyword_search_fast_path() -> None:
         seen_urls.append(url)
         raise _AjaxNotFound("404")
     sc._ajax_get = _boom
-    sc.search_authors("示例画师")
-    assert dom_calls == ["示例画师"], f"ajax 不可用时才允许 DOM 兜底: {dom_calls}"
+    sc.search_authors("テスト")
+    assert dom_calls == ["テスト"], f"ajax 不可用时才允许 DOM 兜底: {dom_calls}"
 
     # ⑥ 静态护栏: 源码里不许再出现路径版端点
     src = (PROJECT_ROOT / "core/search_client.py").read_text(encoding="utf-8")
@@ -8624,7 +8622,7 @@ class _NullReporter:
 
 
 def t110_check_report_no_stale_items() -> None:
-    """T110: 体检条目「处理完了还一直显示」+ 汇总条一直挂着 (用户 2026-09-18 报)。
+    """T110: 体检条目「处理完了还一直显示」+ 汇总条一直挂着。
 
     ① **真 bug**: `/api/library/self-check-dismiss`(处理完一条后调用) 只从落盘文件的
        `suspicious` 里删, `todos` 里那份还在 → 重启读盘时(`_ck_load_report_from_disk`
@@ -8636,7 +8634,7 @@ def t110_check_report_no_stale_items() -> None:
        解决了自动清掉; `legacy_name / metadata_failed` 这些**必须重跑对应步骤**的一律保持原样(绝不误清)。
        「损坏图」只判**文件还在不在**: 文件还在就原样保留(哪怕其实已修好 —— 没重跑①就不许
        宣称"损坏已修复", 那才是真的丢信息); 文件被删/移走 → 这条描述已不成立 → 清掉
-。
+       (已删除的损坏图仍出现在报告里)。
     ④ 两个桶互斥(同一条不会两边都有), 前端有去重兜底与新文案。
     """
     import shutil
@@ -8718,9 +8716,9 @@ def t110_check_report_no_stale_items() -> None:
         # 必须重跑步骤才行的类型绝不许被清 (误清 = 假报"已解决")
         assert str(img / "坏图.png") in refs, \
             "文件还在的损坏图本地判不了好没好, 绝不许当成已解决清掉"
-        # 用户 2026-09-21 报: 图片删了报告还在
+        # 图片删了报告还在
         assert str(img / "已删的坏图.png") not in refs, \
-            "文件已被删掉的损坏图条目要清掉"
+            "文件已被删掉的损坏图条目要清掉(否则报告会一直列出已不存在的文件)"
         # 两个桶互斥
         s_refs = {x["ref"] for x in j["suspicious"]}
         t_refs = {x["ref"] for x in j["todos"]}
@@ -8793,7 +8791,7 @@ def t110_check_report_no_stale_items() -> None:
             assert k in appjs, f"前端缺少接线/文案: {k}"
 
         # 文案护栏: 上一轮为「去第二人称」做机械替换, 把判据/口径全塞进正文长句
-        # (「分两类的判据是「谁能修」」「不敢当成"已解决"清掉」),。
+        # (按「谁能修」分类, 不轻易当成"已解决"清掉)。
         # 这里钉住那批措辞不许回潮, 并要求报告段不能出现**两层嵌套括号**。
         css = (PROJECT_ROOT / "web/static/style.css").read_text(encoding="utf-8")
         for k in (".chk-stats", ".chk-sec-note", ".chk-recheck-head", ".chk-help"):
@@ -8816,17 +8814,17 @@ def t110_check_report_no_stale_items() -> None:
 
 
 def t111_timestamp_format_and_updated_sort() -> None:
-    """T111: 时间戳格式统一 —— 「按修改时间排序时某几条永远顶在最前面」(用户 2026-09-18 报)。
+    """T111: 时间戳格式统一 —— 「按修改时间排序时某几条永远顶在最前面」。
 
-    症状:。
-    根因: 那几条的 `updated_at` 是老代码用 `datetime.now().isoformat()` 写的
+    症状: 几条旧记录一直顶在最前面, 后面改动的图反而排不到前面。
+    根因: 那几条的 `updated_at` 是老代码用 `datetime.now.isoformat` 写的
     (本地时间 + 'T' + 微秒), 而别人都是 UTC + 空格。排序是**字符串比较**,
     第 11 个字符 'T'(0x54) > ' '(0x20) → 同一天里带 'T' 的**无条件排第一**。
-    ① `now_stamp()` = 唯一写法 (UTC + 空格, 与 schema 默认值同格式);
-    ② `normalize_ts()` 能把老值按**本机时区**换算回 UTC 空格 (不是简单替换 'T');
+    ① `now_stamp` = 唯一写法 (UTC + 空格, 与 schema 默认值同格式);
+    ② `normalize_ts` 能把老值按**本机时区**换算回 UTC 空格 (不是简单替换 'T');
     ③ 所有写 artworks.updated_at / authors.last_updated 的路径都必须用它 (老路径曾漏 6 处);
-    ④ `normalize_all_timestamps()` 幂等、且修好后排序正确 (改得晚的排前面);
-    ⑤ 静态护栏: store.py 里不许再出现 `now().isoformat()`。
+    ④ `normalize_all_timestamps` 幂等、且修好后排序正确 (改得晚的排前面);
+    ⑤ 静态护栏: store.py 里不许再出现 `now.isoformat`。
     """
     import datetime as _dt
     from db.store import PixivDatabase, WSt, now_stamp, normalize_ts
@@ -8903,7 +8901,7 @@ def t111_timestamp_format_and_updated_sort() -> None:
 
 
 def t112_reverse_stale_failed_tasks_pruned() -> None:
-    """T112: 反搜「失败任务反复出现」+「还提示文件仍在反搜区」(用户 2026-09-18 报)。
+    """T112: 反搜「失败任务反复出现」+「还提示文件仍在反搜区」。
 
     ① 任务表是从 `reverse_results.json` 重建的, 而入库/丢弃/清空**谁都没动过这个文件**
        → 手动入库之后, 那些「未识别」行每次刷新又回来, 点清空也没用;
@@ -8989,7 +8987,7 @@ def t112_reverse_stale_failed_tasks_pruned() -> None:
 
 
 def t113_reconcile_corrupt_no_false_positive_and_report() -> None:
-    """T113: 「① 磁盘对账」把正常大图误报成损坏 + 报告里查不到是哪个文件 (用户 2026-09-19 报)。
+    """T113: 「① 磁盘对账」把正常大图误报成损坏 + 报告里查不到是哪个文件。
 
     ① 判据里原有一条「>60MB 一律判损坏」, 本意是"太大就不开图, 防撑爆内存",
        实际把"没校验"说成了"损坏" —— 用户那张 63.5MB / 1.27 亿像素的**正常**大图
@@ -9070,7 +9068,7 @@ def t113_reconcile_corrupt_no_false_positive_and_report() -> None:
 
 
 def t114_download_state_from_pages_not_stale_status() -> None:
-    """T114: 图库卡片按钮态只认 pages, 不再被陈旧的 artworks.status 卡住 (用户 2026-09-20 报)。
+    """T114: 图库卡片按钮态只认 pages, 不再被陈旧的 artworks.status 卡住。
 
     旧逻辑 `full = (status == DONE and 页数齐)` 把可能陈旧的 artworks.status 当闸门:
       - 87881705 式: 用户本地补进缺失页后, reconcile_output 只把 page 刷成 DONE,
@@ -9155,11 +9153,11 @@ def t114_download_state_from_pages_not_stale_status() -> None:
 
 
 def t115_queue_clear_scope_and_writeback_guard() -> None:
-    """T115: 下载任务「清空」跟随筛选 + 清空进行中的写回闸门 (用户 2026-09-20 要求)。
+    """T115: 下载任务「清空」跟随筛选 + 清空进行中的写回闸门。
 
     背景: 原来只有一个「🧹 清空已完成」(只删 status='done'), 失败/未开始/整个队列都清不掉;
     后端虽早有 DELETE FROM download_queue_items 全清接口, 前端却从没有任何按钮调用它(死接口)。
-    用户明确要求「允许清且包含进行中, 但要加保护避免副作用和 bug」。
+    「允许清且包含进行中, 但要加保护避免副作用和 bug」。
 
     断言 (全离线, 临时库):
       A 四个 scope 各清各的: all / running(pending+running) / done / failed, 互不牵连
@@ -9250,7 +9248,7 @@ def t115_queue_clear_scope_and_writeback_guard() -> None:
 def t116_clear_running_task_actually_cancels() -> None:
     """T116: 清空「进行中」的任务真的会中止下载。
 
-    :
+    清空一个进行中的任务, 等于撤销这次下载。
     以前只是删掉记录 —— 引擎手里那份开跑时的快照照样把它下完, 于是出现「记录没了、
     图却照样进库」。本用例分四层验证:
 
@@ -9421,7 +9419,7 @@ def t116_clear_running_task_actually_cancels() -> None:
 def t117_import_bumps_updated_at() -> None:
     """T117: 导入图片要刷新「最近修改时间」。
 
-    用户:「导入图片的操作不会更新『最近修改时间』, 不知道是不是只有缺页作品导入页数
+    , 不知道是不是只有缺页作品导入页数
     会这样还是新作品导入也会这样」。查下来是**一半对**:
 
       - 新作品导入: 会。`init_works` 建行时 schema 的 DEFAULT (datetime('now')) 就是
@@ -9509,8 +9507,8 @@ def t117_import_bumps_updated_at() -> None:
 def t118_fifo_order_and_task_progress() -> None:
     """T118: 队列「先入先跑」+ 总进度条只按任务条数推进。
 
-    用户两问:
-      ① 「为什么不是先入先跑, 这样才符合直觉吧?」 —— 原来 queue_list 是
+    两点要求:
+      ① 队列改为先入先跑 (更符合直觉) —— 原来 queue_list 是
          `added_at DESC, id DESC` (最新入队的先跑, 是「加入清单即自动下载」的配套),
          改为 ASC 后最旧的最先下。
       ② 「原来这进度条只是摆设」 —— 进度其实是真在跟的, 但总进度条被两套口径互相
@@ -9638,7 +9636,7 @@ def t118_fifo_order_and_task_progress() -> None:
 def t119_ai_filter_and_backfill() -> None:
     """T119: 图库「AI 作品」筛选 + aiType 回填链路。
 
-    用户:「查询结果能不能加个过滤 AI 作品的选项, 不想看 ai 作品」。
+。
     拍板: 筛选默认值 = 「全部」(不改变现有默认视图); 回填**不加新按钮**, 复用现有
     「补全元数据」链路。
 
@@ -9754,7 +9752,7 @@ def t119_ai_filter_and_backfill() -> None:
     appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "ai: ''" in appjs and "p.set('ai', libFilters.ai || '')" in appjs, \
         "前端要把图库的 ai 筛选带进请求"
-    # 查询页(🌐 网络查询): 排除 AI 作品卡片 —— "这才是最重要的"
+    # 查询页(🌐 网络查询): 排除 AI 作品卡片 —— 最重要的一项
     assert "function splitAiWorks" in appjs and "splitAiWorks(res.works)" in appjs, \
         "查询页作品列表要过 AI 过滤"
     assert "Number(res.artwork.ai_type || 0) === 2" in appjs, \
@@ -9763,19 +9761,19 @@ def t119_ai_filter_and_backfill() -> None:
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'id="lib-f-ai"' in html, "图库筛选栏要有 AI 下拉"
     assert '<option value="" selected>AI: 全部</option>' in html, \
-        "AI 筛选默认必须是「全部」"
+        "AI 筛选默认必须是「全部」(不改变现有默认视图)"
     assert 'id="search-hide-ai"' in html and 'class="btn icon-toggle active"' in html, \
         "查询页要有「🚫 隐藏 AI 作品」开关且默认开启"
     assert 'data-tab="search">🌐 网络查询<' in html, \
-        "「查询」tab 改名「网络查询」, 跟「图库」区分开 "
+        "「查询」tab 改名「网络查询」, 跟「图库」区分开 (避免与「图库」混淆)"
 
 
 def t120_keyword_paging_and_lib_layout() -> None:
-    """T120: 关键字搜索「换一批」+ 图库三个状态筛选挪到「全选」左边 (2026-09-20)。
+    """T120: 关键字搜索「换一批」+ 图库三个状态筛选挪到「全选」左边。
 
-    用户两问:
-      ① 「使用关键词搜索图片的结果是固定的吗? 可以的话想加一个换一批的按钮」
-         —— 是固定的: URL 里写死 `p=1`, 同一个词每次搜到的永远是同一批。
+    两点要求:
+      ① 关键词搜索结果要能「换一批」
+         —— 原来是固定的: URL 里写死 `p=1`, 同一个词每次搜到的永远是同一批。
       ② 「『缺元数据』『缺失文件』『已失效』三个按钮放『全选』按钮的左边吧,
          现在和它们一行的筛选控件太多把他们挤到下一行了」
 
@@ -9783,7 +9781,7 @@ def t120_keyword_paging_and_lib_layout() -> None:
       A 分页切片: offset 连续取, **不重复也不跳过**; 跨 pixiv 分页(每页 60 条)
         自动续取; 续页挂掉只丢续页(有多少给多少), 首页挂掉才上抛走 DOM 兜底;
       B 页级缓存: 连点「换一批」时 offset 0/24/48 都落在第 1 页 → 必须只打 1 次
-        pixiv (用户明确担心风控, 缓存就是为这个加的);
+        pixiv (为避免触发风控, 缓存就是为这个加的);
       C 参数贯通: search_keyword(offset=) 真的传给了取数层, 且 URL 里不再是死 p=1;
       D 布局: 三个按钮挪进操作行、排在「全选」左边, 且已不在筛选行里。
     """
@@ -9929,7 +9927,7 @@ def t120_keyword_paging_and_lib_layout() -> None:
 def t121_search_feed() -> None:
     """T121: 查询页「没输入内容时显示推荐」的两个来源。
 
-    用户先选「排行榜」, 追问「不能在排行榜和个性推荐之间切换吗」→ 拍板做成可切换。
+    初版只做「排行榜」, 之后追加个性推荐, 两者做成可切换。
     实测两个接口的差异(这决定了整个设计):
       ranking   `ranking.php?mode=daily&format=json` 50 条, **没有 aiType**, 且**不是 /ajax/ 壳**
                 (无 {error, body}, 数据直接挂顶层 contents)
@@ -10119,7 +10117,7 @@ def t121_search_feed() -> None:
     assert "hide_ai" in srv, "接口要收 hide_ai —— 它决定要不要为排行榜联网补 AI 标记"
     assert 'res["ai_filled"] = filled' in srv, "要把「本次花了几条请求」如实报出来"
     assert "_feed_ai_types" in srv and "max_workers=6" in srv, \
-        "并发补 AI 判定要有上限"
+        "并发补 AI 判定要有上限(避免触发风控)"
 
     appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "function loadFeed" in appjs and "function renderFeed" in appjs, "前端要有推荐区"
@@ -10147,7 +10145,7 @@ def t121_search_feed() -> None:
 
 
 def t122_author_folder_naming_single_rule() -> None:
-    """T122: 作者夹命名「全项目唯一规则」(2026-09-21 治本 —— 磁盘上同时存在
+    """T122: 作者夹命名「全项目唯一规则」(治本: 磁盘上同时存在
     `作者甲_4997269` 与 `作者乙_4997269`, 一键整理每次都想改名、
     又因目标夹已存在而永远跳过, 点多少次都白点) ——
     ① 非法字符一律换成 `_` (旧下载器/反搜是「删掉」, 两边对不上才会长出第二个夹);
@@ -10252,10 +10250,10 @@ def t122_author_folder_naming_single_rule() -> None:
 
 
 def t123_author_detail_from_keyword_and_srcauthor() -> None:
-    """T123 (2026-09-21, 用户两条报障):
+    """T123 (2026-09-21 两处问题):
     ① 关键词查作者的结果里每位作者要能「📄 查看详情」进到和「直接输入作者 ID」一样的作者页
        (作者卡 + 作品列表 + 翻批), 且能「‹ 返回关键词结果」;
-    ② 「反搜来源」走文件名捷径时不能把作者丢掉 ——  `115531046` 明明作品 ID 能直接打开
+    ② 「反搜来源」走文件名捷径时不能把作者丢掉 —— `115531046` 明明作品 ID 能直接打开
        原网页, 结果却只说「命中 Pixiv #115531046」, 作者一栏空着 (本地 DB 其实早记着作者)。
     """
     import re as _re
@@ -10355,7 +10353,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
 
 
 def t124_artwork_big_tag_style() -> None:
-    """T124 (2026-09-21, ):
+    """T124 (作品卡片的 tag 曾连在一起):
     `.w-tags` / `.tag` 的胶囊样式只写在 `.work-card` 作用域里, 而按作品 ID 直查的结果卡
     用的是 `.artwork-big` → 拿不到那条规则, 既没有 gap 也没有胶囊外观, 标签全挤成一坨。
     这里做静态护栏: 两个作用域必须各有一份, 且别再写第三套。
@@ -10391,14 +10389,14 @@ def t124_artwork_big_tag_style() -> None:
 
 
 def t125_ugoira_download_to_gif() -> None:
-    """T125 (2026-09-21, ):
+    """T125 (动图必须合成 gif, 不能只下静态帧):
     pixiv 的动图 (ugoira) 跟静图**不是一个通道** —— `ajax/illust/{id}/pages` 只给一张
     缩过的静态帧图, 真动图在 `ajax/illust/{id}/ugoira_meta` 里 (一个 zip, 每帧一张 png
     + `frames[{file, delay}]`, 延迟可变)。这里做两件事:
       ① 纯函数离线跑: `parse_ugoira_frames` 的脏数据兜底 + `compose_ugoira_gif` 真能把
          内存 zip 合成可变延迟的多帧 gif (用 Pillow 回读校验帧数/时长/尺寸/透明);
       ② 静态护栏: 下载器必须分流动图、命名裸 `{pid}.gif`、落库带宽高、失败**绝不回退
-         浏览器**(浏览器通道也只有静态帧图, 回退 = 把的 bug 再演一遍),
+         浏览器**(浏览器通道也只有静态帧图, 回退 = 把同一个 bug 再演一遍),
          且一键整理的「文件名规范化」不会把这个名字改掉。
     """
     import io as _io
@@ -10499,7 +10497,7 @@ def t125_ugoira_download_to_gif() -> None:
 
 
 def t126_combo_silent_sync_and_pid_author_detail() -> None:
-    """T126 (2026-09-21, 用户两条反馈, 均为前端静态护栏 —— 前端无离线 DOM 可跑):
+    """T126 (2026-09-21 两处调整, 均为前端静态护栏 —— 前端无离线 DOM 可跑):
     ① 「图库点作者名会自动弹开作者/标签两个下拉框」: 根因是 `libFilterByAuthor` 为刷新
        「✕」小叉叉状态而**派发合成 input 事件**, 而 makeCombo 里 input 正是展开面板的
        触发器 → 点一次作者名弹两个框。护栏: 那条路径不许再出现 dispatchEvent, 静默同步
@@ -10517,7 +10515,7 @@ def t126_combo_silent_sync_and_pid_author_detail() -> None:
     assert _m, "找不到 libFilterByAuthor"
     _body = _m.group(0)
     assert "dispatchEvent" not in _body, \
-        "libFilterByAuthor 又在派发假事件了 —— input 事件会展开下拉面板"
+        "libFilterByAuthor 又在派发假事件了 —— input 事件会展开下拉面板(必须避免的 bug)"
     assert "comboTag.clear()" in _body and "comboAuthor.setByValue(" in _body, \
         "清标签/回填作者要走 combo 自己的方法(它们不触发面板展开)"
     assert "_clearSync()" in _body, "小叉叉状态要静默刷新"
@@ -10540,7 +10538,7 @@ def t126_combo_silent_sync_and_pid_author_detail() -> None:
 
 
 def t127_wallpaper_current_trace() -> None:
-    """T127 (2026-09-24, 需求):
+    """T127 (当前壁纸信息小窗):
     桌面幻灯片正在播的那张 → 图库里是谁、有没有更高清、要不要删。全程只读。
 
     ① 读注册表拿当前壁纸路径 (读不到 → active=False, 不报错);
@@ -10759,7 +10757,7 @@ def t127_wallpaper_current_trace() -> None:
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
-        # 显示 (用户 2026-09-27:「文案改了, 标题没改欸」)。与 utils/widget_window.py 的
+        # 显示 (改了提示词标题却不变)。与 utils/widget_window.py 的
         # _machine_title 同一条口径, 两边都要在。
         assert "function machineTitle(t, fname)" in js and "function wallTitle(a, d)" in js, \
             "壁纸卡标题没走「真标题优先、程序拼的让位」这条口径"
@@ -10783,7 +10781,7 @@ def t127_wallpaper_current_trace() -> None:
 
 
 def t128_tray_pure_functions():
-    """🖥 托盘常驻:
+    """🖥 托盘常驻 (右下角任务栏 + 桌面小控件):
     ① tooltip ≤120 字符且**无换行** (Shell_NotifyIcon 的 szTip 硬上限 128 wchar 含 NUL),
        格式 `Vixiq · #ID · 作者 · 标题`, 溯源不出来退化成「Vixiq · 壁纸未溯源」;
     ② 菜单结构 = 两行灰字只读信息 + 打开图库/打开所在文件夹 + 分隔线 + 设置/退出,
@@ -10829,7 +10827,7 @@ def t128_tray_pure_functions():
                     tray.CMD_SETTINGS, tray.CMD_QUIT], cmds
     assert labels[2:4] == ["打开图库", "打开所在文件夹"], labels
     assert labels[-2:] == ["设置…", "退出 Vixiq"], labels
-    # 「图像溯源」这一项 2026-09-25 已删 (用户: 「就弹个通知」没意义), 别再加回来
+    # 「图像溯源」这一项 2026-09-25 已删 (没意义), 别再加回来
     assert not hasattr(tray, "CMD_TRACE") and "图像溯源" not in labels, labels
     # 灰字行必须是「作者/标题」这类只读信息, 不能是能点的命令
     assert items[0][2] == "gray" and "#109275847" in items[0][1] and "紺屋" in items[0][1]
@@ -10851,7 +10849,7 @@ def t128_tray_pure_functions():
     assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_RBUTTONUP) == ("menu",)
     assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_CONTEXTMENU) == ("menu",)
     assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_LBUTTONUP) == ("refresh",)
-    # 2026-10-20 → 双击翻成 open_gallery,
+    # 双击托盘图标打开图库 → 双击翻成 open_gallery,
     # 单击仍是 refresh (双击时 Windows 会补一整套单击消息, 两条都收到是预期)
     assert tray.WM_LBUTTONDBLCLK == 0x0203
     assert tray.handle_tray_message(tray.WM_TRAY_CALLBACK, 0, tray.WM_LBUTTONDBLCLK) == ("open_gallery",)
@@ -10868,7 +10866,7 @@ def t128_tray_pure_functions():
 
     # ---------- ④b 「必须建窗线程做」的消息 (2026-09-24 实测踩坑) ----------
     # 右键菜单若丢给子线程弹, TrackPopupMenu/SetForegroundWindow 会因为窗口不属于
-    # 调用线程而**毫无反应** —— 用户看到的就是「点托盘图标没反应, 退不出去」。
+    # 调用线程而**毫无反应** —— 表现就是点托盘图标没反应、退不出去。
     assert tray.tray_window_action(tray.WM_SHOW_MENU) == "show_menu"
     assert tray.tray_window_action(tray.WM_TRAY_CALLBACK) is None, "鼠标回调不能走同步分支"
     assert tray.tray_window_action(tray.WM_CLOSE) is None
@@ -10977,7 +10975,7 @@ def t129_tray_lifecycle_policy():
     assert "WM_SHOW_MENU" in tray_src and "taskbar_created_msg()" in tray_src, \
         "缺少「菜单回建窗线程」或「explorer 重启后补图标」的处理"
 
-    # ---------- ⑤ 幽灵图标  ----------
+    # ---------- ⑤ 幽灵图标 (通知区残留多个图标, 鼠标划过才消失) ----------
     # 全项目只有 tray.py 一处 NIM_ADD (uID 固定 1、窗口只有一个), 所以运行期变不出第二个图标 ——
     # 那些是上一次进程没走到 NIM_DELETE 时 explorer 留下的空壳。两道护栏:
     #   ① 关闭终端窗口走 CTRL_CLOSE_EVENT, 既不跑 atexit 也不触发信号 → 必须单独接上清理;
@@ -11014,7 +11012,7 @@ def t130_core_trace_injection():
     from core import wallpaper_trace as wt
 
     # 必须 resolve: mkdtemp 在 Windows 上可能返回 8.3 短名 (ADMINI~1), 而 core 内部对
-    # img_root 做了 .resolve() → 短名 wall_path 与长名 img_root 比 in_lib 会误判成库外。
+    # img_root 做了 .resolve → 短名 wall_path 与长名 img_root 比 in_lib 会误判成库外。
     tmp = Path(tempfile.mkdtemp(prefix="t130core_")).resolve()
     img_root = tmp / "img"
     wall_dir = tmp / "wall"
@@ -11132,7 +11130,7 @@ def t130_core_trace_injection():
 
 
 def t131_launcher_config_switches():
-    """🚀 启动与托盘开关 (2026-09-24): 缺键兜底 + 保存不覆盖别的节 + 接口白名单。
+    """🚀 启动与托盘开关  缺键兜底 + 保存不覆盖别的节 + 接口白名单。
 
     ① LAUNCHER_DEFAULTS 与 default.json 的 launcher 节键集一致 (四处列表只留一份);
     ② 老 user.json 没 launcher 节 → _canonicalize 兜底出 5 个键, 默认只开托盘;
@@ -11264,8 +11262,8 @@ def t131_launcher_config_switches():
             assert y1 == _ww.EDGE_HIT and e.getpixel((cx, 0))[3] == 0, dock
 
     # (b) TAG: **补回缺口的长条便签** (零圆角; 伸出端那 16px 是**人字防滑纹路**) ——
-    #     2026-09-26 设计约定:
-    # 。下面**直接按窗口坐标**取样, 不借 tag_map:
+    #     「不是单纯改回长方形, 而是补回缺口, 且在补回的那部分配合
+    #     缺口箭头改成像是防滑纹路一样的图案」。下面**直接按窗口坐标**取样, 不借 tag_map:
     #     旋转和坐标换算要是一起错, 走 tag_map 反而会互相抵消, 那样测了等于没测。
     #     每项 = (伸出端的两个外角, 贴屏幕边的两个外角)
     tag_geo = {
@@ -11342,7 +11340,7 @@ def t131_launcher_config_switches():
     assert "EventSource" not in ww_src, "小控件建 SSE 会污染「浏览器是否全关」的判定"
     assert ww_src.count(_ww.CLASS_NAME) == 1 and ww_src.count("CLASS_NAME") >= 3, \
         "窗口类名字面量只该定义一处, 其余走常量 (注册/建窗/注销三处都用它)"
-    # ★ 2026-09-25 : 根子是**函数原型串台**。
+    # ★ 「右键点便签 → 便签消失、托盘也没了」: 根子是**函数原型串台**。
     # `ctypes.windll` 是带缓存的加载器 (`ctypes.windll.user32 is ctypes.windll.user32` 为 True),
     # 拿它钉 argtypes 是**进程级**的; 而 tray.py 用的是自己那套 WNDCLASSW / 带 lPrivate 的 MSG,
     # 与本模块的 WNDCLASS / wintypes.MSG 不兼容。main.py「先起托盘再 import 小控件」的顺序下,
@@ -11374,7 +11372,7 @@ def t131_launcher_config_switches():
             "artwork": {"artwork_id": "123", "author_id": "456", "title": "t"},
             "match": {"kind": "md5"}}
     assert _keys(None) == [], "数据没到手时不该画按钮 (点哪个都没意义)"
-    # 用户 2026-09-26:「『复制作品链接』『图像溯源』就不需要了」→ 文字键只剩三颗,
+    # 「『复制作品链接』『图像溯源』就不需要了」→ 文字键只剩三颗,
     # 「下一张壁纸」那颗也在上一轮就撤了 (「有播放键就不需要它」), 壁纸控制整体挪去控制条。
     assert _keys(base) == ["library", "folder", "recycle"], _keys(base)
     # 壁纸就是图库里的文件 → 不给「移出壁纸」(那属于「从图库删」的另一套流程)
@@ -11397,14 +11395,14 @@ def t131_launcher_config_switches():
     assert _icons(base) == ["prev", "play", "next", "shuffle"], _icons(base)
     assert _icons(inlib) == ["prev", "play", "next", "shuffle"]
     # 图标画的是「**当前所在的那个档**」(与 ⏸ 同一套读法): 正在播 → ⏸, 随机档 → 交叉箭头,
-    # 顺序档 → 三横线。用户 2026-09-29 明确口径:「随机模式该显示交叉箭头, 顺序模式才显示横线」。
+    # 顺序档 → 三横线。明确口径:「随机模式该显示交叉箭头, 顺序模式才显示横线」。
     assert _ww.card_icons(base)[1] == ("play", "play")
     assert _ww.card_icons(base)[3] == ("shuffle", "order")
     assert _ww.card_icons(base, playing=True)[1] == ("play", "pause")
     assert _ww.card_icons(base, shuffle=True)[3] == ("shuffle", "shuffle")
     assert [k for k, _ in _ww.card_icons(base, shuffle=True, playing=True)] \
         == ["prev", "play", "next", "shuffle"], "换图标不该改变键的条数与位置"
-    # 没有当前壁纸 (文件被删/被移走) 时的两条岔路 —— 的那一格:
+    # 没有当前壁纸 (文件被删/被移走) 时的两条岔路 —— 卡片变空的那一格:
     # 配过壁纸夹 → 还留「播放 + 档位」(播放键按下能从壁纸夹一端起步, 把桌面接回来);
     # 一个夹子都没有 → 才真的一个键都不给。「上一张/下一张」这时没意义 (得先有个「当前」)。
     _nowall = {"active": False, "file": {}, "folder": {"ready": True, "dir": "D:/壁纸"}}
@@ -11416,7 +11414,7 @@ def t131_launcher_config_switches():
         assert {"play", "shuffle"} <= set(_icons(d)), d
 
     # 图标键的排版与命中: 四颗**居中均分**、两两不重叠、都落在卡片里 (越界/重叠的表现
-    # 都是「点了没反应」或「点左边界点到了右边界」)
+    # 都是点了没反应, 或点左边界却点到右边界)
     _ibox = [_ww.icon_key_box(i) for i in range(_ww.ICON_N)]
     _kx = [_ww.icon_key_xy(i)[0] for i in range(_ww.ICON_N)]
     assert all(_kx[i] < _kx[i + 1] for i in range(_ww.ICON_N - 1)), _kx
@@ -11467,7 +11465,7 @@ def t131_launcher_config_switches():
                 f"{_dock} 第{_i}键的命中框跑到便签外了 {(_bx, _by, _bw, _bh)}"
         assert len({b[:2] for b in _boxes}) == 3, f"{_dock} 便签三键的命中框重合了 {_boxes}"
     # 小控件没有「作者主页」(只能甩外部浏览器, 用户点开还得自己再找); 2026-09-26 起
-    # 「复制作品链接」也撤了 (用户: 「不需要了」) → 剪贴板那套辅助代码必须**整段删掉**,
+    # 「复制作品链接」也撤了 → 剪贴板那套辅助代码必须**整段删掉**,
     # 留着就是死代码 (而且它是进程级共享加载器最容易串台的地方之一)。
     for _gone in ("pixiv.net/artworks", "copy_text", "CF_UNICODETEXT", "GlobalAlloc"):
         assert _gone not in ww_src, f"{_gone} 是「复制作品链接」的残留, 该整段删掉"
@@ -11510,7 +11508,7 @@ def t131_launcher_config_switches():
         f"便签没有画上缩略图 ({(_r, _g, _b, _a)})"
     # 有图不画 glyph (糊成一团), 无图才画 → 两者画面必须不同
     assert _tag.tobytes() != _ww.draw_tag("right", None).tobytes(), "缩略图没起作用"
-    # 「太模糊」的护栏 : 贴屏幕那端必须厚实 —— 便签是玻璃板压在壁纸上,
+    # 「太模糊」的护栏 (2026-09-24 被打回): 贴屏幕那端必须厚实 —— 便签是玻璃板压在壁纸上,
     # 两端都太透的话整条画面会退成薄纱, 缩略图再清楚也白搭。纯红缩略图钉住两端:
     _near = _tag.getpixel((_tag.width - 6, _tag.height // 2))
     assert _near[0] > 100, f"便签贴合端被压暗泡灰了 (红图却只剩 {_near})"
@@ -11533,7 +11531,7 @@ def t131_launcher_config_switches():
     _tmp2 = Path(tempfile.mkdtemp(prefix="t131wall_"))
     # 这一节测的是「**没配**壁纸夹时回退到当前图所在文件夹」。本机 user.json 一旦写上
     # paths.wallpaper_dir, candidates_dir 就改去读那个真夹子, 下面几条断言全跟着错
-    #。所以先把配置读取摘掉 ——
+    # (2026-09-27 配置里补了这个键, 冒烟当场变红)。所以先把配置读取摘掉 ——
     # 「配了夹子」的情形由下面 11506 那节单独测, 两边互不串味。
     _old_wdir = _wt.wallpaper_dir
     _wt.wallpaper_dir = lambda: None
@@ -11559,7 +11557,7 @@ def t131_launcher_config_switches():
         # 「随机」档 (2026-09-26 加): 只看候选集合、且**不会是当前这张**; 跑 40 次把随机性压住
         _pick = {_wt.next_wallpaper(_tmp2 / "2_p0.png", True).name for _ in range(40)}
         assert _pick and _pick <= {"99999999_p0.png", "109395314_p0.png"}, _pick
-        # 用户指定了壁纸夹 → 挑图只认它 (monkeypatch 掉配置读取, 别动真机的 user.json)
+        # 指定了壁纸夹 → 挑图只认它 (monkeypatch 掉配置读取, 不动真实 user.json)
         _tmp3 = Path(tempfile.mkdtemp(prefix="t131wdir_"))
         _old_dir = _wt.wallpaper_dir
         try:
@@ -11600,7 +11598,7 @@ def t131_launcher_config_switches():
     for ep in ("/api/wallpaper/dupes", "/api/wallpaper/dupes/scan", "/api/wallpaper/dupes/recycle"):
         assert f'@app.route("{ep}"' in srv_src, f"服务端没有 {ep}"
     assert "find_wall_dupes" in srv_src, "服务端没接「省空间」扫描"
-    # 网页版「当前壁纸」卡片的展开/收起要记忆 (刷新回展开态是用户明确要修的)
+    # 网页版「当前壁纸」卡片的展开/收起要记忆 (别一刷新就回到展开态)
     assert "vixiq.wall.folded" in js and "wallApplyFold" in js, "折叠状态没有落 localStorage"
     assert 'id="wall-fold"' in html, "「当前壁纸」卡片缺收起按钮"
     for fn in ("wallDupesOpen", "wallDupesScan", "wallDupesDelete"):
@@ -11608,7 +11606,7 @@ def t131_launcher_config_switches():
     assert "'next'" in js and "⏭️ 下一张壁纸" in js, "网页版缺「下一张壁纸」按钮"
     assert "function wallCopyLink" in js and "🔗 复制作品链接" in js, "网页版缺「复制作品链接」"
     # 两端的分工从 2026-09-26 起不同了: 网页版地方大, 仍是「下一张壁纸 / 复制作品链接」
-    # 两颗文字按钮; 小控件收敛成四颗图标键, 那两颗文字键在卡片上撤掉 (用户:「不需要了」)。
+    # 两颗文字按钮; 小控件收敛成四颗图标键, 那两颗文字键在卡片上撤掉。
     for _label in ("下一张壁纸", "复制作品链接"):
         assert _label in js, f"网页版缺「{_label}」"
     assert '"copy"' not in ww_src and "'copy'" not in ww_src, \
@@ -11617,10 +11615,10 @@ def t131_launcher_config_switches():
         "卡片上一张/下一张的**活动日志文案**还得在 (按钮变图标了, 日志名不变)"
 
     # ========== (k) 2026-09-26 一轮实测报障的 5 项修复 ==========
-    # :
-    # → ⑤当场改成
-    # 「不是单纯改回长方形, 而是补回缺口, 且在补回的那部分配合缺口箭头改成像是防滑纹路
-    # 一样的图案」。每项都钉一条离线可判定的护栏, 免得下轮改版又悄悄退回去。
+    # ① 移除壁纸应把当前壁纸一起换掉; ② 设置里要有指定壁纸文件夹的选项;
+    # ③ 便签的触发只应该在桌面; ④ 要有切换随机和顺序的按钮; ⑤ 去掉燕尾角 —— ⑤当场改成
+    # 「不是单纯改回长方形, 而是补回缺口, 且在补回的那部分配合缺口箭头做成防滑纹路」。
+    # 每项都钉一条离线可判定的护栏, 免得下轮改版又悄悄退回去。
     _wt_src = (Path(PROJECT_ROOT) / "core" / "wallpaper_trace.py").read_text(encoding="utf-8")
 
     # (k-1) 便签外轮廓是**完整长方形** + 原缺口区是**人字防滑纹路**
@@ -11637,7 +11635,7 @@ def t131_launcher_config_switches():
         assert _gp[3] >= 150, f"{_dock} 原缺口那块还是透的 {_gp}"
 
     # (k-2) 「移出壁纸」必须**先把桌面切到下一张, 再把旧文件送回收站**
-    # (: )
+    # (「点击移除壁纸, 并不会把当前的壁纸换掉, 而是单纯删除壁纸文件夹的图片」)
     assert srv_src.index("apply_wallpaper(nxt)") < srv_src.index("_recycle_files([str(f)])"), \
         "「移出壁纸」得先 apply 下一张再删文件 —— 反过来的话桌面会继续挂着已删的图"
     assert '"switched"' in srv_src, "recycle 得回报「桌面到底换掉没有」, 前端/日志才好说清"
@@ -11692,15 +11690,16 @@ def t131_launcher_config_switches():
         "随机档只该管本控件的换图, 不许偷偷改系统幻灯片设置"
 
     # ========== (l) 2026-09-26 第二轮实测报障的 5 项 ==========
-    # :
-    # 
-    # 
-    #
+    # ① 选择文件夹只需一个按钮, 且点了要有反应;
+    # ② 删掉壁纸后应自动切到下一张, 而不是留下空白、点「下一张」也无反应;
+    # ③ 托盘右键退出要同时关闭浏览器页面;
+    # ④ 控件窗口也要有播放键, 不再单独放「下一张」按钮;
+    # ⑤ 说明性文字要精简, 并用正式的说明语气。
 
     # (l-1) 壁纸夹: **单个**按钮 + 点了真的弹系统对话框 (由服务端进程弹, 浏览器拿不到绝对路径)
     _fd_src = (Path(PROJECT_ROOT) / "utils" / "folder_dialog.py").read_text(encoding="utf-8")
     assert 'onclick="saveWallDir()"' not in html and 'onclick="loadWallDir()"' not in html, \
-        "壁纸夹还留着「保存 / 读取」两个按钮 "
+        "壁纸夹还留着「保存 / 读取」两个按钮 (合成一个)"
     assert 'onclick="pickWallDir()"' in html, "壁纸夹没有「选择文件夹」按钮"
     assert "function saveWallDir" not in js, "saveWallDir 是死代码了, 该删掉"
     assert "readonly" in html.split('id="wall-dir-input"', 1)[1][:200], \
@@ -11711,14 +11710,14 @@ def t131_launcher_config_switches():
     assert "ctypes.WinDLL(" in _fd_src and "ctypes.windll." not in _fd_src, \
         "folder_dialog 别用共享加载器 (原型会串到托盘)"
     assert "BFFM_INITIALIZED" in _fd_src and "SetForegroundWindow" in _fd_src, \
-        "对话框不做置前就会被浏览器挡在身后, 表现又是「点了没反应」"
+        "对话框不做置前就会被浏览器挡在身后, 表现又是点了没反应"
     assert "CoTaskMemFree" in _fd_src, "SHBrowseForFolder 返回的 PIDL 必须释放"
     assert "/api/wallpaper/dir/pick" in js, "前端没接「选择文件夹」接口"
     assert "from utils.folder_dialog import pick_folder" in srv_src, "服务端没接对话框"
 
     # (l-2) 删掉壁纸后的起步: 没有「当前这张」也能从壁纸夹一端换起 (三条路统一走一步函数)
     assert "if cur is None:" in _wt_src and "files[0] if step >= 0 else files[-1]" in _wt_src, \
-        "注册表里那张已被删时就哑了 "
+        "注册表里那张已被删时就哑了 (点「下一张」也没有响应)"
     assert "def _no_wallpaper(" in _wt_src and '"folder"' in _wt_src, \
         "没有壁纸时要回报壁纸夹可用不可用 (卡片靠它决定画哪些键)"
     # 服务端不许再拿「没有当前壁纸」当 400 直接顶回去
@@ -11741,7 +11740,7 @@ def t131_launcher_config_switches():
 
     # (l-4) 卡片播放键: 换掉「下一张」, 按下先换一张再按间隔播
     assert '("next", "下一张壁纸", False)' not in ww_src, \
-        "卡片上那颗「下一张壁纸」该删了 "
+        "卡片上那颗「下一张壁纸」该删了 (播放键已覆盖该操作)"
     # 播放键的「档位」跟着播放态走 —— 2026-09-26 起它不再是文字, 而是看**图标 kind**:
     # 正在播画 ⏸、没播画 ▶ (与便签同一套读法)
     assert '"pause" if playing else "play"' in ww_src, "卡片播放键图标没跟着播放态走"
@@ -11755,9 +11754,8 @@ def t131_launcher_config_switches():
     # 顺带把壁纸夹可用不可用并进「壁纸换了没」的键, 否则配好夹子也不会刷新卡片
     assert 'bool(fo.get("ready"))' in ww_src, "info_key 没带壁纸夹状态"
 
-    # (l-5) 说明文字: 去冗长、去口语, 不许再出现第二人称 (;
-    # 2026-09-27 又报→ 扫描范围从
-    # 「设置页那一段」放大到**全站可见文案**)。
+    # (l-5) 说明文字: 去冗长、去口语, 不许再出现第二人称 (理由是这样写会显得像在跟使用者对话;
+    # 2026-09-27 起扫描范围从「设置页那一段」放大到**全站可见文案**)。
     _set_html = html.split('id="tab-settings"', 1)[1].split("</section>", 1)[0]
     for _w in ("你", "您", "咱们", "双击 exe", "请在窗口中"):
         assert _w not in _set_html, f"设置页说明文字里的「{_w}」没清掉"
@@ -11782,12 +11780,14 @@ def t131_launcher_config_switches():
     assert '<div class="hint" style="margin-top:6px">点按钮切换' not in _set_html
 
     # ========== (m) 2026-09-26 第三轮实测报障的 8 项 ==========
-    # :
-    # 
-    # 
-    # 
-    # 啥的说明没有
-    # 必要, 换成配合每张图片内容的一句衬托气氛的语言」。①③④⑤⑦见上, 这里钉住②⑥与机制。
+    # ① 点击「选择文件夹」应当弹出选择框, 而不是把输入框清空;
+    # ② 其他窗口置顶时仍会被触发, 且判定冲突会导致小窗口点开再关闭时卡顿、便签缩不回去;
+    # ③ 便签弹出效果要更顺滑;
+    # ④ 小窗口按钮不斜切, 改为微圆角;
+    # ⑤ 播放键不做成两个按钮, 而是便签那样的播放图标 (上一张/播放·暂停/下一张/切换顺序);
+    # ⑥ 缩略图颜色偏移, 看起来像反色;
+    # ⑦ 删掉「字节一致、像素一致」这类技术说明, 换成配合图片内容的一句氛围文案。
+    # ①③④⑤⑦见上, 这里钉住②⑥与机制。
 
     # (m-1) 「选文件夹反而清空」的两处根子: 结构体字段类型 + 前端把错误体当「取消」
     assert "pszDisplayName" in _fd_src and "c_void_p" in _fd_src, \
@@ -11864,15 +11864,15 @@ def t131_launcher_config_switches():
     _ww.icon_btn(_cb, "play", 30, 30, 24, accent=_ww.NEON_FALLBACK, hover=True)
     assert _rb.tobytes() != _cb.tobytes(), "icon_btn 的 radius= 没起作用 (便签与卡片该长得不一样)"
     assert "radius=IBAR_RAD * S" in ww_src, "卡片控制条没把微圆角传下去"
-    # 标题徽章也从斜切改**圆弧**了 (用户 2026-09-27:「显示标题那一栏的两边不要四角斜切, 而是圆弧」)
+    # 标题徽章也从斜切改**圆弧**了 (标题栏两侧用圆弧, 不再四角斜切)
     # —— 面板/缩略图的对角斜切仍在 (那是「窗口的形状」), 所以只断言 draw_card 里不再有斜切徽章
     assert "radius=BADGE_RAD * S" in _r_code and "chamfered_box(" not in _r_code, \
-        "标题徽章还在斜切 "
+        "标题徽章还在斜切 (显示标题那一栏要圆弧)"
 
     # (m-7) 氛围文案: 不再有溯源结论那行, 换成本地推导的一句 (同一张永远同一句, 可复现)
     for _gone in ("库内已是最清晰", "像素完全一致", "字节一致"):
         assert _gone not in _r_code, f"卡片上还留着溯源结论那行: {_gone}"
-    # 第三行 = AI 那句优先、本地 mood_of 兜底 (2026-09-27), 见 T132
+    # 第三行 = AI 那句优先、本地 mood_of 兜底 , 见 T132
     assert "mood_line(info, thumb)" in ww_src, "卡片第三行没换成氛围句"
     assert _ww.mood_of(None) == "", "没缩略图时不该编一句 (跟画面对不上的话比空着更糟)"
     _m1 = _ww.mood_of(_PImg.new("RGB", (48, 48), (200, 30, 30)))
@@ -11890,7 +11890,7 @@ def t131_launcher_config_switches():
     assert not _longmood, f"这些氛围句太长会被截断: {_longmood}"
     assert all(_mf.getlength(f"{a}，{b}") <= _mw for _, a in _ww._MOOD_LIGHT
                for _, b in _ww._MOOD_HUE), "本地兜底氛围句超出信息行宽度"
-    # 标题不再拿文件名/路径顶替 (用户: 「直接拿路径做标题的也可以换成更像标题的句子」)
+    # 标题不再拿文件名/路径顶替 
     assert _ww.card_title(None) == "桌面此刻空着", _ww.card_title(None)
     assert _ww.card_title({"file": {"name": "109395314_p0.jpg"}}) == "来自壁纸夹的一张", \
         "标题又拿文件名顶替了"
@@ -11899,9 +11899,9 @@ def t131_launcher_config_switches():
 
 
 def t132_ai_text_pipeline() -> None:
-    """T132: ✨ 壁纸文案 AI (2026-09-27)。
+    """T132: ✨ 壁纸文案 AI。
 
-    :。
+    联网生成这一半: 填好 API 密钥即可调用接口生成文案。
     全程离线: 只把 ``ai_text.generate`` 打桩, 一次网络都不发 (唯一的「网络」是 127.0.0.1:9
     这个必然拒绝连接的本地端口, 用来验失败路径)。覆盖:
       ① 键集一致 / 缺节兜底 / 默认全关 (没配就绝不打接口)
@@ -11965,10 +11965,10 @@ def t132_ai_text_pipeline() -> None:
         assert "海边的午后" in _in and "某人" in _in and "109395314" in _in, _in
         assert "以图为准" in _in, "开了视觉该明确说以图为准"
         assert str(ai.MAX_TITLE) in ai.SYSTEM_PROMPT, "系统提示词里的字数上限没跟上常量"
-        # 提示词**归用户自己写** 
-        # core/ai_text.py), 所以这里**只钉格式, 不钉词句**。原先钉着「禁用词表」「语气六种」
-        # 「写完自检」那几句, 用户一改提示词冒烟就红 —— 护栏反倒成了他改文案的绊脚石。
-        # 文案好不好只有用户看得出来, 冒烟判不了; 冒烟能判的是下面这些**机器口径**:
+        # 提示词只写在 core/ai_text.py, 可以随时调整, 所以这里**只钉格式, 不钉词句**。
+        # 原先钉着「禁用词表」「语气六种」「写完自检」那几句, 提示词一改冒烟就红 ——
+        # 护栏反倒成了调整文案的绊脚石。
+        # 文案好不好是主观的, 冒烟判不了; 冒烟能判的是下面这些**机器口径**:
         # 提示词没被清空、字数上限跟常量一致 (超了卡片会截断)、解析仍认两行。
         assert len(ai.SYSTEM_PROMPT.strip()) >= 40, "系统提示词被清空了"
         assert ai.AI_VER != "v1", "改了口径却没升版本 —— 用户还会看到旧缓存里那批「安静」文案"
@@ -11996,7 +11996,7 @@ def t132_ai_text_pipeline() -> None:
         # 顶到上限时**断在断句点上**, 不许啃出半截字 —— 提示词让模型写具体的东西, 句子
         # 常顶到上限, 实测 1e94516aeda0e378.png 出过「银发女郎提灯立于月下，蝙蝠…」被
         # s[:n] 啃成「…立于月下，蝙」。
-        # 上限一律取常量, 这里不写死字数 —— 2026-09-27 用户把上限从 8/12 调到 15/30,
+        # 上限一律取常量, 这里不写死字数 —— 2026-09-27 把上限从 8/12 调到 15/30,
         # 原来钉着「12 字」的那条期望当场就红了。
         _src = "银发女郎提灯立于月下，蝙蝠掠过废城的塔尖，钟声沉入海底，灯塔在雾里熄灭"
         _cut = ai.parse_reply("标题\n" + _src)[1]
@@ -12009,15 +12009,15 @@ def t132_ai_text_pipeline() -> None:
         # 这两个上限是**像素预算**, 不是拍脑袋的字数: 标题超了裁「…」, 氛围句超了换行
         import utils.widget_window as _ww
         _mw = (_ww.X_BOX[0] - (_ww.C_PL + _ww.C_TW + 18) - 12) * _ww.CARD_SS
-        # 2026-09-28 四期: 窗口收窄到 548, 标题改**跑马灯** (用户:「小窗口还是窄一些吧, 标题
-        # 可以滚动播放, 这样标题再长也不怕了」) —— 标题不再要求「塞进定宽徽章」, 只要塞得进
+        # 2026-09-28 四期: 窗口收窄到 548, 标题改**跑马灯** (标题滚动播放,
+        # 再长也不怕) —— 标题不再要求「塞进定宽徽章」, 只要塞得进
         # 标题条的**上限宽度** (超了才会被裁「…」再滚)。写死像素会在调字号/改字体当天就红,
         # 所以一律**走常量 + 真字体**量宽 (文案体字面宽度和雅黑不是一回事)。
         _tf = _ww.font(_ww.TITLE_SIZE * _ww.CARD_SS, copy=True)
         _tmax = _ww.TITLE_MAX * _ww.CARD_SS
         assert _tf.getlength("标" * ai.MAX_TITLE) + _ww.TRACK_LS * _ww.CARD_SS * ai.MAX_TITLE \
             <= _tmax, f"标题上限的自然宽度超过标题条上限 {_ww.TITLE_MAX}px, 会被裁成「…」"
-        # 氛围句**允许换行** ,
+        # 氛围句**允许换行**, 标题尽量不换行
         # 所以这里判的是「行数够不够 + 有没有一行溢出」, 而不是「一行塞不塞得下」。
         _ml = _ww.mood_wrap("氛" * ai.MAX_MOOD, _mw, _ww.MOOD_SIZE * _ww.CARD_SS)
         assert len(_ml) <= _ww.MOOD_LINES, \
@@ -12038,7 +12038,7 @@ def t132_ai_text_pipeline() -> None:
             f"首选字体被换掉 (现在 {_ww.COPY_FONTS[0]!r}), 得确认是有意为之"
         assert _ww._copy_font_path().lower().endswith((".ttf", ".ttc")), _ww._copy_font_path()
         # 文案体与 UI 体是**两份字体** (全屏换成展示体会读着发飘); 两边都得解析到真文件 ——
-        # `load_default()` 那种降级在卡片上是「一屏方框」, 必须当场拦住
+        # `load_default` 那种降级在卡片上是「一屏方框」, 必须当场拦住
         _cp = getattr(_ww.font(_ww.TITLE_SIZE, copy=True), "path", "")
         _up = getattr(_ww.font(_ww.TITLE_SIZE), "path", "")
         assert _cp.lower().endswith((".ttf", ".ttc")), f"文案体没解析到真字体: {_cp!r}"
@@ -12073,19 +12073,19 @@ def t132_ai_text_pipeline() -> None:
             "标题条没放两遍 —— 滚到接缝处会露馅"
         assert "font(MOOD_SIZE * S, copy=True)" in _cgeo, "氛围句没走文案字体"
         assert "GaussianBlur(1.6 * S)" in _cbase, "氛围句柔光没接上"
-        # 用户 2026-09-28 二期:「就不加粗了」—— 华文琥珀本身笔画极重, 撤掉 stroke 合成加粗。
+        # 二期:「就不加粗了」—— 华文琥珀本身笔画极重, 撤掉 stroke 合成加粗。
         # 「描边」这套不许回来: 在这么重的字上描一圈只会糊, 也会让阴影与字面差一圈粗细。
-        assert not hasattr(_ww, "STROKE_W"), "合成加粗又回来了 "
+        assert not hasattr(_ww, "STROKE_W"), "合成加粗又回来了 (不许加粗)"
         _cardcode = "\n".join(ln for ln in (_cbase + _cover).splitlines()
                               if not ln.lstrip().startswith("#"))
         assert "stroke_width" not in _cardcode and "stroke=" not in _cardcode, \
-            "文案又加描边了 "
+            "文案又加描边了 (不许加粗)"
         assert "stroke_width" not in _ww.text_ls.__doc__ + _ww.text_mask.__doc__, \
             "text_ls/text_mask 的描边参数没清干净 (留着就是死代码)"
         assert "ImageChops.offset(cmask.crop(cbox)" in _cbase \
             and "GaussianBlur(SHADOW_BLUR * S)" in _cbase and "k=SHADOW_K" in _cbase, \
             "文字阴影没接上"
-        # 「霓虹流光」= **骨架 + 沿笔画的测地路程场 + 逐帧波前** (2026-09-28 四期)。用户否掉了
+        # 「霓虹流光」= **骨架 + 沿笔画的测地路程场 + 逐帧波前** (2026-09-28 四期)。已否掉的
         # 前两期: 二期「水平亮带横扫」= 扫光, 三期「斑点场乘蒙版」= 一团来回挪的雾; 他要的是
         # 「就好像光线在描画着笔画一样, 准确来说就像金属的反光一样」—— 光必须**顺着笔画走**。
         # 定稿件、稳定态叠加、tick 推进, 三处都得接线 (2026-09-29 起定稿件挪到渲染线程的
@@ -12097,7 +12097,7 @@ def t132_ai_text_pipeline() -> None:
         assert "neon_flow(timg, self._neon, self._neon_phase" in _csrc \
             and "self.state == CARD" in _csrc, "稳定态没叠流光"
         assert "_neon_live()" in _tick and "NEON_EVERY" in _tick, "相位没在 tick 里推进"
-        # 相位是**拍数**且**不取模**: 用户明确「不是单调的循环流动」, 取模就等于宣布这是个循环
+        # 相位是**拍数**且**不取模**: 取模就等于宣布这是个循环, 而不是单调的流动
         # (二期那条水平亮带就是靠取模 CARD_W 滚的, 整条路已经拆了)。
         assert "_neon_phase += 1" in _tick and "% CARD_W" not in _tick, \
             "流光相位又变成取模的循环了"
@@ -12150,12 +12150,12 @@ def t132_ai_text_pipeline() -> None:
         _fb = _ww.neon_flow(_scard, _neon, 21, (255, 200, 80))
         assert _scard.tobytes() == _snap.tobytes(), "neon_flow 改了底图 (缓存会被污染)"
         assert _fa.tobytes() != _fb.tobytes(), "换了相位画面没变 —— 流光没在动"
-        # 「看得出来」得用数字钉: 两相位之间文案区最大通道差太小 = 肉眼看不见 (过两次)
+        # 「看得出来」得用数字钉: 两相位之间文案区最大通道差太小 = 肉眼看不见 (实测两次)
         _dmax = max(hi for _, hi in _ICH.difference(_fa.convert("RGB"),
                                                     _fb.convert("RGB")).getextrema())
         assert _dmax >= 60, f"流光太弱 (两相位最大差仅 {_dmax}/255), 肉眼看不出来"
         # **不是单调循环**: 逐拍求「相对底图新增亮度」最集中的那一列, 它必须**乱跳** ——
-        # 二期的水平亮带会让这一列一直朝同一个方向挪, 那正是的那个效果。
+        # 二期的水平亮带会让这一列一直朝同一个方向挪, 那正是「不对」的那个效果。
         _baseL = _scard.convert("L")
         _x0, _y0, _x1, _y1 = _neon[3]
         _cols = []
@@ -12168,8 +12168,8 @@ def t132_ai_text_pipeline() -> None:
         assert _dirs != {1} and _dirs != {-1}, \
             f"亮点一直在朝同一个方向挪 ({_cols}) —— 又变回「单调循环流动」了"
 
-        # **标题跑马灯** (四期, 用户:「小窗口还是窄一些吧, 标题可以滚动播放, 这样标题再长也
-        # 不怕了」): 短标题居中不动; 长标题裁窗左移, 条里放**两遍**, 滚到接缝与开头逐像素重合。
+        # **标题跑马灯** (四期: 标题滚动播放, 再长也
+        # 不怕): 短标题居中不动; 长标题裁窗左移, 条里放**两遍**, 滚到接缝与开头逐像素重合。
         _longinfo = {"artwork": {"title": "月下提灯的女郎走过很长的巷子回望来时的路"}}
         _tp = _ww.title_prep(_longinfo, _sthumb, (255, 200, 80))
         assert _tp is not None and _tp["scroll"] is True, "这么长的标题该判为要滚动"
@@ -12179,8 +12179,8 @@ def t132_ai_text_pipeline() -> None:
         _tsp = _ww.title_prep({"artwork": {"title": "短"}}, _sthumb, (255, 200, 80))
         assert _tsp is not None and _tsp["scroll"] is False, "短标题不该滚动"
         # 短标题只裁**一遍标题本体**: 若照样按可视区宽裁, 窗口右端会越过第二遍标题的起点 ——
-        # 同一块里出现两个标题, 而且因为不滚而一动不动 (2026-09-28 
-        # )。所以「不滚时裁窗宽度收窄、滚时铺满」得钉住。
+        # 同一块里出现两个标题, 而且因为不滚而一动不动 (标题并没有滚动,
+        # 而是静止的, 而且还会重复显示」)。所以「不滚时裁窗宽度收窄、滚时铺满」得钉住。
         assert "TITLE_FIT" in _tprep and _tsp["fit"] < _ww.TITLE_W == _tp["fit"], \
             ("短标题裁窗没收窄 / 长标题裁窗没铺满", _tsp["fit"], _tp["fit"])
         _spf = _ww.title_frame(_scard, _tsp, 0, (255, 200, 80))
@@ -12202,7 +12202,7 @@ def t132_ai_text_pipeline() -> None:
         assert _l0.tobytes() != _l1.tobytes(), "标题没在滚 (两个相位画面一样)"
 
         # ---------- ⑤⑥ 缓存 + 主入口: 只读缓存 / 手动生成 (全程不联网) ----------
-        # 2026-09-27 设计约定把「自动生成」改成「只在点按钮时生成当前这张」+「一定带图」,
+        # 把「自动生成」改成「只在点按钮时生成当前这张」+「一定带图」,
         # 于是 pending/后台线程/失败静默期那套全删了 —— 这里钉的是新口径:
         #   轮询那条路**一次接口都不许打**, 生成只走 generate_now (同步, 表单值优先, 必带图)。
         _orig_cache, _orig_gen = ai._cache_path, ai.generate
@@ -12305,7 +12305,7 @@ def t132_ai_text_pipeline() -> None:
             assert c.post("/api/ai", json={}).status_code == 405, \
                 "旧的保存接口该随按钮一起删掉, 留着就是第二份真源"
             assert c.get("/api/ai").status_code == 200, "/api/ai 的读设置该还在"
-            # 「🔌 测试连接」2026-09-27 被需求加回。
+            # 「🔌 测试连接」2026-09-27 被加回。
             # 空配置点它就该 502 + 人话, 而不是 404 —— 它是排障入口, 得先于壁纸存在。
             # ★ 先把 user.json 清空: 上一步为验打码塞过假密钥, 不清就会**真的**打出去
             # (T132 的铁律是全程离线, 只许碰 127.0.0.1:9 这个必拒端口)。
@@ -12325,7 +12325,7 @@ def t132_ai_text_pipeline() -> None:
             # token 下把预算**全烧在 reasoning 上**, 回 content='' —— 用户看到的就是「上传失败」
             assert "max_tokens\": MAX_TOKENS" in _ai_src, "生成没用统一的输出预算常量"
             # 判**下限**而不是钉死数字: 这条护栏要防的是「预算又被估小了」, 不是「不许调大」。
-            # 
+            # (2026-09-27 把 600 调到 2000, 钉死的写法当天就红了 —— 同样的坑犯过一次)
             _mt = int(ai.MAX_TOKENS)
             assert _mt >= 600, f"输出预算被估小了 ({_mt}), 推理模型的 thinking 会把它烧光"
             # 空回复/撞上限必须分得开, 否则用户只知道「失败」不知道改哪一项
@@ -12367,7 +12367,7 @@ def t132_ai_text_pipeline() -> None:
         # 作品标题永远优先 —— AI 只填那个「没名字」的位置, 不许盖掉真标题
         assert _ww.card_title({"artwork": {"title": "真标题"},
                                "ai": {"state": "ready", "title": "AI标题"}}) == "真标题"
-        # 用户 2026-09-27 报「文案改了, 标题没改欸」: 自定义作品的「标题」是入库时按
+        # 改了文案标题却没变: 自定义作品的「标题」是入库时按
         # 「来源夹 / 文件名」拼出来的串, 它**有** title 字段 —— 只看字段在不在, AI 标题
         # 永远轮不到显示。这种程序拼的标题不算真标题 (见 _ww._machine_title)。
         _junk = {"artwork": {"title": "X图/#其他来源# / 1e94516aeda0e378",
@@ -12404,7 +12404,7 @@ def t132_ai_text_pipeline() -> None:
         # 那颗「测试连接」是排障入口, 必须和生成**共用同一份表单体** —— 各拼各的就会
         # 「测试说通、上传说失败」(2026-09-27 加它回来就是为了分开这两种失败)
         assert js.count("body: aiFormBody()") == 2, "两颗按钮提交的表单体必须同源"
-        # 旧的开关/视觉/保存三颗按钮不许回来 (用户: 「壁纸文案搞那么多按钮是为何」)
+        # 旧的开关/视觉/保存三颗按钮不许回来
         for _gone in ("ai-toggle", "ai-vision", "ai-save",
                       "saveAiText", "toggleAiVision"):
             assert _gone not in js and _gone not in html, f"旧按钮 {_gone} 又回来了"
@@ -12597,7 +12597,7 @@ def t133_wallpaper_lib_generate() -> None:
 
 
 def t134_launcher_hotapply_and_paths() -> None:
-    """T134: 🚀 启动与托盘「立即生效」+ 📁 路径设置。
+    """T134: 🚀 启动与托盘「立即生效」+ 📁 路径设置 (2026-10-20 三处调整)。
 
     ① 双击托盘图标 → open_gallery, 单击仍只 refresh;
     ② 热应用接线: main.py 把 _apply_launcher 交给 server.set_launcher_apply; 心跳守护按
@@ -12634,7 +12634,7 @@ def t134_launcher_hotapply_and_paths() -> None:
         "心跳守护必须走 _set_watch_browser (代次门控), 不许再直接起线程"
     assert "_LAUNCHER_STARTUP_ONLY" in main_src and "auto_open_browser" in main_src
 
-    # ⚠ 2026-10-20 :
+    # ⚠ 关掉「托盘常驻」不该连带退出整个程序 (更不该关掉浏览器):
     #   根因 = 关开关时调 _tray_stop() → Tray.stop() 原先投 **WM_CLOSE**, 而
     #   handle_tray_message 把 WM_CLOSE 翻成 ("quit",) → _request_quit → on_quit → 整个进程退出。
     #   stop() 的语义必须是「只停托盘」, 所以它只能投线程 WM_QUIT, 绝不许再碰 WM_CLOSE/on_quit。
@@ -12805,7 +12805,7 @@ def t134_launcher_hotapply_and_paths() -> None:
         for _id in ('id="path-img-input"', 'id="path-data-input"', 'id="path-temp-input"',
                     'id="path-temp-clean"', 'id="path-positions"'):
             assert _id in html, f"设置页少了 {_id}"
-        # 壁纸夹路径必须在「📁 路径」卡片里 
+        # 壁纸夹路径必须在「📁 路径」卡片里
         _card = html.split('<h3>📁 路径</h3>', 1)[1].split('</div>\n        <div class="card mini">', 1)[0]
         assert 'id="wall-dir-input"' in _card and 'onclick="pickWallDir()"' in _card, \
             "壁纸夹没搬进「📁 路径」卡片"
@@ -12821,7 +12821,7 @@ def t134_launcher_hotapply_and_paths() -> None:
         assert "（已立即生效）" in js
         # 关掉托盘后右下角就没退出入口了 —— 顺嘴指一下还能从哪儿退 (否则用户会以为退不掉)
         assert "之后从页面「退出程序」或 Ctrl+C 退出" in js, "关托盘后要指一下退出入口"
-        # 路径那处确实要重启, 所以只留一句, 不摆理由 (用户: 不用在界面上写理由)
+        # 路径那处确实要重启, 所以只留一句, 不摆理由 (界面上不写理由)
         _pblk = html.split('id="path-img-input"', 1)[0].rsplit('<h3>📁 路径</h3>', 1)[-1]
         assert "重启 Vixiq 后生效" in _pblk and "缓存" not in _pblk, _pblk
     finally:
@@ -13011,9 +13011,9 @@ def t136_page_download_engine_and_frontend() -> None:
     # R18 安全模式: 远程低清与缩略图都必须先过打码这一关
     assert "safemode && isR18 && !pg._reveal" in js, "远程大图没走安全模式占位"
     # ---------- ④′ 点击放大 1:1 · 两个弹窗共用一支 + 「不点就不取原图」----------
-    # : 弹窗里大图按容器缩放, master1200 与 img-original 都远超容器,
+    # 低清与原图看不出区别: 弹窗里大图按容器缩放, master1200 与 img-original 都远超容器,
     # 肉眼一样 —— 只有 1:1 渲染才比得出。放大只重排**已加载**的那张, 不顺手去取原图。
-    # 2026-10-20 用户追加: 「关于点击查看大图的优化也应该适用到本地图库里面, 包括刚才那个关闭叉叉」
+    # 
     assert js.count("z = setupZoom(lb, wrap, lay,") == 2, \
         "放大/平移要抽成一支 setupZoom, 本地图库查看器与远程大图弹窗各装一份"
     assert js.count('<span class="lb-zoom-hint"></span>') == 2, "两个弹窗都要有放大提示的位置"
@@ -13031,7 +13031,7 @@ def t136_page_download_engine_and_frontend() -> None:
         "基类 inset:0 会拉伸元素, 放大态要把它改回 left/top 定位"
     assert "translate(-50%, -50%) translate(" in js, "元素居中(-50%,-50%)必须与平移量叠加"
     assert ".lightbox-img-wrap.is-zoom" in css and ".lightbox.is-remote" not in css, \
-        "放大样式不许只挂远程弹窗 —— 需求两个弹窗都生效"
+        "放大样式不许只挂远程弹窗 —— 两个弹窗都生效"
     assert "lightbox is-remote" not in js, "两个弹窗同用一种样式, is-remote 已成死代码"
     assert "clampAxis" in js and "panFrom" in js, "放大后没有拖拽平移"
     assert "if (hiOn) swapLayer(f" in js, "原图要**只在**点「显示原图」后才加载 (默认低清, 省流量)"
@@ -13043,8 +13043,8 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "clampAxis(panFrom.oy + dy, wrap.clientHeight, nh)" in js, "纵向同理"
     assert "clampAxis(zx, wrap.clientWidth, nw)" in js, \
         "窗口尺寸变化时, 放大态的平移量要按新视口重新夹一遍 (旧上限会失效)"
-    # 放大态额度: **取景窗直接铺满可用区域**, 不再跟图片比例走 —— 2026-10-20 用户:
-    #。
+    # 放大态额度: **取景窗直接铺满可用区域**, 不再跟图片比例走 —— 2026-10-20:
+    # 取景窗直接铺满屏幕, 按钮不被遮挡。
     # 两处弹窗都要: 横向满 98vw; 竖向用**实测**行高扣掉下方 ✕/‹›/信息行/缩略条的空间。
     assert js.count("wrap.style.width = Math.max(1, Math.round(window.innerWidth * 0.98)) + 'px';") == 2, \
         "放大态取景窗没铺满屏幕横向 (本地查看器 + 远程弹窗两处都要)"
@@ -13063,7 +13063,7 @@ def t136_page_download_engine_and_frontend() -> None:
     _close_rule = css.split(".lightbox-close {")[1].split("}")[0]
     assert "position: fixed" in _close_rule and "top: 18px" in _close_rule, \
         "✕ 要锚在视口上 (原来 top:-40px 挂在 wrap 上, wrap 顶满 94vh 时按钮越过视口上沿只露半个)"
-    # ---------- ④⁵ 只看要看的  ----------
+    # ---------- ④⁵ 只看要看的 ----------
     # 三个慢因: ① 缩略图条一次把每页都插进 DOM, 几十个代理请求抢同域名 6 条连接;
     # ② 翻页时还预取相邻页**原图** (各 1~9MB, 费流量且抢连接); ③ /api/img 先 resp.read()
     # 整张读完才回给浏览器 → 首字节 = 整图下载耗时。
@@ -13101,7 +13101,7 @@ def main() -> int:
         _act._cfg = lambda: {"enabled": True, "console": False, "max_mb": 8, "keep_days": 7}
     except Exception:
         pass
-    # : 后台重复任务保护 + lock 清理
+    # 后台重复任务保护 + lock 清理
     try:
         if LOCK_PATH.exists():
             age_s = time.time() - LOCK_PATH.stat().st_mtime

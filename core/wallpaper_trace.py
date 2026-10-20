@@ -38,7 +38,7 @@ from utils.reporter import PrintReporter
 WALL_SIZE_CACHE: "dict[str, tuple]" = {}
 WALL_SIZE_LOCK = threading.Lock()
 # ORB 溯源结果按「文件+mtime+大小」缓存: 前端 8 秒轮询一次, 不缓存的话每个轮询都会
-# 因为这次没带 deep=1 又把结论退回「未溯源」—— 界面自己来回跳 (2026-09-24)。
+# 因为这次没带 deep=1 又把结论退回「未溯源」—— 界面自己来回跳。
 WALL_DEEP_CACHE: "dict[str, list]" = {}
 WALL_DEEP_LOCK = threading.Lock()
 WALL_ORB_MIN = 0.30      # ORB 融合分门槛 (与 2026-09-24 一次性对账脚本同一口径)
@@ -77,7 +77,7 @@ _SPIF_UPDATEINIFILE, _SPIF_SENDCHANGE = 0x01, 0x02
 def _nat_key(name: str) -> str:
     """文件名自然排序键 (数字段左补零, 纯字符串比较, 不会 int/str 混比炸掉)。
 
-    直接 `sorted()` 会把 `109395314_p0` 排到 `99999999_p0` 前面, 挑「下一张」时看着乱跳。
+    直接 `sorted` 会把 `109395314_p0` 排到 `99999999_p0` 前面, 挑「下一张」时看着乱跳。
     """
     return re.sub(r"\d+", lambda m: m.group(0).rjust(16, "0"), str(name).lower())
 
@@ -94,9 +94,9 @@ def wallpaper_folder_images(folder: Path) -> "list[Path]":
 
 
 def wallpaper_dir() -> "Path | None":
-    """**用户指定的壁纸夹** (配置 ``paths.wallpaper_dir``) —— 没配 / 配的目录读不到 → None。
+    """**配置指定的壁纸夹** (``paths.wallpaper_dir``) —— 没配 / 配的目录读不到 → None。
 
-    为什么要它 : 桌面幻灯片用的壁纸夹是用户在**系统设置**里选的, 应用这边
+    为什么要它: 桌面幻灯片用的壁纸夹是用户在**系统设置**里选的, 应用这边
     没有任何地方能看到/改到它 —— 于是「上一张/下一张/幻灯片」只能猜「当前这张所在的文件夹」。
     用户想在应用里指定一个夹子时就该听他的, 而不是继续猜。
     """
@@ -117,7 +117,7 @@ def wallpaper_dir() -> "Path | None":
 def candidates_dir(cur: "Path | None" = None) -> "Path | None":
     """挑「上一张 / 下一张 / 幻灯片」时到底在哪个夹子里挑。
 
-    优先**用户指定的**壁纸夹 (见 :func:`wallpaper_dir`), 没指定才回退到「当前壁纸所在文件夹」
+    优先**用户指定的**壁纸夹 (见:func:`wallpaper_dir`), 没指定才回退到「当前壁纸所在文件夹」
     —— 回退这条是 2026-09-24 起就在用的口径, 对没配过的用户行为完全不变。
     """
     d = wallpaper_dir()
@@ -139,8 +139,7 @@ def _step_wallpaper(cur: "Path | None", step: int, shuffle: bool = False) -> "Pa
 
     ``cur is None`` (注册表里那张已经被删/移走) 时**不算死路**: 只要配了壁纸夹就还能起步 ——
     注册表只写「现在播的是哪张」, 那张文件被删之后这个值不会自己更新, 于是整个换图功能
-    全哑掉 (2026-09-26 用户实测报障: 「删掉了壁纸应该自动切到下一张吧? 怎么就空了,
-    点击下一张也没反应」)。起步取自然序第一张 (往前步进时取最后一张), 随机档则任意一张。
+    全哑掉 (删掉壁纸后既不自动换图, 点「下一张」也无反应)。起步取自然序第一张 (往前步进时取最后一张), 随机档则任意一张。
     """
     cur = wallpaper_file() if cur is None else cur
     folder = candidates_dir(cur)
@@ -221,7 +220,7 @@ WALL_MD5_LOCK = threading.Lock()
 
 
 def md5_cached(p: Path) -> str:
-    """带缓存的 :func:`file_md5` (键 = 路径+mtime+字节数, 内容变了必然重算)。"""
+    """带缓存的:func:`file_md5` (键 = 路径+mtime+字节数, 内容变了必然重算)。"""
     try:
         st = p.stat()
     except OSError:
@@ -274,7 +273,7 @@ def find_wall_dupes(wall_dir: Path, db_factory, progress_cb=None) -> dict:
     """扫 ``wall_dir`` 里与库内某页 **MD5 字节一致**的副本 —— **只报告, 绝不删**。
 
     用途是「省空间」: 这些文件和图库里那份一模一样, 删掉壁纸夹里的那份不丢任何东西
-    (用户 2026-09-24 拍板: 必须**逐条人工确认 + 走 Windows 回收站**, 不许自动清理)。
+    (必须**逐条人工确认 + 走 Windows 回收站**, 不许自动清理)。
     所以本函数是**纯只读**的 —— 删不删、删哪几条, 一律由界面上的勾选决定。
 
     ``progress_cb(done, total, name)`` 在每张图前调一次 (7.4 GB 要跑几十秒, 得有进度)。
@@ -378,8 +377,7 @@ def img_v(abs_path: Path) -> str:
     为什么非有不可: 图片 URL 里的 `p=` 是**文件路径**, 而「路径不变、内容变」在
     页序调整里是必然发生的 —— 调页序就是把同一目录下的文件名互换内容(名字不变、
     内容互换), 好让「第 N 张」直接等于 `p{N}`。URL 要是不变, 浏览器会拿
-    `max-age=2592000`(30 天) 的缓存一直显示旧图, 用户看到的就是
-    「调了却没调 / 封面还是那样 / 点进去不起效」。
+    `max-age=2592000`(30 天) 的缓存一直显示旧图, 看起来像改动没生效。
     令牌与缩略图磁盘缓存的键同源(mtime+size) → 内容变了令牌必变, 没变就不变。"""
     try:
         st = abs_path.stat()
@@ -501,7 +499,7 @@ def _no_wallpaper(reason: str) -> dict:
 
     额外带上 ``folder``: 壁纸夹配好了没有。桌面上的小控件在**没有当前壁纸**时靠它决定
     画出哪些键 —— 配了夹子就还能「下一张 / 播放 / 顺序·随机」, 一个都没配就真的无处可点
-。
+    (那张壁纸被删之后卡片整个**空了**, 一个按钮都没有)。
     """
     d = candidates_dir(None)
     return {"status": "ok", "active": False, "reason": reason,

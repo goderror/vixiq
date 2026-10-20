@@ -34,7 +34,7 @@ from db.store import pixiv_natural_key
 # ========== SauceNAO 结果来源识别 (2026-09-10 扩展: 不止 pixiv/推特) ==========
 # 纯函数, 供 detail 反搜与冒烟离线测试复用。识别: pixiv / twitter(x) / artstation /
 # deviantart / danbooru / nico静画 / skeb + booru 族 + 域名白名单兜底
-# 
+# (2026-09-13 精简: 去掉 nijie / pawoo / furaffinity / e621)
 # —— 防止把任何 SauceNAO 命中站点的作者误判成盗图 p 站用户。
 _PIXIV_LINK = r'https?://www\.pixiv\.net/.*?(?:illust_id|id|artworks|users)(?:=|/)?(\d+)'
 _TW_STATUS = r'https?://(?:www\.)?(?:twitter\.com|x\.com)/(?:[^/]+/status/|status/)(\d+)'
@@ -46,7 +46,7 @@ _ARTSTATION_ARTWORK = re.compile(r'artstation\.com/artwork/([\w-]+)', re.I)
 _DEVIANTART = r'https?://(?:www\.)?deviantart\.com/([\w-]+)/art/[^/]+-(\d+)'
 _DEVIANTART_VIEW = r'https?://(?:www\.)?deviantart\.com/view/(\d+)'
 _DANBOORU = r'https?://(?:[a-z0-9-]+\.)*danbooru\.(?:com|donmai\.us)/posts?/(\d+)'
-# 常用画师站精确模式 (2026-09-10 三扩; 2026-09-13 用户精简: 去掉 nijie/pawoo/furaffinity)
+# 常用画师站精确模式 (2026-09-10 三扩; 2026-09-13 精简: 去掉 nijie/pawoo/furaffinity)
 _NICO = r'https?://seiga\.nicovideo\.jp/seiga/(im\d+)'
 _SKEB = r'https?://skeb\.jp/@([^/]+)(?:/works/(\d+))?'
 # 泛化兜底: 其余 SauceNAO 命中站点按域名归类 (booru 族尽力提取作品 ID, 其余只归类)
@@ -96,7 +96,7 @@ def detect_source_links(hrefs: "list[str]") -> "dict | None":
     """从一组 URL 里识别来源站点, 返回 {site, url, artwork_id, author_id, handle} 或 None。
     site ∈ pixiv / twitter / artstation / deviantart / danbooru / niconico / skeb /
     yandere / konachan / gelbooru / sankaku / safebooru / zerochan / animepictures /
-    其余域名白名单。
+    其余域名白名单 (2026-09-13 精简: 去掉 nijie/pawoo/furaffinity/e621)。
     pixiv 优先, 未知名返回 None。"""
     for h in hrefs:
         u = (h or "").strip()
@@ -142,7 +142,7 @@ def detect_source_links(hrefs: "list[str]") -> "dict | None":
         if m:
             return {"site": "danbooru", "url": u, "artwork_id": m.group(1),
                     "author_id": None, "handle": ""}
-        # 常用画师站精确解析 
+        # 常用画师站精确解析 (2026-09-13 精简: 去掉 nijie/pawoo/furaffinity)
         m = re.search(_NICO, u)
         if m:
             return {"site": "niconico", "url": u, "artwork_id": m.group(1),
@@ -377,7 +377,7 @@ class ReverseSearch:
     def _artstation_author(self, url: str) -> "tuple[str, str] | None":
         """读 ArtStation 官方项目 JSON 拿**当前**作者: 返回 (显示名, 账号), 拿不到 None。
 
-        为什么必须读网页 : SauceNAO 结果卡上的作者名是**它自己的索引
+        为什么必须读网页: SauceNAO 结果卡上的作者名是**它自己的索引
         快照** —— 作者改过名, 卡片就永远是旧名。实例: 卡片写「ying yi」, 而作品页
         (artstation.com/artwork/DAJVOE) 当前作者是「qing ying」(账号 qing0ying0),
         连 CDN 图片文件名都还留着 `ying-yi-*` 的旧痕迹。与 pixiv 的 `_ajax_body` 同思路:
@@ -410,7 +410,7 @@ class ReverseSearch:
         return None
 
     def _enrich_foreign_author(self, det: dict, card_name: str) -> None:
-        """定外来源的作者名 :
+        """定外来源的作者名 (与 pixiv 一样"严格记录网页上的当前作者"):
           ① 源网页当前作者 —— 读得到就用 (最权威, 能纠正改名);
           ② URL 里的账号 handle —— 当前账号, 稳定标识;
           ③ SauceNAO 结果卡上的名字 —— 第三方索引快照, **可能是旧名**, 明确标成
@@ -507,7 +507,7 @@ class ReverseSearch:
         - DB 里已有「该来源@账号」的作品且作者是 pixiv 用户(数字 author_id) →
           其 pixiv 顶层夹/「站点@账号」子夹 (与一键整理的子夹聚合一致, 不再散落);
         - 否则平铺「站点@账号」。
-        未知来源(other) / 无账号(未知作者) → 夹名加 `#...#` 包裹 (2026-09-12):
+        未知来源(other) / 无账号(未知作者) → 夹名加 `#...#` 包裹 
         未知来源 → `#其他来源#`; 真实来源无账号 → `#站点#` (与一键整理口径一致;
         不用 `_` 前缀: 部分作者名本身含下划线, 区分度不够)。
         返回归档目标目录 (archive_path 下)。"""
@@ -543,7 +543,7 @@ class ReverseSearch:
                 # 顶层夹名走全项目唯一规则 (2026-09-21 治本): 与一键整理的期望夹一字不差,
                 # 否则同一位作者会被摆成两个夹 (夹名里的非法字符处理方式必须一致)。
                 # 顶层按作者名, 内部按来源分子夹 —— **单来源也是**
-                # 
+                # (单来源若平铺进作者夹, 夹名里就看不出作品来自哪个站,
                 #  与一键整理 `_tidy_expected_folder` 同口径)
                 nm = author_folder_name(self.db, top, str(a.get("name") or ""))
                 return self.archive_path / nm / fname

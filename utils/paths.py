@@ -83,7 +83,7 @@ def _abs(p: "str | None", fallback: Path) -> Path:
 
 def data_root() -> Path:
     """运行时数据根:db/img/logs/cookies 所在, 支持 data_root_override 重定向。
-    默认 = writable_root/data,用户也可以写死 D:/vixiq-data 放非系统盘。"""
+    默认 = writable_root/data,也可写死绝对路径放非系统盘。"""
     fallback = writable_root() / "data"
     override = _paths_cfg().get("data_root_override") or ""
     d = _abs(override, fallback)
@@ -105,7 +105,7 @@ def user_data(rel: "str | Path") -> Path:
 
 def temp_root() -> Path:
     """项目独占临时根。所有 Selenium profile / Python tempfile / 上传缓冲统一走这。
-    默认 = data_root/temp,也支持 temp_root_override 单独写死 D:/vixiq-temp。"""
+    默认 = data_root/temp,也支持 temp_root_override 单独写死绝对路径。"""
     override = _paths_cfg().get("temp_root_override") or ""
     if override:
         fallback = data_root() / "temp"
