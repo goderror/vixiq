@@ -6,7 +6,7 @@
 
 ---
 
-## 功能一览
+## 功能
 
 八个页签（网络查询 / 下载任务 / 反搜来源 / 图库管理 / 回收站 / 作者管理 / 统计 / 设置）+ 一组桌面层能力。
 
@@ -21,7 +21,7 @@
 | 📊 统计 | 概览卡片，以及来源、作者状态、作品类型、R18、标签 Top 60、作者作品数分布 |
 | ⚙ 设置 | 七组卡片：账户 · 系统与启动 · 桌面与壁纸 · 浏览与下载 · 日志与记录 · 数据与路径 · 维护（含 🩺 体检与审批、ℹ️ 版本与构建） |
 
-**桌面层（打包版的日常入口）**
+**桌面层**
 
 | 模块 | 说明 |
 |------|------|
@@ -29,90 +29,55 @@
 | 🖼️ 壁纸夹 / 壁纸库 | 指定一个壁纸夹作为幻灯片源；「⬆ 从图库生成壁纸」按尺寸（≥1920×1080）与比例（偏离 16:9 ≤10%）筛选合格的页，原样复制并登记，幂等不重复 |
 | ✨ 壁纸文案 AI | 接入 OpenAI 兼容接口（DeepSeek / Moonshot / 智谱 / 通义 / OpenAI 等），上传当前壁纸生成「标题 + 一句氛围话」显示在小控件卡片上；结果落盘缓存，同一张图只生成一次 |
 | 🖥 托盘常驻 | 托盘图标与菜单；双击图标打开图库，右键打开菜单。开关项改动立即生效：托盘常驻 / 启动时打开浏览器 / 桌面壁纸小控件 / 🔔 壁纸切换提示 / 🚪 关闭页面即退出 |
-| 📁 路径 | 设置页统一管理四处目录（图片目录 / 数据目录 / 临时目录 / 壁纸夹），并显示各处占用；临时目录支持一键清理。前三处改动重启后生效，壁纸夹选完立即生效 |
-| 🛡 安全模式 | 持久化开关。开启后 R18 内容在搜索结果与图库中模糊打码并带 🔞 徽标，双击大图也需点「🔒 显示」解锁，适用于公共场合；「涩图」文件夹内的图片自动归类为 R18 |
+|  安全模式 | 持久化开关。开启后 R18 内容在搜索结果与图库中模糊打码并带 🔞 徽标，双击大图也需点「🔒 显示」解锁，适用于公共场合；「涩图」文件夹内的图片自动归类为 R18 |
 | 🎀 回到顶部 | 右下角浮动按钮，滚动后淡入，点击平滑回顶 |
 
 ---
 
-## 快速开始（开发运行）
+## 运行
+
+**环境要求**：Windows 10 / 11、Python 3.11 及以上、Microsoft Edge。
 
 ```bash
-# 1. 建虚拟环境（Python 3.11+ 均可；requirements 已带版本标记，3.14 实测可用）
+# 1. 建虚拟环境
 python -B -m venv .venv
 
 # 2. 装依赖
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 
-# 3. 运行（自动打开浏览器到 http://127.0.0.1:7790/，端口见配置）
+# 3. 启动（自动打开浏览器到 http://127.0.0.1:7790/）
 .venv\Scripts\python.exe main.py
 ```
 
-首次使用需在设置页登录 pixiv；登录态持久化，之后自动无头登录。
+按作品下载需要登录态：首次启动后到设置页 →「账户」登录 Pixiv，登录态写入本地并加密保存，之后自动无头登录。
 
-### 第一次使用
-
-1. **登录**：设置页 →「账户」→ 登录 Pixiv 账号。登录态写入 `cookies.bin`（DPAPI 加密），之后自动无头登录。所有联网功能依赖登录态，cookies 过期后需重新登录。
-2. **配置数据 / 图片目录**（可选，建议首次使用时配置）：设置页 →「📁 路径」，将「图片目录」指向非系统盘（原图体积大且持续增长），数据库、日志、缩略图可留在默认的数据目录。该卡片同时显示各处占用，并可一键清理临时目录。改动重启 Vixiq 后生效。
-3. **查询并入队**：在查询页按作品 ID / 作者 URL / 关键字搜索，卡片上点「加入清单」。
-4. **下载**：下载任务页 →「▶ 开始所有未完成」。
-5. **管理图库**：图库管理页筛选、排序、搜索；可点「🩺」运行一次体检，列出缺作者或缺失文件的条目。
-6. **桌面层**（可选）：设置页 →「📁 路径」指定壁纸夹 → 在「系统与启动」分组启用「🖼️ 桌面壁纸小控件」与「🖥 托盘常驻」。
-7. **AI 文案**（可选）：设置页 →「✨ 壁纸文案」，填写接口地址（到 `/v1` 为止）、模型名与密钥 →「🔌 测试连接」→「⬆ 上传当前壁纸」。
-
-## 打包发布（独立版本）
+### 打包为 exe
 
 ```bash
-# 需要先把 msedgedriver.exe 放入 resources/（见「仓库未包含的文件」）
 .venv\Scripts\python.exe -m PyInstaller build.spec --noconfirm
-# 产物在 dist/vixiq/，整个目录拷走即可双击运行（windowed，无控制台）
 ```
 
-**构建后检查**：
+产物位于 `dist/vixiq/`，整个目录拷走即可双击运行（windowed，无控制台）。启动后请访问 `http://127.0.0.1:<端口>/` 确认页面正常渲染；若修改 `build.spec` 的 `datas`，须保留 `('web/static', 'web/static')`，否则根页面会返回 404。
 
-1. **验证页面可访问**：启动 exe 后访问 `http://127.0.0.1:端口/`，须返回 200 且正常渲染（不能只验证 API）。`web/static/` 由 build.spec 打包进 `_internal/web/static`；若修改 `datas`，须保留 `('web/static', 'web/static')` 一行，否则根页面返回 404。
-2. **沿用现有配置**（可选）：将 `config/user.json` 复制到 `dist/vixiq/config/user.json`；未复制时程序按默认值启动，数据写入 exe 同级的 `data/`。
-3. **分发前删除 `dist/vixiq/config/`**，其中包含构建者的本机路径与凭据。
-
-### 公开发布清单
-
-默认构建产物 `dist/vixiq/` 含第三方立绘（`web/static/to-top.png`，画师 示例画师 的 Q 版初音），不可公开分发。公开版本需使用发布模式，并输出到独立目录：
-
-```powershell
-$env:VIXIQ_RELEASE=1
-.venv\Scripts\python.exe -m PyInstaller build.spec --noconfirm --distpath dist-release
-$env:VIXIQ_RELEASE=$null     # 构建完成后清除，否则后续构建默认均为发布版
-```
-
-逐条核对：
-
-- [ ] 产物内**不含**立绘：`Get-ChildItem dist-release\vixiq\_internal\web\static` 应仅有 `app.js / style.css / index.html / favicon.ico / favicon.svg`
-- [ ] 删除 `dist-release\vixiq\config\`（含构建者的本机配置），由使用者自行配置
-- [ ] 启动 exe，访问 `http://127.0.0.1:<端口>/`，返回 200 且正常渲染（不能只验证 API）
-- [ ] README 的「功能一览」与实际功能一致
-- [ ] `git status` 干净、`git log -1` 指向发布提交，并打 tag
+仓库不包含 `resources/msedgedriver.exe`（二进制体积大且须与本机 Edge 大版本匹配）。需要时可从 [Microsoft Edge WebDriver](https://developer.microsoft.com/microsoft-edge/tools/webdriver/) 下载对应版本放入 `resources/`；未提供时由 Selenium 自动下载匹配驱动。
 
 ---
 
-## 仓库未包含的文件
+## 首次使用
 
-以下文件因体积或授权原因未纳入版本库。缺少这些文件时程序仍可启动，相关功能自动降级或改为按需获取。
-
-| 文件 | 未纳入原因 | 缺失时的处理 |
-|------|------------|--------------|
-| `resources/msedgedriver.exe` | 23 MB 二进制，且须与本机 Edge 大版本匹配 | 从 [Microsoft Edge WebDriver](https://developer.microsoft.com/microsoft-edge/tools/webdriver/) 下载对应大版本放入 `resources/`；也可不提供，由 Selenium 自动下载匹配驱动 |
-| `web/static/to-top.png` | 「回到顶部」按钮的重绘立绘源自第三方 pixiv 作品，授权不明 | 按钮降级为纯色圆形加白色箭头（`#to-top.no-img`），功能不受影响 |
-| `config/user.json` | 个人本机配置 | 程序按 `resources/default.json` 的默认值启动，数据写入程序同级 `data/` |
-
-第三方 Python 依赖声明见 [requirements.txt](requirements.txt)；冒烟用例会校验源码 import 的第三方库均已声明。
+1. **登录**：设置页 →「账户」→ 登录 Pixiv 账号。登录态持久化，所有联网功能依赖登录态；cookies 过期后需重新登录。
+2. **配置图片目录**（可选）：设置页 →「📁 路径」，将「图片目录」指向非系统盘（原图体积大且持续增长）。该卡片同时显示各处占用，并可清理临时目录。
+3. **查询并入队**：查询页按作品 ID / 作者 URL / 关键字搜索，卡片上点「加入清单」。
+4. **下载**：下载任务页 →「▶ 开始所有未完成」。
+5. **管理图库**：图库管理页筛选、排序、搜索；可点「🩺」运行体检，列出缺作者或缺失文件的条目。
+6. **桌面层**（可选）：指定壁纸夹后，在设置页「系统与启动」分组启用「🖼️ 桌面壁纸小控件」与「🖥 托盘常驻」。
+7. **AI 文案**（可选）：设置页 →「✨ 壁纸文案」，填写接口地址（到 `/v1` 为止）、模型名与密钥 →「🔌 测试连接」。
 
 ---
 
-## 存储结构（按「体积 × 增量」分层）
+## 数据与存储
 
-程序本体与小体积、增量温和的数据（配置、内置资源、数据库、日志、缩略图）默认位于程序目录；
-图片这类体积大且持续增长的数据建议指向非系统盘。目录划分由 `utils/paths.py` 统一分发，代码中无硬编码路径，
-三处目录可在设置页 →「📁 路径」修改（壁纸夹在同一张卡片内，选完立即生效）：
+程序本体与小体积、增量温和的数据（配置、内置资源、数据库、日志、缩略图）默认位于程序目录；图片这类体积大且持续增长的数据建议指向非系统盘。目录划分由 `utils/paths.py` 统一分发，代码中无硬编码路径。
 
 | 设置项 | 配置键 | 内容 | 默认 |
 | --- | --- | --- | --- |
@@ -120,29 +85,26 @@ $env:VIXIQ_RELEASE=$null     # 构建完成后清除，否则后续构建默认�
 | 数据目录 | `paths.data_root_override` | 数据库 · 日志 · 缩略图 | 程序目录下的 `data/` |
 | 临时目录 | `paths.temp_root_override` | 浏览器 profile · 上传缓冲（可随时清理） | 数据目录下的 `temp/` |
 
-```
-<程序目录>（源码目录，或打包后的 dist\vixiq\）
-├── main.py / vixiq.exe              程序入口
-├── core/  db/  utils/  web/         源码（发布版打入 _internal）
-├── resources/                       只读资源：default.json、xpaths.json、msedgedriver.exe、icon.ico、icon.svg、splash.png
-├── config/user.json                 本机配置（不入库，构建发布版时需手动复制）
-└── autotest/                        测试用例与开发辅助脚本
+前三项修改后重启生效；壁纸夹选完立即生效。
 
-<数据目录>\                            ← 默认 <程序目录>/data（data_root_override 可整体迁移）
-├── pixiv.db                         主数据库（百 MB 量级，增量温和）
-├── cookies.bin                      登录态（DPAPI 加密）
-├── account.json / self_check.json / reverse_results.json
-├── img\                             图库原图（img_subdir 指向其他磁盘时可不在数据目录下）
-├── thumbs\                          480px 缩略图缓存（可整目录清除，会自动重建）
-├── logs\                            运行日志（仅保留最近 7 天，启动时清理）
-├── feature_db\                      以图搜图特征库（.npz）
-├── input\                           反搜输入目录
-├── backup\  tmp\  temp_upload\      备份与临时文件
-└── temp\                            临时根目录（temp_root_override 可单独指定）
-    └── browser\                     Selenium 临时 profile（随用随删）
+```
+<程序目录>/
+├── main.py 或 vixiq.exe       程序入口
+├── resources/                 只读资源：default.json、xpaths.json、图标、启动图
+├── config/user.json           本机配置（不入库）
+└── web/  core/  db/  utils/   源码
+
+<数据目录>/
+├── pixiv.db                   主数据库
+├── cookies.bin                登录态（DPAPI 加密）
+├── img/                       图库原图
+├── thumbs/                    480px 缩略图缓存（可整目录清除，会自动重建）
+├── logs/                      运行日志（仅保留最近 7 天）
+├── feature_db/                以图搜图特征库
+└── temp/                      临时文件（含 Selenium 临时 profile）
 ```
 
-**配置机制**：`resources/default.json`（只读默认值）与 `config/user.json`（用户覆盖，深度合并，`utils/config.py` 中的 `_canonicalize` 兜底）。路径重定向通过四个字段实现，界面中均位于「📁 路径」卡片：
+**配置机制**：`resources/default.json` 提供只读默认值，`config/user.json` 覆盖，深度合并（`utils/config.py` 中的 `_canonicalize` 兜底）。路径重定向通过四个字段实现：
 
 ```json
 "paths": {
@@ -153,20 +115,20 @@ $env:VIXIQ_RELEASE=$null     # 构建完成后清除，否则后续构建默认�
 }
 ```
 
-`img_subdir` 填单段子目录名（如 `img`）表示置于数据目录下，填绝对路径表示使用其他磁盘。新增或修改配置字段时，需同步 `resources/default.json` 与 `_canonicalize()` 的兜底值。
+`img_subdir` 填单段子目录名（如 `img`）表示置于数据目录下，填绝对路径表示使用其他磁盘。
 
 ---
 
 ## 隐私与安全
 
-- **本地处理**：图片、特征库、登录态、数据库、日志仅保存在本机（默认程序同级 `data/`，可在设置页改到其他磁盘），不会主动上传。
+- **本地处理**：图片、特征库、登录态、数据库、日志仅保存在本机，不会主动上传。
 - **Cookies 加密**：登录态写入 `cookies.bin`，使用 Windows DPAPI（AES-256，密钥由系统按当前账户托管）加密，并加文件 ACL 锁定。更换系统或修改密码后旧 cookies 无法解密，重新登录即可。
-- **.gitignore**：排除 `config/user.json`、`data/`、`*.db`、`logs/`。
+- **不入库的内容**：`config/user.json`、`data/`、`*.db`、`logs/` 均在 `.gitignore` 中排除。
 
-## 数据与缓存清理机制（三层自动收敛）
+## 缓存清理
 
-1. **驱动生命周期清理**：Selenium 退出时立即删除临时 profile（`<临时目录>\browser\`）。
-2. **临时区收敛**：启动时清理超过 24 小时的文件；超过 5 GB 时按旧到新删除；进程退出（atexit）时执行激进清理。设置页 →「📁 路径」另提供一键清理，并实时显示各处占用。
+1. **驱动生命周期清理**：Selenium 退出时立即删除临时 profile。
+2. **临时区收敛**：启动时清理超过 24 小时的文件；超过 5 GB 时按旧到新删除；进程退出时执行激进清理。设置页 →「📁 路径」另提供一键清理。
 3. **日志收敛**：启动时删除 `logs/` 下超过 7 天的日志。
 
 ---
@@ -175,16 +137,17 @@ $env:VIXIQ_RELEASE=$null     # 构建完成后清除，否则后续构建默认�
 
 - **端口被占用**：默认端口 7790，可通过 `web.port` 修改。检测到运行中的实例时直接复用；残留端口会被清理后顺延。
 - **Edge driver 版本不匹配**：`resources/msedgedriver.exe` 须与本机 Edge 大版本一致。启动报错时升级 Edge，或移除该文件由 Selenium 自动下载匹配驱动。
+- **「回到顶部」显示为纯色圆形**：该按钮的装饰图未包含在仓库中，界面按预期降级为圆形底 + 白色箭头，功能不受影响。
 - **数据占用系统盘**：设置页 →「📁 路径」显示各目录的实际落点与占用。将「图片目录」指向非系统盘可显著降低系统盘占用；也可直接修改 `config/user.json` 中的 `img_subdir` / `data_root_override` / `temp_root_override`。
 - **修改路径未生效**：路径改动需重启 Vixiq（数据库连接与路径缓存在进程内建立）；「系统与启动」分组内的开关保存后立即生效。
 
 ---
 
-## 开发指引
+## 开发
 
-- **冒烟测试**：`.venv\Scripts\python.exe -m autotest.smoke_all`（T1~T136，128 用例，全程离线，约 48 秒），报告写入 `autotest/SMOKE_REPORT.md`。
-- **临时诊断脚本**：统一放在 `autotest/_live_*.py`，用后删除；调试输出不写入仓库根目录。
-- **文档约定**：功能或修复完成后同步更新 README；版本级变化记入 [CHANGELOG.md](CHANGELOG.md)。
+- **测试**：`.venv\Scripts\python.exe -m autotest.smoke_all`（T1~T136，128 用例，全程离线，约 48 秒），报告写入 `autotest/SMOKE_REPORT.md`。
+- **临时诊断脚本**：统一放在 `autotest/_live_*.py`，用后删除。
+- **文档**：功能变化同步更新 README，版本级变化记入 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
