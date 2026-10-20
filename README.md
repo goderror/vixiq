@@ -173,7 +173,7 @@ F:\pixiv-toolkit-temp                ← 临时根（temp_root_override）
 
 - **冒烟测试**：`.venv\Scripts\python.exe -m autotest.smoke_all`，改完代码立即跑，全 PASS 才继续（当前 T1~T133，125 用例，全程离线、约 49 秒）。报告落在 `autotest/SMOKE_REPORT.md`。
 - **临时诊断脚本**：一律放 `autotest/_live_*.py`，用完即删；调试输出不得散落根目录。
-- **文档约定**：每完成功能/修复，同步更新 README（说明）与 DEBUG_HISTORY.md（历史条目）。
+- **文档约定**：每完成功能/修复，同步更新 README（说明）与 DEBUG_HISTORY.md（历史条目）；**版本级**变化另记 [CHANGELOG.md](CHANGELOG.md)（随仓库分发，DEBUG_HISTORY 不发）。
 
 ---
 
