@@ -4,6 +4,8 @@
 
 所有数据保存在本机，图片等体积较大的数据可指定到非系统盘。
 
+![图库管理](docs/screenshots/04-library.png)
+
 ---
 
 ## 功能
@@ -30,6 +32,27 @@
 | 安全模式 | 对 R18 内容打码，适合公共场合浏览 |
 | 📁 路径 | 统一管理图片、数据、临时目录与壁纸夹 |
 | 🎀 回到顶部 | 滚动后出现，点击回到页首 |
+
+### 界面示例
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/01-query.png" alt="网络查询"><br>🌐 网络查询</td>
+<td width="50%"><img src="docs/screenshots/02-tasks.png" alt="下载任务"><br>📥 下载任务</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/03-reverse.png" alt="反搜来源"><br>🔎 反搜来源</td>
+<td><img src="docs/screenshots/06-authors.png" alt="作者管理"><br>👤 作者管理</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/07-stats.png" alt="统计"><br>📊 统计</td>
+<td><img src="docs/screenshots/08-settings.png" alt="设置"><br>⚙ 设置</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/05-trash.png" alt="回收站"><br>🗑️ 回收站</td>
+<td></td>
+</tr>
+</table>
 
 ---
 
