@@ -78,6 +78,10 @@ from utils.logger import build_reporter
 
 from web.event_bus import EventHub, WebReporter
 
+# 根证书优先用随包 certifi 证书包: 系统证书库在 Windows 10 停止安全更新后不再刷新
+# (详见 utils/paths.prefer_bundled_ca), 必须在任何 urlopen 之前生效
+paths.prefer_bundled_ca()
+
 # =============================================================
 # 全局单例 (Flask dev server threaded=True, 多线程并发安全)
 # =============================================================
