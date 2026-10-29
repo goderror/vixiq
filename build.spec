@@ -85,7 +85,7 @@ print("=" * 70)
 # PyInstaller 静态分析会漏掉这些子模块 → 打包版一启动浏览器就报
 # "No module named 'selenium.webdriver.edge.webdriver'"。必须显式 collect_submodules('selenium')。
 hiddenimports = collect_submodules('cv2') + collect_submodules('numpy') + collect_submodules('selenium')
-hiddenimports += ['PIL', 'PIL._tkinter_finder', 'tqdm']
+hiddenimports += ['PIL', 'PIL._tkinter_finder', 'tqdm', 'certifi']
 
 a = Analysis(
     ['main.py'],

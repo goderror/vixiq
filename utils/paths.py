@@ -130,6 +130,33 @@ def resource(rel: "str | Path") -> Path:
     return resource_root() / 'resources' / rel
 
 
+def ca_bundle() -> "Path | None":
+    """随包附带的 CA 根证书包(certifi 的 cacert.pem)。取不到返回 None。"""
+    try:
+        import certifi
+        p = Path(certifi.where())
+    except Exception:
+        return None
+    return p if p.is_file() else None
+
+
+def prefer_bundled_ca() -> "str | None":
+    """把进程的 SSL_CERT_FILE 指向随包 certifi 证书包, 供 urllib / ssl 默认上下文使用。
+
+    Windows 10 消费版 ESU 到期后不再通过 Windows Update 刷新根证书, 系统证书库会一直
+    停在内置那几十个; certifi 跟着 pip / 重新打包更新, 根证书更及时。
+    外部已显式设置 SSL_CERT_FILE / SSL_CERT_DIR 时不动, 尊重用户自定义。
+    返回实际生效的证书包路径, 未启用时返回 None。
+    """
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return os.environ.get("SSL_CERT_FILE") or None
+    p = ca_bundle()
+    if not p:
+        return None
+    os.environ["SSL_CERT_FILE"] = str(p)
+    return str(p)
+
+
 def config_dir() -> Path:
     """config/ 目录(用户可写的 user.json 放这),位于可写区,自动创建。"""
     d = writable_root() / 'config'

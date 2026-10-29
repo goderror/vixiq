@@ -15,3 +15,7 @@ numpy>=2.3; python_version >= "3.13"
 
 Pillow>=10.0
 tqdm>=4.65
+
+# 根证书包: 项目直接用 certifi 的 cacert.pem 作为 SSL_CERT_FILE
+# (系统证书库在 Windows 10 停止安全更新后不再刷新, 见 utils/paths.prefer_bundled_ca)
+certifi>=2024.2.2
