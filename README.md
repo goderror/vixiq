@@ -1,13 +1,13 @@
 # Vixiq
 
-**本机运行的 Pixiv 图片下载与图库管理工具。** 搜作品、批量下载、以图搜源、管理作者、整理图库，还能把收藏做成桌面壁纸轮播。
+**本地运行的 Pixiv 图片下载与图库管理工具。** 搜作品、批量下载、以图搜源、管理作者、整理图库，还能把收藏做成桌面壁纸轮播。
 
 ![平台](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)
 ![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
 ![License](https://img.shields.io/github/license/goderror/vixiq)
 ![Release](https://img.shields.io/github/v/release/goderror/vixiq)
 
-数据全部保存在本机，不经过任何中转服务器；图片这类会持续变大的数据可以指定到非系统盘。也可以打包成免安装的 exe，双击即用。
+数据全部保存在本地，不经过任何中转服务器；图片这类会持续变大的数据可以指定到非系统盘。也可以打包成免安装的 exe，双击即用。
 
 ![图库管理](docs/screenshots/04-library.png)
 
@@ -17,7 +17,7 @@
 - **不只是下载**：图库支持标签、批量编辑、拆分合并、回收站、体检（找出缺作者或缺文件的条目）和来源统计
 - **能找回来源**：按作品 ID 直查，或用 SauceNAO 以图搜源；本地也支持以图搜图，适合整理来路不明的图
 - **桌面层**：贴边壁纸便签、壁纸夹轮播、按图库尺寸生成壁纸，还有托盘常驻和安全模式（对 R18 打码）
-- **隐私可控**：登录态用 Windows DPAPI 加密后存本机；日志只留 7 天；临时目录超 24 小时自动清理
+- **隐私可控**：登录态用 Windows DPAPI 加密后存本地；日志只留 7 天；临时目录超 24 小时自动清理
 
 ## 快速开始
 
@@ -95,7 +95,7 @@ python -B -m venv .venv
 
 产物位于 `dist/vixiq/`，整个目录拷走即可双击运行（windowed，无控制台）。若修改 `build.spec` 的 `datas`，需保留 `('web/static', 'web/static')`，否则首页返回 404。
 
-仓库不包含 `resources/msedgedriver.exe`（二进制体积大且须与本机 Edge 版本匹配），首次运行由程序按需获取。
+仓库不包含 `resources/msedgedriver.exe`（二进制体积大且须与本地 Edge 版本匹配），首次运行由程序按需获取。
 
 ---
 
@@ -127,7 +127,7 @@ python -B -m venv .venv
 <程序目录>/
 ├── main.py 或 vixiq.exe       程序入口
 ├── resources/                 只读资源：default.json、xpaths.json、图标、启动图
-├── config/user.json           本机配置（不入库）
+├── config/user.json           本地配置（不入库）
 └── web/  core/  db/  utils/   源码
 
 <数据目录>/
@@ -157,7 +157,7 @@ python -B -m venv .venv
 
 ## 隐私与安全
 
-- **本地处理**：图片、特征库、登录态、数据库、日志仅保存在本机。
+- **本地处理**：图片、特征库、登录态、数据库、日志仅保存在本地。
 - **外部接口**：仅「壁纸文案 AI」会按填写的配置把当前壁纸发送到对应服务商，未配置时不产生外部请求。
 - **Cookies 加密**：登录态写入 `cookies.bin`，使用 Windows DPAPI（AES-256，密钥由系统按当前账户托管）加密，并加文件 ACL 锁定。更换系统或修改密码后旧 cookies 无法解密，重新登录即可。
 - **不纳入版本库**：`config/user.json`、`data/`、`*.db`、`logs/` 均在 `.gitignore` 中排除。
@@ -173,7 +173,7 @@ python -B -m venv .venv
 ## 常见问题
 
 - **端口被占用**：默认端口 7790，可通过 `web.port` 修改。已有实例在运行时直接复用，否则改用下一个可用端口。
-- **Edge driver 版本不匹配**：`resources/msedgedriver.exe` 须与本机 Edge 大版本一致。启动报错时升级 Edge，或移除该文件由 Selenium 自动下载匹配驱动。
+- **Edge driver 版本不匹配**：`resources/msedgedriver.exe` 须与本地 Edge 大版本一致。启动报错时升级 Edge，或移除该文件由 Selenium 自动下载匹配驱动。
 - **「回到顶部」显示为纯色圆形**：该按钮的装饰图不在仓库中，界面显示为圆形底加白色箭头，功能不受影响。
 - **数据占用系统盘**：设置页 →「📁 路径」显示各目录的实际落点与占用。将「图片目录」指向非系统盘可显著降低系统盘占用；也可直接修改 `config/user.json` 中的 `img_subdir` / `data_root_override` / `temp_root_override`。
 - **修改路径未生效**：路径改动需重启 Vixiq（数据库连接与路径缓存在进程内建立）；「系统与启动」分组内的开关保存后立即生效。
@@ -190,7 +190,7 @@ python -B -m venv .venv
 
 ## 免责声明
 
-- **非官方项目**：Vixiq 是个人开发的本机工具，与 pixiv Inc.（ピクシブ株式会社）没有任何隶属、赞助或认可关系，也不是官方客户端。
+- **非官方项目**：Vixiq 是个人开发的本地工具，与 pixiv Inc.（ピクシブ株式会社）没有任何隶属、赞助或认可关系，也不是官方客户端。
 - **商标**：「Pixiv」「pixiv」为 pixiv Inc. 的商标或注册商标，本项目仅在描述用途时提及（如说明数据来源、登录对象）；项目名称「Vixiq」与图标均为原创。
 - **使用范围**：仅供个人学习、研究与备份自己有权访问的内容。请遵守 [pixiv 利用規約](https://www.pixiv.co.jp/policy/) 与所在地区法律法规，不得用于批量转载、二次分发、破解付费内容或任何商业用途。
 - **风险自担**：平台接口变更或风控策略调整可能导致部分功能失效甚至影响账号；使用本工具产生的后果由使用者自行承担。
