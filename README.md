@@ -1,10 +1,41 @@
 # Vixiq
 
-本机运行的 Pixiv 图片资产管理工具（Web 版），支持下载、图库管理、以图搜源、本地以图搜图与作者管理，可打包为 exe 使用。
+**本机运行的 Pixiv 图片下载与图库管理工具。** 搜作品、批量下载、以图搜源、管理作者、整理图库，还能把收藏做成桌面壁纸轮播。
 
-所有数据保存在本机，图片等体积较大的数据可指定到非系统盘。
+![平台](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)
+![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)
+![License](https://img.shields.io/github/license/goderror/vixiq)
+![Release](https://img.shields.io/github/v/release/goderror/vixiq)
+
+数据全部保存在本机，不经过任何中转服务器；图片这类会持续变大的数据可以指定到非系统盘。也可以打包成免安装的 exe，双击即用。
 
 ![图库管理](docs/screenshots/04-library.png)
+
+## 和常见的 Pixiv 下载脚本有什么不同
+
+- **有界面**：网页式操作，不用记命令、不用改配置文件；下载队列可暂停、重试，动图自动合成
+- **不只是下载**：图库支持标签、批量编辑、拆分合并、回收站、体检（找出缺作者或缺文件的条目）和来源统计
+- **能找回来源**：按作品 ID 直查，或用 SauceNAO 以图搜源；本地也支持以图搜图，适合整理来路不明的图
+- **桌面层**：贴边壁纸便签、壁纸夹轮播、按图库尺寸生成壁纸，还有托盘常驻和安全模式（对 R18 打码）
+- **隐私可控**：登录态用 Windows DPAPI 加密后存本机；日志只留 7 天；临时目录超 24 小时自动清理
+
+## 快速开始
+
+**方式一：下载打包版（推荐）**
+
+到 [Releases](https://github.com/goderror/vixiq/releases) 下载 `vixiq-v1.0.0-win64.zip`，解压后双击 `vixiq.exe`，浏览器会自动打开 `http://127.0.0.1:7790/`。
+
+**方式二：从源码运行**
+
+需要 Windows 10/11、Python 3.11 及以上、Microsoft Edge。
+
+```bash
+python -B -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.venv\Scripts\python.exe main.py
+```
+
+首次使用请先到「设置 → 账户」登录 Pixiv —— 查询和下载都依赖登录态。
 
 ---
 
@@ -56,24 +87,7 @@
 
 ---
 
-## 运行
-
-**环境要求**：Windows 10 / 11、Python 3.11 及以上、Microsoft Edge。
-
-```bash
-# 1. 建虚拟环境
-python -B -m venv .venv
-
-# 2. 装依赖
-.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-
-# 3. 启动（自动打开浏览器到 http://127.0.0.1:7790/）
-.venv\Scripts\python.exe main.py
-```
-
-按作品下载需要登录态：首次启动后到设置页 →「账户」登录 Pixiv，登录态写入本地并加密保存，之后自动无头登录。
-
-### 打包为 exe
+## 打包为 exe
 
 ```bash
 .venv\Scripts\python.exe -m PyInstaller build.spec --noconfirm
@@ -81,7 +95,7 @@ python -B -m venv .venv
 
 产物位于 `dist/vixiq/`，整个目录拷走即可双击运行（windowed，无控制台）。若修改 `build.spec` 的 `datas`，需保留 `('web/static', 'web/static')`，否则首页返回 404。
 
-仓库不包含 `resources/msedgedriver.exe`（二进制体积大且须与本机 Edge 大版本匹配）。需要时可从 [Microsoft Edge WebDriver](https://developer.microsoft.com/microsoft-edge/tools/webdriver/) 下载对应版本放入 `resources/`；未提供时由 Selenium 自动下载匹配驱动。
+仓库不包含 `resources/msedgedriver.exe`（二进制体积大且须与本机 Edge 版本匹配），首次运行由程序按需获取。
 
 ---
 
