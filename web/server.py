@@ -3854,9 +3854,10 @@ def create_app() -> Flask:
         """设置页「退出程序」按钮: 完全终止进程并释放所有占用端口。
 
         流程: 先立即返回 JSON 让前端收到响应 → 独立线程延迟 0.8s (等响应发出
-        + 前端 toast) → 停全部后台线程 → 关 Selenium/浏览器驱动 → os._exit(0)
-        硬退出 (OS 立刻回收全部 socket/端口; atexit 不执行所以浏览器驱动要显式
-        关掉, 见 _close_all_browsers)。"""
+        + 前端 toast) → 停全部后台线程 → 直接杀浏览器 driver 进程树 → os._exit(0)
+        硬退出 (OS 立刻回收全部 socket/端口)。这里刻意不用 driver.quit():
+        页面加载中它会卡十几秒, 期间 msedgedriver.exe 一直锁着程序目录,
+        用户退出后删文件夹会提示「被另一个程序占用」(实测 17.8s)。"""
         global _quitting
         if _quitting:
             return jsonify({"status": "already_quitting"})
@@ -3879,8 +3880,9 @@ def create_app() -> Flask:
                     _thumb_warm_state["abort"] = True
                 except Exception:
                     pass
-                # 2. 关 Selenium 共享/手动登录浏览器驱动 (os._exit 不触发 atexit)
-                _close_all_browsers()
+                # 2. 直接杀浏览器 driver 进程树 (os._exit 不触发 atexit;
+                #    不用 driver.quit(), 它会卡十几秒并锁住程序目录)
+                _kill_browsers_fast()
             finally:
                 # 3. 硬退出: OS 立即回收端口 7790/78xx 与全部子进程句柄
                 os._exit(0)
@@ -9225,6 +9227,40 @@ def create_app() -> Flask:
     _ck_load_report_from_disk()
 
     return app
+
+
+def _kill_browsers_fast() -> None:
+    """退出专用: 直接杀 driver 进程树, 不等 driver.quit() 优雅收尾。
+
+    实测: 页面加载中/会话异常时 quit() 会阻塞十几秒, 这段时间 msedgedriver.exe
+    一直锁着程序目录 —— 用户退出后删整个文件夹会提示「被另一个程序占用」。
+    taskkill /T 连 Edge 子树一起杀, 退出耗时压到 1s 内; 临时 profile 留给下次
+    启动的 temp 清理收敛。"""
+    global _search_client, _manual_driver, _search_client_headless
+    pids: "list[int]" = []
+    for obj in (getattr(_search_client, "_driver", None), _manual_driver):
+        try:
+            pids.append(int(obj.service.process.pid))
+        except Exception:
+            pass
+    for pid in pids:
+        try:
+            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True,
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
+    with _client_lock:
+        _search_client = None
+        _search_client_headless = True
+    with _manual_lock:
+        _manual_driver = None
+    # 兜底: driver 已退出但 Edge 子树逃逸时, 按 profile 特征再扫一遍 ——
+    # 否则它们继续持有 profile 句柄, 用户删/改名程序文件夹会提示被占用
+    try:
+        from utils.browser import kill_orphan_browser_tree
+        kill_orphan_browser_tree()
+    except Exception:
+        pass
 
 
 def _close_all_browsers() -> None:
