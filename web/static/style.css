@@ -1469,3 +1469,47 @@ body.ob-open { overflow: hidden; }
   .work-card .w-actions .btn.ghost.icon-btn,
   .work-card .w-actions .btn.danger.icon-btn { flex: 0 0 28px; }
 }
+
+/* ===== 设为壁纸 · 选页弹窗 ===== */
+.wall-pick-mask {
+  position: fixed; inset: 0; z-index: 3500; padding: 16px;
+  background: rgba(15, 18, 24, .5);
+  display: flex; align-items: center; justify-content: center;
+}
+.wall-pick-mask.hidden { display: none; }
+.wall-pick-box {
+  width: min(760px, 100%); max-height: 86vh; overflow: auto;
+  background: var(--panel); border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .3);
+}
+.wall-pick-head {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px; background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.wall-pick-head b { font-size: 15px; }
+.wall-pick-head .btn { margin-left: auto; }
+.wall-pick-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px; padding: 16px;
+}
+.wall-pick {
+  position: relative; padding: 0; overflow: hidden; cursor: pointer;
+  background: #eef1f5; border: 1px solid var(--border);
+  border-radius: 10px; text-align: left; font: inherit;
+}
+.wall-pick:hover { border-color: var(--accent); }
+.wall-pick:disabled { opacity: .5; cursor: default; }
+.wall-pick img { display: block; width: 100%; aspect-ratio: 1/1; object-fit: cover; }
+.wall-pick-tag {
+  position: absolute; top: 6px; left: 6px; padding: 2px 7px;
+  border-radius: 999px; background: rgba(20, 20, 28, .62);
+  color: #fff; font-size: 11px;
+}
+.wall-pick-tip {
+  display: block; padding: 6px 8px; font-size: 11px;
+  color: var(--muted); background: var(--panel);
+}
+.wall-pick-tip.ok { color: #1b7f4b; }
+.wall-pick-tip.warn { color: #a86400; }

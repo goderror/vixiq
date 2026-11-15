@@ -69,19 +69,99 @@ try { wallApplyFold(localStorage.getItem(WALL_FOLD_KEY) === '1'); } catch (e) {}
 window.wallFold = wallFold;
 
 // 图库某张图直接设为桌面壁纸 (后端只认库内已下载的页, 不接受任意路径)
+async function wallApply(aid, page, force) {
+  return (await api('/api/wallpaper/apply', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ artwork_id: String(aid), page_num: Number(page) || 0,
+                           force: !!force }),
+  })) || {};
+}
+
+function wallFitTip(fit) {
+  if (!fit || !fit.level) return '';
+  if (fit.level === 'wide' || fit.level === 'ok') return '';
+  return '（' + (fit.text || '尺寸可能不适合') + '）';
+}
+
+function wallDupeNames(r) {
+  return (r.existing || []).map(x => x.name).slice(0, 5).join('、');
+}
+
 async function setWallpaperAs(aid, page) {
   try {
-    const r = await api('/api/wallpaper/apply', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ artwork_id: String(aid), page_num: Number(page) || 0 }),
-    });
-    toast('已设为桌面壁纸' + (r && r.name ? ' · ' + r.name : ''), 'ok');
+    let r = await wallApply(aid, page, false);
+    if (r.status === 'dupe') {
+      if (!confirm(`壁纸夹里已有这个作品的壁纸：\n${wallDupeNames(r)}\n\n仍要再设置一张吗？`)) return;
+      r = await wallApply(aid, page, true);
+    }
+    if (r.status !== 'ok') { toast('设置壁纸失败: ' + (r.msg || '未知原因'), 'err'); return; }
+    toast('已设为桌面壁纸' + wallFitTip(r.fit), 'ok');
+    if (isTabActive('library')) wallRefresh({ deep: true });
+  } catch (e) { toast('设置壁纸失败: ' + (e.message || e), 'err'); }
+}
+window.setWallpaperAs = setWallpaperAs;
+
+// 作品卡片「设为壁纸」: 先列出已下载的页让用户挑, 长条/竖图会明确标注会被裁切
+function openWallPicker(aid) {
+  const box = $('#lib-result');
+  const raw = (box && box._rawItems) || [];
+  const w = raw.find(x => String(x.artwork_id) === String(aid));
+  const pages = ((w && w.pages) || []).slice()
+    .sort((a, b) => (Number(a.page_num) || 0) - (Number(b.page_num) || 0));
+  if (!pages.length) { toast('这个作品还没有已下载的页', 'err'); return; }
+  const rows = pages.map(p => {
+    const ratio = (p.width && p.height) ? p.width / p.height : 0;
+    const ok = ratio >= 1.2;
+    const tip = !ratio ? '尺寸未知'
+      : (ok ? '横图 · 适合' : (ratio < 0.75 ? '长条/竖图 · 会裁切' : '接近方形 · 会裁切'));
+    return `<button class="wall-pick" onclick="wallPickApply('${esc(aid)}', ${Number(p.page_num) || 0}, this)">
+      <img src="${esc(p.thumb || p.url || '')}" alt="" loading="lazy">
+      <span class="wall-pick-tag">p${esc(p.page_num)} · ${p.width || '?'}×${p.height || '?'}</span>
+      <span class="wall-pick-tip ${ok ? 'ok' : 'warn'}">${tip}</span>
+    </button>`;
+  }).join('');
+  let m = $('#wall-picker');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'wall-picker';
+    m.className = 'wall-pick-mask hidden';
+    m.innerHTML = '<div class="wall-pick-box"><div class="wall-pick-head"><b></b>'
+      + '<button class="btn ghost" type="button" onclick="closeWallPicker()">✕</button></div>'
+      + '<div class="wall-pick-grid"></div></div>';
+    document.body.appendChild(m);
+    m.addEventListener('click', e => { if (e.target === m) closeWallPicker(); });
+  }
+  m.querySelector('.wall-pick-head b').textContent = '选择要设为壁纸的页';
+  m.querySelector('.wall-pick-grid').innerHTML = rows;
+  m.classList.remove('hidden');
+}
+window.openWallPicker = openWallPicker;
+
+function closeWallPicker() {
+  const m = $('#wall-picker');
+  if (m) m.classList.add('hidden');
+}
+window.closeWallPicker = closeWallPicker;
+
+async function wallPickApply(aid, page, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    let r = await wallApply(aid, page, false);
+    if (r.status === 'dupe') {
+      if (!confirm(`壁纸夹里已有这个作品的壁纸：\n${wallDupeNames(r)}\n\n仍要再设置一张吗？`)) return;
+      r = await wallApply(aid, page, true);
+    }
+    if (r.status !== 'ok') { toast('设置壁纸失败: ' + (r.msg || '未知原因'), 'err'); return; }
+    toast('已设为桌面壁纸' + wallFitTip(r.fit), 'ok');
+    closeWallPicker();
     if (isTabActive('library')) wallRefresh({ deep: true });
   } catch (e) {
     toast('设置壁纸失败: ' + (e.message || e), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
-window.setWallpaperAs = setWallpaperAs;
+window.wallPickApply = wallPickApply;
 
 function wallWatch() {
   // 图库页开着才轮询, 离开就停 (没人看着的页面不该白跑请求)
@@ -2309,8 +2389,7 @@ ${authorCellHtml(w, gallery)}
         </div>
         <div class="w-actions${gallery ? ' has-icons' : ''}">
           ${cartActionHtml(w)}
-          ${gallery ? `<div class="w-icon-grid">${onlyThisWorkBtnHtml(w)}<button class="btn ghost icon-btn" title="设为桌面壁纸（第 1 页）" onclick="setWallpaperAs('${esc(w.artwork_id)}', 0)">🖼️</button><button class="btn ghost icon-btn" title="编辑" onclick="openLibEdit('${esc(w.artwork_id)}')">✏️</button>
-          <button class="btn ghost icon-btn" title="编辑标签" onclick="openLibTags('${esc(w.artwork_id)}')">🏷️</button>
+          ${gallery ? `<div class="w-icon-grid">${onlyThisWorkBtnHtml(w)}<button class="btn ghost icon-btn" title="设为桌面壁纸（先选页）" onclick="openWallPicker('${esc(w.artwork_id)}')">🖼️</button><button class="btn ghost icon-btn" title="编辑" onclick="openLibEdit('${esc(w.artwork_id)}')">✏️</button>
           <button class="btn danger icon-btn" title="删除" onclick="libDeleteOne('${esc(w.artwork_id)}')">🗑️</button></div>` : `<button class="btn ghost" title="跳转到该作者（搜索作者）" onclick="jumpAuthor('${esc(w.author_id)}')">👤</button>`}
         </div>
       </div>
@@ -2991,6 +3070,8 @@ function _libMarkKeys(items) {
 
 function renderLibrary(items) {
   $('#lib-result')._lastItems = _libMarkKeys(items);
+  // 设壁纸的选页弹窗要用原始 items (页清单/缩略图/尺寸都在里面)
+  $('#lib-result')._rawItems = items;
   $('#lib-result').innerHTML = renderLibraryInner(items);
   decorateCartButtons($('#lib-result'));
 }

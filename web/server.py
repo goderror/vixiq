@@ -5945,8 +5945,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     def api_wallpaper_apply():
         """把图库里某一张图直接设为桌面壁纸。
 
-        入参 ``{artwork_id, page_num}`` —— 只认数据库里已下载的库内页, 不接受
-        前端传任意路径 (否则等于给了一个"把系统任意文件设成壁纸"的入口)。
+        入参 ``{artwork_id, page_num, force}`` —— 只认数据库里已下载的库内页,
+        不接受前端传任意路径 (否则等于给了一个"把系统任意文件设成壁纸"的入口)。
+
+        返回里的 ``fit`` 说明这张图适不适合做壁纸 (长条/竖图会被 Windows 裁切或
+        留边); 壁纸夹里已经有同一作品时返回 409 + ``existing``, 前端确认后带
+        ``force`` 重试 —— 避免同一个作品被反复塞进壁纸夹。
         """
         body = request.get_json(silent=True) or {}
         aid = str(body.get("artwork_id") or "").strip()
@@ -5956,16 +5960,21 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             page = 0
         if not aid:
             return jsonify({"status": "error", "msg": "缺少作品 ID"}), 400
+        width = height = 0
         with _db() as db:
             info = db.get_page_info(aid, page)
             rel = getattr(info, "local_path", None) if info else None
+            if info:
+                width, height = int(info.width or 0), int(info.height or 0)
             if not rel:
-                # 该页缺失 (删过页/作品视图点第 1 页) → 回退到第一张已下载的页
+                # 该页缺失 (删过页) → 回退到第一张已下载的页
                 row = db.conn.execute(
-                    "SELECT local_path FROM pages WHERE artwork_id=? "
+                    "SELECT local_path, width, height FROM pages WHERE artwork_id=? "
                     "AND local_path IS NOT NULL ORDER BY page_num LIMIT 1",
                     (aid,)).fetchone()
                 rel = row["local_path"] if row else None
+                if row:
+                    width, height = int(row["width"] or 0), int(row["height"] or 0)
         if not rel:
             return jsonify({"status": "error", "msg": "这张图还没下载到本地"}), 404
         img_root = Path(paths.user_data(
@@ -5977,11 +5986,52 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error", "msg": "路径不在图片目录内"}), 400
         if not p.is_file():
             return jsonify({"status": "error", "msg": "文件不存在"}), 404
+
+        # 适合做桌面壁纸的判据: 横图 + 足够宽; 长条/竖图/方形都会被系统裁切或留边
+        if width <= 0 or height <= 0:
+            try:
+                from PIL import Image
+                with Image.open(p) as im:
+                    width, height = im.size
+            except Exception:
+                pass
+        ratio = (width / height) if height else 0
+        if not width or not height:
+            fit = {"level": "unknown", "text": "读不到尺寸"}
+        elif ratio >= 1.2 and width >= 1280:
+            fit = {"level": "wide", "text": f"{width}×{height} 横图，适合做壁纸"}
+        elif ratio < 0.75:
+            fit = {"level": "tall", "text": f"{width}×{height} 长条/竖图，桌面会裁切或留边"}
+        elif ratio <= 1.1:
+            fit = {"level": "square", "text": f"{width}×{height} 接近方形，桌面会裁切"}
+        else:
+            fit = {"level": "ok", "text": f"{width}×{height}"}
+        fit.update({"width": width, "height": height, "ratio": round(ratio, 3)})
+
+        # 壁纸夹里已经有同作品的文件 → 先让用户确认, 不要重复往里塞
+        if not bool(body.get("force")):
+            existing = []
+            try:
+                from core.wallpaper_trace import candidates_dir
+                wall_dir = candidates_dir()
+                if wall_dir and wall_dir.is_dir():
+                    for f in wall_dir.iterdir():
+                        if f.is_file() and aid in f.name:
+                            existing.append({"name": f.name, "path": str(f),
+                                             "size": f.stat().st_size})
+                        if len(existing) >= 20:
+                            break
+            except Exception:
+                pass
+            if existing:
+                return jsonify({"status": "dupe", "msg": "壁纸夹里已有这个作品的壁纸",
+                                "existing": existing, "fit": fit}), 409
+
         if not apply_wallpaper(p):
             return jsonify({"status": "error", "msg": "系统没接受这次换壁纸"}), 500
         _notify_widget()
         return jsonify({"status": "ok", "file": str(p), "name": p.name,
-                        "info": _wall_info_payload(p)})
+                        "fit": fit, "info": _wall_info_payload(p)})
 
     @app.route("/api/wallpaper/dir")
     def api_wallpaper_dir_get():
