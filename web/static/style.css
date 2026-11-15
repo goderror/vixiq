@@ -87,6 +87,12 @@ body {
 }
 .tab:hover { background: #f4f6f8; color: var(--text); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+/* 回收站是低频操作: 只留一个图标, 推到导航最右端 (角落), 不和主功能抢位置 */
+.tab.tab-subtle {
+  margin-left: auto; padding: 8px 12px; font-size: 16px; color: #9aa3ad;
+}
+.tab.tab-subtle:hover { color: var(--text); }
+.tab.tab-subtle.active { color: var(--accent); }
 
 main { flex: 1; overflow-y: auto; padding: 20px; }
 .tabpage { display: none; }

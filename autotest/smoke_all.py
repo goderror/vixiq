@@ -10310,7 +10310,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261116b" and _mss.group(1) == "20261116b", \
+    assert _mjs and _mss and _mjs.group(1) == "20261116c" and _mss.group(1) == "20261116c", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10405,7 +10405,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261116b', html) and _re.search(r'app\.js\?v=20261116b', html), \
+    assert _re.search(r'style\.css\?v=20261116c', html) and _re.search(r'app\.js\?v=20261116c', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10788,7 +10788,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261116b" in html and "app.js?v=20261116b" in html, \
+        assert "style.css?v=20261116c" in html and "app.js?v=20261116c" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13126,7 +13126,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261116b" in _h and "style.css?v=20261116b" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261116c" in _h and "style.css?v=20261116c" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13254,7 +13254,8 @@ def t137_wallpaper_index_and_admin_page() -> None:
         r = client.post("/api/wallpaper/files/recycle", json={"names": ["crop_manual.jpg"]})
         j = r.get_json()
         assert r.status_code == 200 and j["recycled"] == 1, j
-        assert caught == [str(wall / "crop_manual.jpg")], caught
+        assert len(caught) == 1 and \
+            Path(caught[0]).resolve() == (wall / "crop_manual.jpg").resolve(), caught
         j = client.get("/api/wallpaper/files").get_json()
         assert "crop_manual.jpg" not in [x["name"] for x in j["items"]], j["items"]
 
@@ -13262,8 +13263,17 @@ def t137_wallpaper_index_and_admin_page() -> None:
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
         js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-        assert html.index('data-tab="authors"') < html.index('data-tab="wallpapers"') \
-            < html.index('data-tab="stats"'), "壁纸管理要紧挨作者管理 (图片/作者/壁纸三页连着)"
+        _i_lib = html.index('data-tab="library"')
+        _i_auth = html.index('data-tab="authors"')
+        _i_wall = html.index('data-tab="wallpapers"')
+        _i_trash = html.index('data-tab="trash"')
+        assert _i_lib < _i_auth < _i_wall, "图片/作者/壁纸三页要连着"
+        assert not (_i_lib < _i_trash < _i_wall), "回收站不许插在图片/作者/壁纸中间"
+        assert _i_trash > html.index('data-tab="stats"'), \
+            "回收站要挪到导航右端 (低频操作, 不抢主功能的位置)"
+        assert "tab-subtle" in html and ".tab.tab-subtle" in css, "回收站要弱化样式"
+        assert 'aria-label="回收站"' in html and 'data-tab="trash">回收站' not in html, \
+            "回收站页签只留图标 (文案在 title/aria-label 里)"
         assert 'id="tab-wallpapers"' in html and 'onclick="wallFilesScan(false)"' in html
         assert "function wallFilesEnter()" in js and "function wallFilesCard(f)" in js
         assert "else if (name === 'wallpapers') wallFilesEnter();" in js
