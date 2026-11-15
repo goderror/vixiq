@@ -751,13 +751,18 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s;
 }
 .lb-reorder-btn:hover { background: rgba(20,80,74,.7); border-color: #8fd8d0; }
-.lb-wall-btn {
-  border: 1px solid rgba(143,216,208,.5); background: rgba(20,60,56,.35);
-  color: #bdeee7; border-radius: 7px; padding: 2px 10px; font-size: 12px;
-  cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s;
+/* 大图左下角「设为壁纸」: 与 ‹ › 完全同一套圆形浮按钮 (同尺寸/同底色/同悬停),
+   不再挤在信息行里跟文字和「调整页序」抢位置。hidden = 当前卡片没有作品 ID。 */
+.lightbox-wall {
+  position: fixed; left: 24px; bottom: 24px; z-index: 3;
+  width: 44px; height: 44px; border: none; border-radius: 50%;
+  background: rgba(20,40,38,.55); color: #e8fdfa; font-size: 20px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background .15s;
 }
-.lb-wall-btn:hover { background: rgba(20,80,74,.7); border-color: #8fd8d0; }
-.lb-wall-btn.hidden { display: none; }
+.lightbox-wall:hover { background: rgba(20,60,56,.85); }
+.lightbox-wall.hidden { display: none; }
+@media (max-width: 900px) { .lightbox-wall { left: 8px; bottom: 12px; } }
 .lb-strip {
   width: 92vw; margin-top: 12px; padding: 10px 12px;
   background: rgba(18,30,29,.92); border: 1px solid rgba(143,216,208,.25);
@@ -1594,3 +1599,52 @@ body.ob-open { overflow: hidden; }
   color: #fff; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer;
 }
 .crop-r.active { background: #fff; color: #171717; border-color: #fff; }
+
+/* ===== 🖼 壁纸管理 (归属索引 + 查重) ===== */
+.wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.wf-card {
+  position: relative; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; box-shadow: var(--shadow);
+}
+.wf-card.is-current { border-color: #2f8f83; box-shadow: 0 0 0 2px rgba(47,143,131,.18); }
+.wf-pick {
+  position: absolute; right: 8px; top: 8px; z-index: 2;
+  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+  border-radius: 6px; background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.18);
+  cursor: pointer;
+}
+.wf-thumb {
+  position: relative; aspect-ratio: 16 / 9; background: #e9edf2;
+  display: flex; align-items: center; justify-content: center;
+  cursor: zoom-in; overflow: hidden;
+}
+.wf-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wf-cur {
+  position: absolute; left: 8px; top: 8px; padding: 1px 8px; border-radius: 999px;
+  background: #2f8f83; color: #fff; font-size: 11px; font-weight: 600;
+}
+.wf-meta { padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.wf-tag {
+  align-self: flex-start; padding: 1px 7px; border-radius: 999px; font-size: 11px;
+  background: rgba(25,118,210,.1); color: #1565c0; border: 1px solid rgba(25,118,210,.25);
+}
+.wf-tag.visual { background: rgba(123,31,162,.1); color: #7b1fa2; border-color: rgba(123,31,162,.25); }
+.wf-tag.manual { background: rgba(47,143,131,.12); color: #2f8f83; border-color: rgba(47,143,131,.3); }
+.wf-tag.orphan { background: rgba(249,168,37,.14); color: #a06a00; border-color: rgba(249,168,37,.45); }
+.wf-name {
+  font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wf-line {
+  font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wf-group {
+  margin-bottom: 16px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid rgba(249,168,37,.45); background: rgba(249,168,37,.06);
+}
+.wf-group-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 10px; font-size: 13px; font-weight: 600;
+}
+.wf-group-head .muted { font-weight: 400; font-size: 12px; color: var(--muted); }

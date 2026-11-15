@@ -8,7 +8,7 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261116a">
+<link rel="stylesheet" href="/static/style.css?v=20261116b">
 </head>
 <body>
 
@@ -50,6 +50,7 @@
   <button class="tab" data-tab="library">📚 图库管理</button>
   <button class="tab" data-tab="trash">🗑️ 回收站<span id="trash-badge" class="badge hidden">0</span></button>
   <button class="tab" data-tab="authors">👤 作者管理</button>
+  <button class="tab" data-tab="wallpapers">🖼️ 壁纸管理</button>
   <button class="tab" data-tab="stats">📊 统计</button>
   <button class="tab" data-tab="settings">⚙ 设置</button>
 </nav>
@@ -355,6 +356,43 @@
         <div class="hint">加载中…</div>
       </div>
       <div id="authors-pager-bottom" class="lib-pager"></div>
+    </div>
+  </section>
+
+  <!-- ===== 壁纸管理 (归属索引 + 查重; 只读扫描, 删副本必须手动勾选并进回收站) ===== -->
+  <section id="tab-wallpapers" class="tabpage">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>🖼️ 壁纸管理</h2>
+        <div class="panel-actions">
+          <span id="wf-dir" class="status-line"></span>
+          <button id="wf-scan-btn" class="btn accent" onclick="wallFilesScan(false)">🔍 扫描归属</button>
+          <button id="wf-scan-deep-btn" class="btn" onclick="wallFilesScan(true)"
+                  title="用图像特征识别手动裁剪/另存出来的壁纸（首次较慢，之后只扫新增和改动的文件）">✨ 深度扫描</button>
+        </div>
+      </div>
+      <div class="hint" style="margin:6px 0 10px">
+        壁纸夹里每个文件属于图库的哪一页，扫一次记在本地。已归属的壁纸再次设为壁纸时会先提示，不会重复堆同一作品的多份。
+        扫描只读，不会删文件；删除副本一律勾选后送进 Windows 电脑回收站（可还原）。
+      </div>
+      <div id="wf-scan-bar" class="progress-wrap hidden">
+        <div id="wf-scan-fill" class="progress-bar"></div>
+        <span id="wf-scan-text">0%</span>
+      </div>
+      <div id="wf-scan-tip" class="status-line" style="margin:0 0 8px"></div>
+      <div id="wf-stats" class="stats-grid"></div>
+      <div class="field-row lib-filters">
+        <div class="btn-row" id="wf-filters">
+          <button class="btn filter-btn active" data-f="all">全部</button>
+          <button class="btn filter-btn" data-f="owned">已归属</button>
+          <button class="btn filter-btn" data-f="orphan">未归属</button>
+          <button class="btn filter-btn" data-f="dupe">重复</button>
+        </div>
+        <span class="lib-spacer"></span>
+        <span id="wf-sel-count" class="status-line">已选 0 张</span>
+        <button id="wf-recycle" class="btn danger" disabled onclick="wallFilesRecycle()">🗑️ 删除副本（进回收站）</button>
+      </div>
+      <div id="wf-result"><div class="hint">加载中…</div></div>
     </div>
   </section>
 
@@ -679,7 +717,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261116a"></script>
+<script src="/static/app.js?v=20261116b"></script>
 </body>
 </html>
 

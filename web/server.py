@@ -59,6 +59,14 @@ from core.wallpaper_trace import (
     WALL_DEEP_CACHE,
     trace_current_wallpaper,
 )
+# 壁纸夹归属索引: 壁纸管理页的扫描 / 列表 / 查重都走这张表 (core/wallpaper_index.py)
+from core.wallpaper_index import (
+    MATCH_LABELS as _WALL_MATCH_LABELS,
+    group_dupes as _wall_group_dupes,
+    list_wall_files as _wall_list_files,
+    scan_wall_dir as _wall_scan_dir,
+    upsert_wall_file as _wall_upsert_file,
+)
 from db.store import PixivDatabase, WSt, PSt, pixiv_natural_key, parse_foreign_account, \
     folder_author_name_usable
 from utils import paths
@@ -1286,6 +1294,13 @@ _WALL_DUPES = {"status": "idle", "done": 0, "total": 0, "current": "", "error": 
                "at": 0.0, "result": None}
 _WALL_DUPES_LOCK = threading.Lock()
 
+# ── 🖼 壁纸夹归属扫描 (壁纸管理页) ──
+# 快扫 (文件名/MD5) 秒级; 慢扫 (ORB 特征) 首次要加载整库特征, 上千张要跑几分钟 →
+# 后台线程 + 前端轮询进度。只写 wallpaper_files 索引, 不删任何文件。
+_WALL_FILES = {"status": "idle", "stage": "", "done": 0, "total": 0, "current": "",
+               "error": "", "at": 0.0, "result": None}
+_WALL_FILES_LOCK = threading.Lock()
+
 # ── 🖼 壁纸库生成 ──
 # 从图库挑够格的页复制进壁纸夹 (core/wallpaper_lib.py)。上千行判定 + 几百 MB 的复制,
 # 同样不适合放在请求里等 → 后台线程 + 前端轮询, 与上面那份状态一模一样。
@@ -1322,26 +1337,46 @@ def _wall_orb_candidates(f: Path, img_root: Path) -> "list[dict]":
 def _wall_dupes_for(aid: str, page_md5: str = "",
                     target_wh: "tuple[int, int] | None" = None,
                     deep: bool = True) -> "list[dict]":
-    """壁纸夹里已属于同一个作品的文件 —— 文件名 / 字节 / 视觉三种口径。
+    """壁纸夹里已属于同一个作品的文件 —— **优先读归属索引** (wallpaper_files), 秒回。
 
-    用户手动从图库裁剪、另存出来的壁纸通常**不带作品 ID、md5 也不同**,
-    只按文件名查会漏 (2026-11 用户反馈: 壁纸夹里同一作品堆了好几份)。
-    这里:
-      ① 文件名含作品 ID → name
-      ② md5 与库内该页完全一致 → md5
-      ③ ORB 视觉相似 (裁剪/缩放过的版本) → visual (deep=True 才跑, 最多 10 张)
+    用户手动从图库裁剪、另存出来的壁纸通常**不带作品 ID、md5 也不同**, 只按文件名查会漏。
+    所以归属要先由「壁纸管理」页扫一次落库 (core/wallpaper_index):
+      ① 索引里有这个作品 → 直接列出夹内每一张 (含视觉溯源命中的裁剪版);
+      ② 整表为空 (= 从没扫过) 才退回现场反推 —— 文件名 / md5 必查, ORB 只在 deep 时跑。
     返回 [{name, path, size, kind, artwork_id, page_num, confidence}]
     """
     aid = str(aid or "").strip()
     if not aid:
         return []
-    try:
-        from core.wallpaper_trace import (
-            candidates_dir, md5_cached, wallpaper_folder_images, wallpaper_size)
-    except Exception:
-        return []
     wall_dir = candidates_dir()
     if not wall_dir or not wall_dir.is_dir():
+        return []
+    try:
+        with _db() as db:
+            idx_rows = db.conn.execute(
+                "SELECT file_name, size, match_kind, page_num, confidence "
+                "FROM wallpaper_files WHERE artwork_id=? ORDER BY size DESC LIMIT 20",
+                (aid,)).fetchall()
+            indexed = int(db.conn.execute(
+                "SELECT COUNT(*) FROM wallpaper_files").fetchone()[0] or 0)
+    except Exception:
+        idx_rows, indexed = [], 0
+    if indexed:
+        hits = [{"name": str(r["file_name"]),
+                 "path": str(wall_dir / str(r["file_name"])),
+                 "size": int(r["size"] or 0),
+                 "kind": str(r["match_kind"] or "name"),
+                 "artwork_id": aid, "page_num": r["page_num"],
+                 "confidence": float(r["confidence"] or 1.0)} for r in idx_rows]
+        if hits:
+            return hits
+        # 索引里没这个作品 → 再做一遍快扫 (文件名/MD5), 刚放进夹子的图不必等重扫;
+        # 但不再跑 ORB —— 慢路交给壁纸管理页的扫描。
+        deep = False
+    try:
+        from core.wallpaper_trace import (
+            md5_cached, wallpaper_folder_images, wallpaper_size)
+    except Exception:
         return []
     files = wallpaper_folder_images(wall_dir)
     hits: "list[dict]" = []
@@ -1423,6 +1458,47 @@ def _wall_dupes_for(aid: str, page_md5: str = "",
     out.sort(key=lambda x: ({"name": 0, "md5": 1, "visual": 2}.get(x["kind"], 3),
                             -int(x.get("size") or 0)))
     return out[:20]
+
+
+def _wall_targets(names: "list[str]") -> "tuple[list[tuple[str, Path]], list[str]]":
+    """把勾选的**相对文件名**解析成壁纸夹内的真实文件, 返回 (可删列表, 拒绝理由)。
+
+    安全边界 (用户"绝不自动删"的要求):
+      ① 只收相对文件名, 解析后必须仍在当前壁纸夹内 —— 挡 ``../`` 与绝对路径;
+      ② 落在图库目录里的一律拒绝 (那属于"从图库删", 要走图库软删除);
+      ③ 文件已不在 / 读不到壁纸夹 → 拒绝, 由调用方决定整体不执行。
+    """
+    cur = _wallpaper_file()
+    wall_dir = candidates_dir(cur)
+    if wall_dir is None:
+        return [], ["读不到壁纸夹"]
+    wall_dir = wall_dir.resolve()
+    img_root = Path(paths.user_data(_config["paths"].get("img_subdir") or "img")).resolve()
+    targets, refused = [], []
+    for raw in names:
+        n = str(raw or "").strip()
+        if not n:
+            continue
+        p = Path(n)
+        if p.is_absolute():
+            refused.append(f"{n}: 只接受壁纸夹里的文件名")
+            continue
+        try:
+            abs_f = (wall_dir / p).resolve()
+        except Exception:
+            refused.append(f"{n}: 路径解析失败")
+            continue
+        if abs_f.parent != wall_dir:
+            refused.append(f"{n}: 不在当前壁纸夹内")
+            continue
+        if abs_f == img_root or img_root in abs_f.parents:
+            refused.append(f"{n}: 这是图库里的文件，请在图库里删除")
+            continue
+        if not abs_f.is_file():
+            refused.append(f"{n}: 文件已不在")
+            continue
+        targets.append((abs_f.name, abs_f))
+    return targets, refused
 
 
 def _kick_metadata_fill(limit: int = 100):
@@ -5907,13 +5983,14 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             # 否则用户认不出自己删的是哪张。
             root_abs = _trash_root().resolve()
         elif root_key == "wall":
-            # 壁纸夹里的图 (当前壁纸所在文件夹) —— 「当前壁纸」面板显示桌面那张的缩略图用。
-            # 根目录由服务端从注册表现算, 客户端只给夹内文件名 → 没有任意路径读取的口子
-            # (路径穿越仍由下面的 parents 校验兜住)。2026-09-24
-            wf = _wallpaper_file()
-            if wf is None:
+            # 壁纸夹里的图 —— 当前壁纸面板与「壁纸管理」页显示缩略图用。
+            # 根目录按**配置的壁纸夹优先** (没配才回退当前壁纸所在文件夹), 与
+            # 「上一张/下一张」的取夹口径完全一致; 客户端只给夹内文件名 → 没有任意路径读取的口子
+            # (路径穿越仍由下面的 parents 校验兜住)。2026-11-16: 壁纸管理页要遍历整个壁纸夹。
+            wd = candidates_dir(_wallpaper_file())
+            if wd is None:
                 return "", 404
-            root_abs = wf.parent.resolve()
+            root_abs = wd.resolve()
         else:
             root_abs = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
         f = (root_abs / p).resolve()
@@ -6182,6 +6259,15 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
         if not apply_wallpaper(p):
             return jsonify({"status": "error", "msg": "系统没接受这次换壁纸"}), 500
+        # 刚设的这张立刻进归属索引 (不必等整夹重扫): 同一作品再设一次时能马上提示重复。
+        # 只在文件确实落在壁纸夹里时登记 —— 直接指向图库原图的不算壁纸夹副本。
+        try:
+            wd = candidates_dir()
+            if wd is not None and p.resolve().parent == wd.resolve():
+                with _db() as db:
+                    _wall_upsert_file(db, wd, p, aid, page, "manual", 1.0)
+        except Exception:
+            pass
         _notify_widget()
         return jsonify({"status": "ok", "file": str(p), "name": p.name,
                         "cropped": cropped, "info": _wall_info_payload(p)})
@@ -6368,32 +6454,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         names = [str(n) for n in (data.get("names") or []) if str(n or "").strip()]
         if not names:
             return jsonify({"status": "error", "msg": "没有勾选任何一项"}), 400
-        cur = _wallpaper_file()
-        if cur is None:
-            return jsonify({"status": "error", "msg": "读不到当前壁纸路径"}), 400
-        wall_dir = candidates_dir(cur).resolve()
-        img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
-        targets, refused = [], []
-        for n in names:
-            p = Path(n)
-            if p.is_absolute():
-                refused.append(f"{n}: 只接受壁纸夹里的文件名")
-                continue
-            try:
-                abs_f = (wall_dir / p).resolve()
-            except Exception:
-                refused.append(f"{n}: 路径解析失败")
-                continue
-            if abs_f.parent != wall_dir:
-                refused.append(f"{n}: 不在当前壁纸夹内")
-                continue
-            if abs_f == img_root or img_root in abs_f.parents:
-                refused.append(f"{n}: 这是图库里的文件，请在图库里删除")
-                continue
-            if not abs_f.is_file():
-                refused.append(f"{n}: 文件已不在")
-                continue
-            targets.append((n, abs_f))
+        targets, refused = _wall_targets(names)
         if not targets:
             return jsonify({"status": "error",
                             "msg": "没有一项可以删：" + "；".join(refused[:5])}), 400
@@ -6422,6 +6483,156 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         except Exception:
             pass
         return jsonify({"status": "ok", "recycled": n_ok, "freed": freed,
+                        "refused": refused, "failed": bad})
+
+    # ---------------- 🖼 壁纸管理: 归属索引 / 扫描 / 回收 (2026-11-16) ----------------
+    @app.route("/api/wallpaper/files")
+    def api_wallpaper_files():
+        """壁纸夹归属清单 + 统计 + 重复组 (只读, 读 wallpaper_files 索引)。
+
+        items 为空 = 还没扫过, 前端提示先点「扫描归属」。
+        """
+        d = candidates_dir()
+        zero = {"total": 0, "bytes": 0, "owned": 0, "orphan": 0,
+                "dupes": 0, "dupe_files": 0, "scanned_at": ""}
+        if d is None:
+            return jsonify({"ok": True, "dir": "", "scanned": False,
+                            "stats": zero, "items": [], "groups": []})
+        try:
+            rows = _wall_list_files(_db)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+        cur = _wallpaper_file()
+        cur_name = ""
+        try:
+            if cur is not None and cur.parent.resolve() == d.resolve():
+                cur_name = cur.name
+        except Exception:
+            pass
+        items = []
+        for r in rows:
+            name = str(r.get("file_name") or "")
+            kind = str(r.get("match_kind") or "")
+            r18 = r.get("is_r18")
+            items.append({
+                "name": name,
+                "size": int(r.get("size") or 0),
+                "md5": str(r.get("md5") or ""),
+                "width": int(r.get("width") or 0),
+                "height": int(r.get("height") or 0),
+                "artwork_id": str(r.get("artwork_id") or ""),
+                "page_num": r.get("page_num"),
+                "match_kind": kind,
+                "match_label": _WALL_MATCH_LABELS.get(kind, "未归属"),
+                "confidence": float(r.get("confidence") or 0),
+                "title": r.get("title") or "",
+                "author_name": r.get("author_name") or "",
+                # 安全模式用: 已归属的按作品标记, 未归属的留 None (前端按"不确定就当 R18"处理)
+                "is_r18": (int(r18) if r18 is not None else None),
+                "current": 1 if name == cur_name else 0,
+                "thumb": "/api/local-img?p=" + quote(name) + "&root=wall&thumb=1",
+            })
+        groups = _wall_group_dupes(items)
+        stats = {
+            "total": len(items),
+            "bytes": sum(i["size"] for i in items),
+            "owned": sum(1 for i in items if i["artwork_id"]),
+            "orphan": sum(1 for i in items if not i["artwork_id"]),
+            "dupes": len(groups),
+            "dupe_files": sum(len(g["files"]) for g in groups),
+            "scanned_at": max((str(r.get("scanned_at") or "") for r in rows), default=""),
+        }
+        return jsonify({"ok": True, "dir": str(d), "scanned": bool(items),
+                        "stats": stats, "items": items, "groups": groups})
+
+    @app.route("/api/wallpaper/files/scan", methods=["POST"])
+    def api_wallpaper_files_scan():
+        """扫壁纸夹建立归属索引 (后台线程, 立刻返回; 进度看 scan/status)。
+
+        body ``{deep: false}`` 只跑快扫 (文件名/MD5), 跳过 ORB 慢扫。
+        """
+        body = request.get_json(silent=True) or {}
+        deep = body.get("deep", True) is not False
+        d = candidates_dir()
+        if d is None:
+            return jsonify({"ok": False,
+                            "error": "还没指定壁纸文件夹（去设置页选一个）"}), 400
+        with _WALL_FILES_LOCK:
+            if _WALL_FILES["status"] == "scanning":
+                return jsonify({"ok": True, "already": True})
+            _WALL_FILES.update({"status": "scanning", "stage": "fast", "done": 0,
+                                "total": 0, "current": "", "error": "", "result": None})
+        img_root = Path(paths.user_data(
+            _config["paths"].get("img_subdir") or "img")).resolve()
+
+        def _task():
+            try:
+                def _prog(stage, done, total, name):
+                    with _WALL_FILES_LOCK:
+                        _WALL_FILES.update({"stage": stage, "done": done,
+                                            "total": total, "current": name})
+                res = _wall_scan_dir(_db, d, img_root=img_root,
+                                     orb_fn=_wall_orb_candidates,
+                                     progress_cb=_prog, deep=deep)
+            except Exception as e:
+                with _WALL_FILES_LOCK:
+                    _WALL_FILES.update({"status": "error",
+                                        "error": f"{type(e).__name__}: {e}",
+                                        "current": ""})
+                return
+            with _WALL_FILES_LOCK:
+                _WALL_FILES.update({"status": "done", "at": time.time(),
+                                    "current": "", "result": res})
+
+        threading.Thread(target=_task, daemon=True, name="wall-files-scan").start()
+        return jsonify({"ok": True, "deep": deep})
+
+    @app.route("/api/wallpaper/files/scan/status")
+    def api_wallpaper_files_scan_status():
+        """归属扫描进度 (只读)。status: idle / scanning / done / error。"""
+        with _WALL_FILES_LOCK:
+            return jsonify(dict(_WALL_FILES))
+
+    @app.route("/api/wallpaper/files/recycle", methods=["POST"])
+    def api_wallpaper_files_recycle():
+        """把勾选的壁纸文件送进 **Windows 回收站** (可还原), 并清掉索引记录。
+
+        只动壁纸夹里勾中的那几个文件; 图库与图库数据库一律不碰。
+        """
+        data = request.get_json(silent=True) or {}
+        names = [str(n) for n in (data.get("names") or []) if str(n or "").strip()]
+        if not names:
+            return jsonify({"status": "error", "msg": "没有勾选任何一项"}), 400
+        targets, refused = _wall_targets(names)
+        if not targets:
+            return jsonify({"status": "error",
+                            "msg": "没有一项可以删：" + "；".join(refused[:5])}), 400
+        pre = {}
+        for n, p in targets:
+            try:
+                pre[n] = p.stat().st_size
+            except OSError:
+                pre[n] = 0
+        n_ok, bad = _recycle_files([str(p) for _n, p in targets])
+        bad_set = set(bad)
+        gone = [n for n, p in targets if str(p) not in bad_set]
+        try:
+            with _db() as db:
+                with db.conn:
+                    db.conn.executemany(
+                        "DELETE FROM wallpaper_files WHERE file_name=?",
+                        [(n,) for n in gone])
+        except Exception:
+            pass
+        try:
+            audit_log.record("delete", "删除壁纸文件",
+                             f"把 {n_ok} 个壁纸文件送进电脑回收站（可还原）；"
+                             f"释放 {sum(pre.get(n, 0) for n in gone) / 1048576:.1f} MB")
+        except Exception:
+            pass
+        _notify_widget()
+        return jsonify({"status": "ok", "recycled": n_ok,
+                        "freed": sum(pre.get(n, 0) for n in gone),
                         "refused": refused, "failed": bad})
 
     # ---------------- 🖼 壁纸库 (从图库生成, 2026-09-27) ----------------

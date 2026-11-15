@@ -3037,6 +3037,7 @@ def run_suite() -> SuiteResult:
     suite.add("T134", "🚀📁 启动与托盘「立即生效」+ 📁 路径设置(开关存盘即生效 / 所有路径均可配置 / 双击托盘开图库 / 数据目录不占系统盘): 除「启动自动开浏览器」外全部存盘即生效(热应用钩子 set_launcher_apply→main._apply_launcher 就地起停托盘/小控件, 心跳守护按代次门控——关了不许再自杀) + auto_open_browser 如实回报 startup_only + /api/paths 三处可改目录(图片目录可填单段相对名或绝对路径, 数据根/临时目录只收绝对路径; 空=回默认, 相对名拒绝400) + 落盘后当场回新落点(不靠带缓存的 paths.data_root) + 占用检测(数据库/图片/缩略图/特征库/临时各回 MB, 目录有上限地数) + /api/paths/temp/clean 一键清临时目录 + /api/paths/pick 复用系统目录对话框(取消不改/失败必回 JSON 不能当取消) + 位置一览含壁纸夹 + 文案只留一句「重启 Vixiq 后生效」不摆理由 (离线)", t134_launcher_hotapply_and_paths)
     suite.add("T135", "🖼 查询页「按页下载」之一(支持只下选中页 / 双击开大图 / 原图与下载按钮 / 缩略图多选区): 迁移 020 给队列加 pages TEXT(NULL=整部, 向后兼容, 且不塞 strategy——那列被当 DownloadStrategy 枚举解析) + queue_add(pages) 落排序去重 JSON 串 + GET /api/artwork/<id>/pages(未登录 200+need_login 不是401 / low=regular high=original / 合并库内页状态 / 超远端页数的标 is_extra / 不存在404) + POST /api/cart 带 pages 入队且 page_count 仍写远端总页数 (离线)", t135_artwork_pages_api_and_queue_pages)
     suite.add("T136", "🖼 查询页「按页下载」之二 + 🔍 大图 1:1 放大 + ↔ 图库遮挡修复(调整页序时「上个作品/下个作品」挡住「完成」; 低清与原图看不出区别 / 是否一打开就取原图): _only_pages_of 纯函数(脏数据退回整部) + 引擎页级绕过「整部已下完就跳过」(否则点补某页被静默跳过) + 爬虫只下选中页且页级拒绝回落浏览器通道(它会按URL规律把未选页补齐) + init_pages 仍按远端总页数 + 前端 openRemoteLightbox(默认低清/显示原图/下载该页/🔗原网页, 没有上个下个作品) + 点图 1:1 放大(元素自身撑到自然尺寸 + 拖拽平移, 换页收缩放/同页切原图保留) + 原图只在点按钮后才加载 + 缩略图多选条(全选/已入库灰掉) + 卡片点击不再开原站 + 进调整页序收起那两颗按钮 + 拖拽夹取改用容器实际渲染尺寸(修「并不能拖动」: curNw 存的是自然尺寸, 拿它当视口上限恒为 0) + 放大态图片元素自身撑到自然尺寸(修「只是把这个块拖动 / 不是查看其他区域」: 只给 object-fit:none 时裁剪窗口锚在元素盒子上) + 缩略图多选条可折叠且跨打开记忆(折叠后大图高度 0.56→0.72, 修「✕ 只露一半 / 缩略图吃掉半屏」+ 放大态视口横向 97vw/竖向按实测行高吃满, 并用 capNorm 兜住「放大反而变小」+ 「点击查看大图」下沉本地图库查看器(同装 setupZoom, ✕ 一起改锚视口, is-remote 死代码已删) + 缩略图条 loading=lazy / 去掉相邻页原图预取 / /api/img 改流式转发带 Cache-Control) (离线静态)", t136_page_download_engine_and_frontend)
+    suite.add("T137", "🖼 壁纸管理(先建归属再查重): 迁移 021 wallpaper_files 索引 + 快扫(文件名ID/MD5)与 ORB 慢扫(手动裁剪版)建立归属 + 没变的已归属文件第二次直接复用 + 列表统计/重复组(同作品两张=一组) + 设壁纸查重改读索引(不再现场跑ORB) + 删除只收壁纸夹内相对名并清索引 + 前端壁纸管理紧挨作者管理 + 大图「设为壁纸」圆形按钮且点击先关查看器 (离线)", t137_wallpaper_index_and_admin_page)
     suite.write_report()
     return suite
 
@@ -10309,7 +10310,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261116a" and _mss.group(1) == "20261116a", \
+    assert _mjs and _mss and _mjs.group(1) == "20261116b" and _mss.group(1) == "20261116b", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10404,7 +10405,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261116a', html) and _re.search(r'app\.js\?v=20261116a', html), \
+    assert _re.search(r'style\.css\?v=20261116b', html) and _re.search(r'app\.js\?v=20261116b', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10611,6 +10612,12 @@ def t127_wallpaper_current_trace() -> None:
 
     try:
         wsrv._WALL_DEEP_CACHE.clear()
+        # 2026-11-16: /api/local-img?root=wall 的根目录改成「配置的壁纸夹优先」
+        # (壁纸管理页要遍历整个夹子)。本用例验证的是"当前壁纸所在夹"的口径,
+        # 所以把配置项打空, 让回退口径生效 (只影响本用例, finally 恢复)。
+        import core.wallpaper_trace as _wt127
+        _orig_wdir127 = _wt127.wallpaper_dir
+        _wt127.wallpaper_dir = lambda: None
         # ---- 临时库: 作者 555「shuno」; 700001 库内 1920x1080, 700002 库内 3840x2160 ----
         db = PixivDatabase(tmp / "pixiv.db")
         db.upsert_author("555", "shuno")
@@ -10781,7 +10788,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261116a" in html and "app.js?v=20261116a" in html, \
+        assert "style.css?v=20261116b" in html and "app.js?v=20261116b" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -10805,6 +10812,7 @@ def t127_wallpaper_current_trace() -> None:
         wsrv._wall_orb_candidates = orig_orb
         wsrv.subprocess.Popen = orig_popen
         wsrv._WALL_DEEP_CACHE.clear()
+        _wt127.wallpaper_dir = _orig_wdir127
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 
@@ -13048,7 +13056,11 @@ def t136_page_download_engine_and_frontend() -> None:
     assert js.count("z = setupZoom(lb, wrap, lay,") == 2, \
         "放大/平移要抽成一支 setupZoom, 本地图库查看器与远程大图弹窗各装一份"
     assert js.count('<span class="lb-zoom-hint"></span>') == 2, "两个弹窗都要有放大提示的位置"
-    assert js.count("z.teardown()") == 3, "两个弹窗关闭时都要摘掉 window 上的鼠标监听 (本地点上/点Esc)"
+    # 关闭路径已收敛到 closeLb 一处 (点背景 / 点 ✕ / Esc / 设为壁纸都走它),
+    # 所以 z.teardown() 在这里只出现两次: 本地 closeLb + 远程弹窗的 closeLb。
+    assert js.count("z.teardown()") == 2, "两个弹窗关闭时都要摘掉 window 上的鼠标监听"
+    assert "const closeLb = () => {" in js and js.count("closeLb();") >= 3, \
+        "本地查看器的关闭路径必须收敛到 closeLb (点背景/✕/Esc/设为壁纸), 不能各写一遍"
     assert "zoomTo(!zoom)" in js, "点图片没有切换放大"
     assert "setBlocked: (b) => {" in js and "blocked && zoom" in js, \
         "没有「禁放大」这支 (打码页 / 没有图: 占位图 1:1 只会露出一块小矩形)"
@@ -13114,7 +13126,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261116a" in _h and "style.css?v=20261116a" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261116b" in _h and "style.css?v=20261116b" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13122,6 +13134,158 @@ def t136_page_download_engine_and_frontend() -> None:
     _rb = js.split("reorderBtn.addEventListener('click'")[1].split("stripDone")[0]
     assert "classList.toggle('is-reordering'" in _rb, "进调整页序时没收起"
     assert "lb.classList.remove('is-reordering')" in js, "退出调整页序时没恢复"
+
+
+def t137_wallpaper_index_and_admin_page() -> None:
+    """🖼 壁纸管理 (2026-11 用户需求): 先建立壁纸归属, 再据此快速查重。
+
+    ① 迁移 021 建 wallpaper_files 索引表;
+    ② 快扫: 文件名作品ID / MD5 与库内页一致 → 归属; 慢扫: ORB 视觉命中手动裁剪版;
+       没变且已归属的文件第二次扫描直接复用 (不重算 MD5 / 不重跑 ORB);
+    ③ GET /api/wallpaper/files 返回统计 + 重复组 (同作品两张 = 一组);
+    ④ 设壁纸查重改读索引 (_wall_dupes_for): 能查到不带 ID 的裁剪版, 不再现场跑 ORB;
+    ⑤ 删除只收壁纸夹内的相对名 (夹外/图库路径一律拒绝), 并清掉索引记录;
+    ⑥ 前端: 壁纸管理紧挨作者管理; 大图「设为壁纸」与 ‹ › 同款圆形按钮, 点击先关查看器。
+    """
+    import tempfile
+    import shutil
+    import hashlib as _hl
+    import time as _time
+    import utils.paths as upaths
+    import core.wallpaper_trace as _wt
+    import web.server as wsrv
+    from db.store import PixivDatabase, WSt, PSt
+    from web.server import create_app
+    from PIL import Image as _Img
+
+    tmp = Path(tempfile.mkdtemp(prefix="t137wall_"))
+    img_root = tmp / "img"
+    wall = tmp / "wall"
+    img_root.mkdir(parents=True, exist_ok=True)
+    wall.mkdir(parents=True, exist_ok=True)
+    orig_ud, orig_dr = upaths.user_data, upaths.data_root
+    orig_wdir, orig_wf = _wt.wallpaper_dir, wsrv._wallpaper_file
+    orig_orb, orig_recycle = wsrv._wall_orb_candidates, wsrv._recycle_files
+    orig_scan_state = dict(wsrv._WALL_FILES)
+    upaths.user_data = lambda rel: (tmp / str(rel))
+    upaths.data_root = lambda: tmp
+    _wt.wallpaper_dir = lambda: wall
+    wsrv._wallpaper_file = lambda: None
+
+    try:
+        db = PixivDatabase(tmp / "pixiv.db")
+        db.upsert_author("555", "shuno")
+        db.change_work_status("700001", WSt.DONE, title="湖边少女", author_id="555",
+                              total_pages=1, illust_type=0)
+        src = img_root / "a" / "700001_p0.png"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        _Img.new("RGB", (1920, 1080), (30, 60, 90)).save(src)
+        md5 = _hl.md5(src.read_bytes()).hexdigest()
+        db.mark_page_status("700001", 0, PSt.DONE, local_path="a/700001_p0.png",
+                            md5=md5, width=1920, height=1080)
+        db.close()
+
+        shutil.copy(src, wall / "700001_p0.png")                        # MD5 命中
+        _Img.new("RGB", (1920, 1080), (1, 2, 3)).save(wall / "crop_manual.jpg")  # 只走 ORB
+        _Img.new("RGB", (800, 600), (9, 9, 9)).save(wall / "999999_p0.png")      # 未归属
+        wsrv._wall_orb_candidates = lambda f, root: (
+            [{"rel": "a/700001_p0.png", "orb": 0.55, "fusion": 0.82}]
+            if "crop_manual" in Path(f).name
+            else [{"rel": "a/700001_p0.png", "orb": 0.10, "fusion": 0.1}])
+
+        client = create_app().test_client()
+
+        # ---------- ① 还没扫描 → 空表 ----------
+        j = client.get("/api/wallpaper/files").get_json()
+        assert j["ok"] and not j["scanned"] and j["stats"]["total"] == 0, j
+
+        # ---------- ② 扫描 (后台线程) → 快扫 + ORB 慢扫都建立归属 ----------
+        r = client.post("/api/wallpaper/files/scan", json={"deep": True})
+        assert r.status_code == 200 and r.get_json()["ok"], r.get_json()
+        deadline = _time.time() + 30
+        st = {}
+        while _time.time() < deadline:
+            st = client.get("/api/wallpaper/files/scan/status").get_json()
+            if st.get("status") in ("done", "error"):
+                break
+            _time.sleep(0.1)
+        assert st.get("status") == "done", st
+        res = st.get("result") or {}
+        assert res["total"] == 3 and res["owned"] == 2 and res["orphan"] == 1, res
+        assert res["by_md5"] == 1 and res["by_visual"] == 1, res
+        assert res["dupes"] == 1, res
+        # 第二次扫描: 已归属且没变的直接复用
+        r = client.post("/api/wallpaper/files/scan", json={"deep": True})
+        assert r.status_code == 200, r.get_json()
+        deadline = _time.time() + 30
+        while _time.time() < deadline:
+            st = client.get("/api/wallpaper/files/scan/status").get_json()
+            if st.get("status") in ("done", "error"):
+                break
+            _time.sleep(0.1)
+        assert st.get("status") == "done" and (st.get("result") or {}).get("reused") == 2, st
+
+        # ---------- ③ 列表 / 统计 / 重复组 ----------
+        j = client.get("/api/wallpaper/files").get_json()
+        assert j["scanned"] and j["stats"]["total"] == 3, j["stats"]
+        assert j["stats"]["owned"] == 2 and j["stats"]["orphan"] == 1, j["stats"]
+        assert j["stats"]["dupes"] == 1 and j["stats"]["dupe_files"] == 2, j["stats"]
+        g = j["groups"][0]
+        assert g["kind"] == "artwork" and g["artwork_id"] == "700001", g
+        assert sorted(g["files"]) == ["700001_p0.png", "crop_manual.jpg"], g
+        kinds = {x["name"]: x["match_kind"] for x in j["items"]}
+        assert kinds["700001_p0.png"] == "md5" and kinds["crop_manual.jpg"] == "visual", kinds
+        assert all("root=wall" in x["thumb"] for x in j["items"]), "缩略图必须走壁纸夹根"
+        assert client.get(j["items"][0]["thumb"]).status_code == 200, j["items"][0]
+
+        # ---------- ④ 设壁纸查重改读索引 (能查到不带 ID 的裁剪版) ----------
+        dupes = wsrv._wall_dupes_for("700001")
+        assert len(dupes) == 2 and {d["kind"] for d in dupes} == {"md5", "visual"}, dupes
+        assert wsrv._wall_dupes_for("800000") == []
+
+        # ---------- ⑤ 删除只收壁纸夹内的相对名, 并清掉索引记录 ----------
+        caught = []
+        wsrv._recycle_files = lambda ps: (caught.extend(ps), (len(ps), []))[1]
+        r = client.post("/api/wallpaper/files/recycle", json={"names": ["../secret.png"]})
+        assert r.status_code == 400, r.get_json()
+        r = client.post("/api/wallpaper/files/recycle",
+                        json={"names": ["a/700001_p0.png"]})
+        assert r.status_code == 400, r.get_json()      # 夹外路径 (图库那条) 一律拒绝
+        r = client.post("/api/wallpaper/files/recycle", json={"names": ["crop_manual.jpg"]})
+        j = r.get_json()
+        assert r.status_code == 200 and j["recycled"] == 1, j
+        assert caught == [str(wall / "crop_manual.jpg")], caught
+        j = client.get("/api/wallpaper/files").get_json()
+        assert "crop_manual.jpg" not in [x["name"] for x in j["items"]], j["items"]
+
+        # ---------- ⑥ 前端接线 ----------
+        html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+        assert html.index('data-tab="authors"') < html.index('data-tab="wallpapers"') \
+            < html.index('data-tab="stats"'), "壁纸管理要紧挨作者管理 (图片/作者/壁纸三页连着)"
+        assert 'id="tab-wallpapers"' in html and 'onclick="wallFilesScan(false)"' in html
+        assert "function wallFilesEnter()" in js and "function wallFilesCard(f)" in js
+        assert "else if (name === 'wallpapers') wallFilesEnter();" in js
+        assert "lightbox-wall" in js and ".lightbox-wall" in css, \
+            "设为壁纸要跟 ‹ › 同款圆形按钮, 不许挤在信息行里"
+        assert "safeThumb(f.thumb, { is_r18: f.is_r18 })" in js, \
+            "壁纸管理页缩略图也要走安全模式 (R18 / 未归属一律不加载真实像素)"
+        assert "lb-wall-btn" not in js and "lb-wall-btn" not in css, "旧的信息行文字按钮要删干净"
+        _wc = js.split("wallBtn.addEventListener('click'")[1].split("// 把 url 放到")[0]
+        assert "closeLb();" in _wc and "openWallCrop(" in _wc, \
+            "点「设为壁纸」要先关掉查看器再进裁剪 (否则底层还压着大图)"
+    finally:
+        upaths.user_data = orig_ud
+        upaths.data_root = orig_dr
+        _wt.wallpaper_dir = orig_wdir
+        wsrv._wallpaper_file = orig_wf
+        wsrv._wall_orb_candidates = orig_orb
+        wsrv._recycle_files = orig_recycle
+        with wsrv._WALL_FILES_LOCK:
+            wsrv._WALL_FILES.clear()
+            wsrv._WALL_FILES.update(orig_scan_state)
+        shutil.rmtree(str(tmp), ignore_errors=True)
 
 
 def main() -> int:
