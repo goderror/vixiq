@@ -68,6 +68,21 @@ function wallFold() {
 try { wallApplyFold(localStorage.getItem(WALL_FOLD_KEY) === '1'); } catch (e) {}
 window.wallFold = wallFold;
 
+// 图库某张图直接设为桌面壁纸 (后端只认库内已下载的页, 不接受任意路径)
+async function setWallpaperAs(aid, page) {
+  try {
+    const r = await api('/api/wallpaper/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ artwork_id: String(aid), page_num: Number(page) || 0 }),
+    });
+    toast('已设为桌面壁纸' + (r && r.name ? ' · ' + r.name : ''), 'ok');
+    if (isTabActive('library')) wallRefresh({ deep: true });
+  } catch (e) {
+    toast('设置壁纸失败: ' + (e.message || e), 'err');
+  }
+}
+window.setWallpaperAs = setWallpaperAs;
+
 function wallWatch() {
   // 图库页开着才轮询, 离开就停 (没人看着的页面不该白跑请求)
   if (wallTimer) { clearInterval(wallTimer); wallTimer = null; }
@@ -2294,7 +2309,7 @@ ${authorCellHtml(w, gallery)}
         </div>
         <div class="w-actions${gallery ? ' has-icons' : ''}">
           ${cartActionHtml(w)}
-          ${gallery ? `<div class="w-icon-grid">${onlyThisWorkBtnHtml(w)}<button class="btn ghost icon-btn" title="编辑" onclick="openLibEdit('${esc(w.artwork_id)}')">✏️</button>
+          ${gallery ? `<div class="w-icon-grid">${onlyThisWorkBtnHtml(w)}<button class="btn ghost icon-btn" title="设为桌面壁纸（第 1 页）" onclick="setWallpaperAs('${esc(w.artwork_id)}', 0)">🖼️</button><button class="btn ghost icon-btn" title="编辑" onclick="openLibEdit('${esc(w.artwork_id)}')">✏️</button>
           <button class="btn ghost icon-btn" title="编辑标签" onclick="openLibTags('${esc(w.artwork_id)}')">🏷️</button>
           <button class="btn danger icon-btn" title="删除" onclick="libDeleteOne('${esc(w.artwork_id)}')">🗑️</button></div>` : `<button class="btn ghost" title="跳转到该作者（搜索作者）" onclick="jumpAuthor('${esc(w.author_id)}')">👤</button>`}
         </div>
@@ -3017,6 +3032,7 @@ ${authorCellHtml(w, true)}
         </div>
         <div class="w-actions">
           ${cartActionHtml(w)}
+          <button class="btn ghost icon-btn" title="设为桌面壁纸" onclick="setWallpaperAs('${esc(w.artwork_id)}', ${Number(w.page_num) || 0})">🖼️</button>
           <button class="btn danger icon-btn" title="删除这张图片" onclick="libDeletePage('${esc(w.artwork_id)}', ${Number(w.page_num) || 0})">🗑️</button>
           <button class="btn ghost icon-btn" title="跳转到该作者（搜索作者）" onclick="jumpAuthor('${esc(w.author_id)}')">👤</button>
         </div>

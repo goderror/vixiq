@@ -5941,6 +5941,48 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         return jsonify({"status": "ok", "file": str(prv), "name": prv.name,
                         "info": _wall_info_payload(prv)})
 
+    @app.route("/api/wallpaper/apply", methods=["POST"])
+    def api_wallpaper_apply():
+        """把图库里某一张图直接设为桌面壁纸。
+
+        入参 ``{artwork_id, page_num}`` —— 只认数据库里已下载的库内页, 不接受
+        前端传任意路径 (否则等于给了一个"把系统任意文件设成壁纸"的入口)。
+        """
+        body = request.get_json(silent=True) or {}
+        aid = str(body.get("artwork_id") or "").strip()
+        try:
+            page = int(body.get("page_num") or 0)
+        except Exception:
+            page = 0
+        if not aid:
+            return jsonify({"status": "error", "msg": "缺少作品 ID"}), 400
+        with _db() as db:
+            info = db.get_page_info(aid, page)
+            rel = getattr(info, "local_path", None) if info else None
+            if not rel:
+                # 该页缺失 (删过页/作品视图点第 1 页) → 回退到第一张已下载的页
+                row = db.conn.execute(
+                    "SELECT local_path FROM pages WHERE artwork_id=? "
+                    "AND local_path IS NOT NULL ORDER BY page_num LIMIT 1",
+                    (aid,)).fetchone()
+                rel = row["local_path"] if row else None
+        if not rel:
+            return jsonify({"status": "error", "msg": "这张图还没下载到本地"}), 404
+        img_root = Path(paths.user_data(
+            _config["paths"].get("img_subdir") or "img")).resolve()
+        p = (img_root / str(rel).replace("\\", "/")).resolve()
+        try:
+            p.relative_to(img_root)      # 防路径穿越
+        except ValueError:
+            return jsonify({"status": "error", "msg": "路径不在图片目录内"}), 400
+        if not p.is_file():
+            return jsonify({"status": "error", "msg": "文件不存在"}), 404
+        if not apply_wallpaper(p):
+            return jsonify({"status": "error", "msg": "系统没接受这次换壁纸"}), 500
+        _notify_widget()
+        return jsonify({"status": "ok", "file": str(p), "name": p.name,
+                        "info": _wall_info_payload(p)})
+
     @app.route("/api/wallpaper/dir")
     def api_wallpaper_dir_get():
         """壁纸夹设置 (只读): 用户配的那个 + 现在**实际生效**的那个。
