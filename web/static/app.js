@@ -180,6 +180,7 @@ function wallCropEnsure() {
       <span class="crop-tip">拖动四角或边框调整范围</span>
       <button class="crop-close" type="button" onclick="closeWallCrop()" aria-label="退出裁剪">✕</button>
     </div>
+    <div class="crop-dupe hidden" id="crop-dupe"></div>
     <div class="crop-stage" id="crop-stage">
       <img id="crop-img" alt="">
       <div class="crop-box" id="crop-box">
@@ -292,8 +293,39 @@ function openWallCrop(aid, page, src) {
   img.onload = () => { wallCropInitBox(); };
   img.onerror = () => { toast('图片加载失败', 'err'); };
   img.src = src;
+  // 先做快的 (文件名/内容一致), 再延迟跑视觉相似 —— ORB 首次要加载整库特征,
+  // 不能挡住裁剪界面打开
+  wallCheckDupes(WC.aid, WC.page, false);
+  window.setTimeout(() => {
+    const box = $('#wall-crop');
+    if (box && !box.classList.contains('hidden')) {
+      wallCheckDupes(WC.aid, WC.page, true);
+    }
+  }, 1200);
 }
 window.openWallCrop = openWallCrop;
+
+// 只读检测壁纸夹里是否已有同作品的图 (文件名/内容/视觉相似), 结果挂在裁剪界面顶部
+const WALL_DUPE_KIND = { name: '文件名', md5: '内容一致', visual: '视觉相似' };
+
+async function wallCheckDupes(aid, page, deep) {
+  const tip = $('#crop-dupe');
+  if (!aid) return;
+  if (!deep && tip) { tip.textContent = ''; tip.classList.add('hidden'); }
+  try {
+    const r = await api('/api/wallpaper/dupes/check?artwork_id='
+      + encodeURIComponent(aid) + '&page_num=' + (Number(page) || 0)
+      + (deep ? '&deep=1' : ''));
+    if (!r || !r.ok || !r.count) return;
+    const names = (r.items || []).slice(0, 3).map(x =>
+      x.name + '（' + (WALL_DUPE_KIND[x.kind] || '同作品') + '）').join('、');
+    if (tip) {
+      tip.textContent = '壁纸夹已有该作品的 ' + r.count + ' 张图：' + names
+        + (r.count > 3 ? ' 等' : '') + '，继续会再生成一份';
+      tip.classList.remove('hidden');
+    }
+  } catch (e) { /* 检测失败不影响设置 */ }
+}
 
 function closeWallCrop() {
   const m = $('#wall-crop');
@@ -7941,7 +7973,7 @@ function bind() {
     let pages = (Array.isArray(pageList) && pageList.length) ? pageList : [w];
     const navItems = (nav && Array.isArray(nav.items) && nav.items.length) ? nav.items : null;
     let navIdx = (nav && Number.isInteger(nav.index) && nav.index >= 0) ? nav.index : -1;
-    let idx = 0, seq = 0, vis = 0, curNw = 0, curNh = 0;
+    let idx = 0, seq = 0, vis = 0, curNw = 0, curNh = 0, curPg = null;
 
     const lb = document.createElement('div');
     lb.id = 'lightbox';
@@ -7969,6 +8001,7 @@ function bind() {
       + '<span class="lb-meta"></span>'
       + '<span class="lb-file"></span>'
       + '<span class="lb-nav"></span>'
+      + '<button class="lb-wall-btn" type="button" title="把当前这张设为桌面壁纸">🖼️ 设为壁纸</button>'
       + '<button class="lb-reorder-btn" type="button" title="调整这个作品内的页序">↔ 调整页序</button>'
       + '</div>'
       + '<div class="lb-strip hidden">'
@@ -7987,6 +8020,7 @@ function bind() {
     const lbFile = lb.querySelector('.lb-file');
     const lbInfo = lb.querySelector('.lightbox-info');   // 量信息行实测高度, 好把放大态竖屏额度算准
     const lbNav = lb.querySelector('.lb-nav');
+    const wallBtn = lb.querySelector('.lb-wall-btn');
     const btnPrev = lb.querySelector('.lightbox-prev');
     const btnNext = lb.querySelector('.lightbox-next');
     const prevItemBtn = lb.querySelector('.lightbox-prev-item');
@@ -8073,6 +8107,17 @@ function bind() {
     // 🔍 点图 1:1 放大 + 拖动平移 (与远程大图弹窗共用同一支; 下沉到本地图库)
     z = setupZoom(lb, wrap, lay, () => sizeWrap(curNw, curNh), () => [curNw, curNh]);
 
+    // 大图里直接设为壁纸: 取当前显示层, 交给裁剪界面
+    if (wallBtn) {
+      wallBtn.addEventListener('click', () => {
+        const pg = curPg || {};
+        const im = lay[vis];
+        const src = (im && im.getAttribute('src')) || pg.url || pg.local_path || '';
+        if (!pg.artwork_id || !src) { toast('这张图还没有本地文件', 'err'); return; }
+        openWallCrop(pg.artwork_id, Number(pg.page_num) || 0, wallFullUrl(src));
+      });
+    }
+
     // 把 url 放到「当前隐藏层」, 后台 Image 加载+decode 完成后才在隐藏层落 src,
     // 再淡入新层、淡出旧层 —— 可见层从不中途改 src, 全程无空白帧。
     // st: showPage 每次调用独立的 {fullShown} 状态; isFull: 是否为原图(缩略图晚到则丢弃)。
@@ -8114,6 +8159,7 @@ function bind() {
       idx = (i + pages.length) % pages.length;
       const token = ++seq;
       const pg = Object.assign({}, cur, pages[idx]);   // 页面字段覆盖作品字段
+      curPg = pg;
       const st = { fullShown: false };
       // 安全模式提示跟随当前开关状态实时变化 (已解锁的那张不再打码)
       const needBlur = !!(safemode && pg.is_r18 && !pg._reveal);
@@ -8129,6 +8175,7 @@ function bind() {
       // 「↔ 调整页序」与右下角「下个作品/下一张」都随当前卡片重算: 换卡片后页清单、
       // 作品 ID 都变了, 一次算好显示态, 免得点了按钮操作到上一张卡片的页
       if (reorderBtn) reorderBtn.classList.toggle('hidden', !canReorderNow());
+      if (wallBtn) wallBtn.classList.toggle('hidden', !pg.artwork_id);
       refreshNavBtn();
       updateDim(pg.width, pg.height, pg);
       if (pg.width && pg.height) sizeWrap(pg.width, pg.height);
