@@ -175,6 +175,11 @@ function wallCropEnsure() {
   m.id = 'wall-crop';
   m.className = 'crop-mask hidden';
   m.innerHTML = `<div class="crop-wrap">
+    <div class="crop-head">
+      <b>裁剪预览</b>
+      <span class="crop-tip">拖动四角或边框调整范围</span>
+      <button class="crop-close" type="button" onclick="closeWallCrop()" aria-label="退出裁剪">✕</button>
+    </div>
     <div class="crop-stage" id="crop-stage">
       <img id="crop-img" alt="">
       <div class="crop-box" id="crop-box">
@@ -184,9 +189,9 @@ function wallCropEnsure() {
     </div>
     <div class="crop-bar">
       <div class="crop-ratios">
-        <button class="crop-r active" data-r="1.777778" type="button">16:9</button>
+        <button class="crop-r" data-r="1.777778" type="button">16:9</button>
         <button class="crop-r" data-r="1.6" type="button">16:10</button>
-        <button class="crop-r" data-r="0" type="button">自由</button>
+        <button class="crop-r active" data-r="0" type="button">自由</button>
       </div>
       <button class="btn ghost" type="button" onclick="closeWallCrop()">取消</button>
       <button class="btn accent" type="button" onclick="confirmWallCrop()">设为壁纸</button>
@@ -213,7 +218,11 @@ function wallCropInitBox() {
   const { img } = wallCropEls();
   if (!img || !img.clientWidth) return;
   const iw = img.clientWidth, ih = img.clientHeight;
-  const ratio = WC.ratio || (iw / ih);
+  if (!WC.ratio) {          // 自由比例: 默认裁剪框撑满整张图 (等于不裁)
+    wallCropSet(0, 0, iw, ih);
+    return;
+  }
+  const ratio = WC.ratio;
   let bw, bh;
   if (iw / ih > ratio) { bh = ih * 0.9; bw = bh * ratio; }
   else { bw = iw * 0.9; bh = bw / ratio; }
@@ -273,10 +282,10 @@ function openWallCrop(aid, page, src) {
   wallCropEnsure();
   WC.aid = String(aid);
   WC.page = Number(page) || 0;
-  WC.ratio = 16 / 9;
+  WC.ratio = 0;             // 默认自由比例: 裁剪框撑满整图
   const m = $('#wall-crop');
   m.querySelectorAll('.crop-r').forEach(x => x.classList.toggle(
-    'active', x.dataset.r === '1.777778'));
+    'active', x.dataset.r === '0'));
   m.classList.remove('hidden');
   const { img, box } = wallCropEls();
   if (box) { box.style.width = '0px'; box.style.height = '0px'; }
@@ -290,7 +299,12 @@ function closeWallCrop() {
   const m = $('#wall-crop');
   if (m) m.classList.add('hidden');
   const { img } = wallCropEls();
-  if (img) img.src = '';
+  if (img) {
+    // 先解绑再清 src: 否则清空 src 会触发 onerror, 点空白处退出时弹"图片加载失败"
+    img.onload = null;
+    img.onerror = null;
+    img.removeAttribute('src');
+  }
   WC.drag = null;
 }
 window.closeWallCrop = closeWallCrop;
