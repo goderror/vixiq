@@ -244,30 +244,39 @@ def _row_name(r: dict) -> str:
 
 
 def group_dupes(rows: "list[dict]") -> "list[dict]":
-    """把「同一个作品多张」与「字节完全相同」归成重复组 —— 只报告, 不决定删哪张。
+    """把**同一张图**的多份归成重复组 —— 只报告, 不决定删哪张。
 
-    返回 [{key, kind, artwork_id, title, author_name, files: [file_name, ...]}]。
-    作品组优先; 字节组只收还没被作品组覆盖的 (否则同一批文件会重复出现两次)。
+    判定口径 (2026-11-16 用户纠正): 同作品**不同页**是不同画面, 不算重复。
+    只有下面两种才算:
+      ① 同作品 + 同页 (page_num 非空), 例如原图与手动裁剪版;
+      ② md5 完全相同 (不管归属哪一页)。
+    返回 [{key, kind, artwork_id, page_num, title, author_name, files: [file_name, ...]}]。
+    页组优先; md5 组只收还没被页组覆盖的 (否则同一批文件会重复出现两次)。
     """
-    by_aid: "dict[str, list]" = {}
+    by_page: "dict[tuple[str, int], list]" = {}
     by_md5: "dict[str, list]" = {}
     for r in rows:
         aid = str(r.get("artwork_id") or "").strip()
         m = str(r.get("md5") or "").strip()
-        if aid:
-            by_aid.setdefault(aid, []).append(r)
+        pn = r.get("page_num")
+        if aid and pn is not None:
+            try:
+                by_page.setdefault((aid, int(pn)), []).append(r)
+            except (TypeError, ValueError):
+                pass
         if m:
             by_md5.setdefault(m, []).append(r)
 
     groups: "list[dict]" = []
     covered: "set[str]" = set()
-    for aid, items in by_aid.items():
+    for (aid, pn), items in by_page.items():
         if len(items) < 2:
             continue
         first = items[0]
         groups.append({
-            "key": "a:" + aid, "kind": "artwork", "artwork_id": aid,
-            "title": first.get("title") or "", "author_name": first.get("author_name") or "",
+            "key": "p:%s:%s" % (aid, pn), "kind": "page", "artwork_id": aid,
+            "page_num": pn, "title": first.get("title") or "",
+            "author_name": first.get("author_name") or "",
             "files": [_row_name(r) for r in items],
         })
         covered.update(_row_name(r) for r in items)
@@ -277,7 +286,7 @@ def group_dupes(rows: "list[dict]") -> "list[dict]":
             continue
         groups.append({
             "key": "m:" + m[:12], "kind": "md5", "artwork_id": "",
-            "title": "", "author_name": "",
+            "page_num": None, "title": "", "author_name": "",
             "files": [_row_name(r) for r in rest],
         })
     groups.sort(key=lambda g: (-len(g["files"]), g["key"]))
@@ -311,8 +320,8 @@ def upsert_wall_file(db, wall_dir, path: Path, artwork_id: str, page_num: "int |
             "page_num=excluded.page_num, match_kind=excluded.match_kind, "
             "confidence=excluded.confidence, scanned_at=excluded.scanned_at",
             (p.name, str(wall_dir), st.st_mtime, st.st_size, md5_cached(p),
-             wh[0], wh[1], str(artwork_id), page_num, match_kind,
-             float(confidence), now_txt))
+             wh[0], wh[1], (str(artwork_id) if str(artwork_id or "").strip() else None),
+             page_num, match_kind, float(confidence), now_txt))
 
 
 def forget_wall_file(db, file_name: str) -> None:

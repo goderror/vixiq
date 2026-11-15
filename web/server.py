@@ -1334,29 +1334,43 @@ def _wall_orb_candidates(f: Path, img_root: Path) -> "list[dict]":
     return out
 
 
-def _wall_dupes_for(aid: str, page_md5: str = "",
+def _wall_dupes_for(aid: str, page_num: "int | None" = None, page_md5: str = "",
                     target_wh: "tuple[int, int] | None" = None,
                     deep: bool = True) -> "list[dict]":
-    """壁纸夹里已属于同一个作品的文件 —— **优先读归属索引** (wallpaper_files), 秒回。
+    """壁纸夹里**同一张图**的已有文件 —— **优先读归属索引** (wallpaper_files), 秒回。
 
-    用户手动从图库裁剪、另存出来的壁纸通常**不带作品 ID、md5 也不同**, 只按文件名查会漏。
-    所以归属要先由「壁纸管理」页扫一次落库 (core/wallpaper_index):
-      ① 索引里有这个作品 → 直接列出夹内每一张 (含视觉溯源命中的裁剪版);
-      ② 整表为空 (= 从没扫过) 才退回现场反推 —— 文件名 / md5 必查, ORB 只在 deep 时跑。
+    2026-11-16 用户纠正: 同作品**不同页**是不同画面, 不算重复。只有下面两种才算:
+      ① 同作品 + 同页 (原图与手动裁剪/缩放版)
+      ② md5 完全相同
+    用户手动裁剪、另存出来的壁纸通常**不带作品 ID、md5 也不同**, 所以归属要先由
+    「壁纸管理」页扫一次落库 (core/wallpaper_index); 整表为空才退回现场反推。
     返回 [{name, path, size, kind, artwork_id, page_num, confidence}]
     """
     aid = str(aid or "").strip()
-    if not aid:
+    if not aid and not page_md5:
         return []
+    try:
+        pn = None if page_num is None else int(page_num)
+    except (TypeError, ValueError):
+        pn = None
     wall_dir = candidates_dir()
     if not wall_dir or not wall_dir.is_dir():
         return []
     try:
         with _db() as db:
-            idx_rows = db.conn.execute(
-                "SELECT file_name, size, match_kind, page_num, confidence "
-                "FROM wallpaper_files WHERE artwork_id=? ORDER BY size DESC LIMIT 20",
-                (aid,)).fetchall()
+            wheres, args = [], []
+            if page_md5:
+                wheres.append("(md5 IS NOT NULL AND md5 <> '' AND md5 = ?)")
+                args.append(page_md5)
+            if aid and pn is not None:
+                wheres.append("(artwork_id = ? AND page_num = ?)")
+                args += [aid, pn]
+            idx_rows = []
+            if wheres:
+                idx_rows = db.conn.execute(
+                    "SELECT file_name, size, match_kind, page_num, confidence "
+                    "FROM wallpaper_files WHERE " + " OR ".join(wheres) +
+                    " ORDER BY size DESC LIMIT 20", args).fetchall()
             indexed = int(db.conn.execute(
                 "SELECT COUNT(*) FROM wallpaper_files").fetchone()[0] or 0)
     except Exception:
@@ -1370,7 +1384,7 @@ def _wall_dupes_for(aid: str, page_md5: str = "",
                  "confidence": float(r["confidence"] or 1.0)} for r in idx_rows]
         if hits:
             return hits
-        # 索引里没这个作品 → 再做一遍快扫 (文件名/MD5), 刚放进夹子的图不必等重扫;
+        # 索引里没命中 → 再做一遍快扫 (文件名/MD5), 刚放进夹子的图不必等重扫;
         # 但不再跑 ORB —— 慢路交给壁纸管理页的扫描。
         deep = False
     try:
@@ -1381,13 +1395,15 @@ def _wall_dupes_for(aid: str, page_md5: str = "",
     files = wallpaper_folder_images(wall_dir)
     hits: "list[dict]" = []
     pending: "list[tuple]" = []
+    page_tag = ("_p%d" % pn) if pn is not None else ""
     for f in files:
         try:
             sz = f.stat().st_size
         except OSError:
             continue
         kind = ""
-        if aid in f.name:
+        # 文件名带作品 ID: 有页号时还要求页号一致 —— 同作品的其他页不是重复
+        if aid and (aid in f.name) and (not page_tag or page_tag in f.name):
             kind = "name"
         elif page_md5:
             try:
@@ -1397,7 +1413,7 @@ def _wall_dupes_for(aid: str, page_md5: str = "",
                 kind = ""
         if kind:
             hits.append({"name": f.name, "path": str(f), "size": sz,
-                         "kind": kind, "artwork_id": aid, "page_num": None,
+                         "kind": kind, "artwork_id": aid, "page_num": pn,
                          "confidence": 1.0})
         else:
             pending.append((f, sz))
@@ -1444,9 +1460,13 @@ def _wall_dupes_for(aid: str, page_md5: str = "",
                 row = None
             if not row or str(row["artwork_id"]) != aid:
                 continue
+            rpn = row["page_num"]
+            # 命中的是同一作品的其他页 → 不是同一张图, 不算重复
+            if pn is not None and (rpn is None or int(rpn) != pn):
+                continue
             hits.append({"name": f.name, "path": str(f), "size": sz,
                          "kind": "visual", "artwork_id": aid,
-                         "page_num": row["page_num"],
+                         "page_num": rpn,
                          "confidence": float(top.get("orb") or 0)})
 
     seen, out = set(), []
@@ -5877,6 +5897,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 return jsonify({
                     "items": _with_dl_state(db, _lib_pages(items, name_fallback)),
                     "total": total, "view": "image",
+                    # 顶部信息用: 当前筛选下有多少作品 / 多少张图 (与视图无关)
+                    "totals": {
+                        "artworks": db.count_artworks_filtered(
+                            **common, file_missing_ids=file_missing_ids),
+                        "images": total,
+                    },
                 })
             items = db.list_artworks(
                 **common, sort=args.get("sort", "date"),
@@ -5898,6 +5924,11 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     items, local_map, missing_set, name_fallback,
                     page_info, db, page_list)),
                 "total": total, "view": "artwork",
+                # 顶部信息用: 当前筛选下有多少作品 / 多少张图 (与视图无关)
+                "totals": {
+                    "artworks": total,
+                    "images": db.count_images_filtered(**common),
+                },
             })
 
     @app.route("/api/library/sync", methods=["POST"])
@@ -6155,7 +6186,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         elif row:
             md5 = str(row["md5"] or "")
             wh = (int(row["width"] or 0), int(row["height"] or 0))
-        items = _wall_dupes_for(aid, md5, wh,
+        items = _wall_dupes_for(aid, page, md5, wh,
                                 deep=str(request.args.get("deep") or "") == "1")
         return jsonify({"ok": True,
                         "deep": str(request.args.get("deep") or "") == "1",
@@ -6182,6 +6213,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error", "msg": "缺少作品 ID"}), 400
         width = height = 0
         page_md5 = ""
+        page_used = page          # 实际用上的是哪一页 (缺页回退时可能不是请求的那页)
         with _db() as db:
             info = db.get_page_info(aid, page)
             rel = getattr(info, "local_path", None) if info else None
@@ -6191,13 +6223,15 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             if not rel:
                 # 该页缺失 (删过页) → 回退到第一张已下载的页
                 row = db.conn.execute(
-                    "SELECT local_path, width, height, md5 FROM pages WHERE artwork_id=? "
-                    "AND local_path IS NOT NULL ORDER BY page_num LIMIT 1",
+                    "SELECT local_path, width, height, md5, page_num FROM pages "
+                    "WHERE artwork_id=? AND local_path IS NOT NULL "
+                    "ORDER BY page_num LIMIT 1",
                     (aid,)).fetchone()
                 rel = row["local_path"] if row else None
                 if row:
                     width, height = int(row["width"] or 0), int(row["height"] or 0)
                     page_md5 = str(row["md5"] or "")
+                    page_used = int(row["page_num"] or 0)
         if not rel:
             return jsonify({"status": "error", "msg": "这张图还没下载到本地"}), 404
         img_root = Path(paths.user_data(
@@ -6246,15 +6280,15 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 return jsonify({"status": "error",
                                 "msg": f"裁剪失败: {type(e).__name__}: {e}"}), 500
 
-        # 壁纸夹里已经有同作品的图 → 先让用户确认, 不要重复往里塞。
-        # 三种口径: 文件名含 ID / md5 字节一致 / ORB 视觉相似 (手动裁剪版)
+        # 壁纸夹里已经有**同一张图** → 先让用户确认, 不要重复往里塞。
+        # 口径: 同作品同页 (原图/裁剪版) 或 md5 完全一致; 同作品的其他页不算重复。
         if not bool(body.get("force")):
             try:
-                existing = _wall_dupes_for(aid, page_md5, (width, height))
+                existing = _wall_dupes_for(aid, page_used, page_md5, (width, height))
             except Exception:
                 existing = []
             if existing:
-                return jsonify({"status": "dupe", "msg": "壁纸夹里已有这个作品的壁纸",
+                return jsonify({"status": "dupe", "msg": "壁纸夹里已有这张图",
                                 "existing": existing}), 409
 
         if not apply_wallpaper(p):
@@ -6271,6 +6305,38 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         _notify_widget()
         return jsonify({"status": "ok", "file": str(p), "name": p.name,
                         "cropped": cropped, "info": _wall_info_payload(p)})
+
+    @app.route("/api/wallpaper/use", methods=["POST"])
+    def api_wallpaper_use():
+        """把壁纸夹里**已有的一张**直接设为桌面壁纸 (不新增文件)。
+
+        给「设壁纸时发现这张图已经在夹子里」用: 用户可以直接沿用已有的那张
+        (可能是更满意的裁剪版), 而不是再生成一份。只认壁纸夹内的相对文件名。
+        """
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return jsonify({"status": "error", "msg": "缺少文件名"}), 400
+        targets, refused = _wall_targets([name])
+        if not targets:
+            return jsonify({"status": "error",
+                            "msg": "不能用这张：" + "；".join(refused[:3])}), 400
+        name, p = targets[0]
+        if not apply_wallpaper(p):
+            return jsonify({"status": "error", "msg": "系统没接受这次换壁纸"}), 500
+        # 索引里没有就补一条 (归属未知); 有就保持原样 —— 设桌面不改血缘
+        try:
+            with _db() as db:
+                row = db.conn.execute(
+                    "SELECT 1 FROM wallpaper_files WHERE file_name=? LIMIT 1",
+                    (name,)).fetchone()
+                if not row:
+                    _wall_upsert_file(db, p.parent, p, "", None, "", 0.0)
+        except Exception:
+            pass
+        _notify_widget()
+        return jsonify({"status": "ok", "file": str(p), "name": p.name,
+                        "info": _wall_info_payload(p)})
 
     @app.route("/api/wallpaper/dir")
     def api_wallpaper_dir_get():
