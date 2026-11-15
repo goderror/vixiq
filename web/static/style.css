@@ -1723,6 +1723,8 @@ body.ob-open { overflow: hidden; }
 /* 分页栏: 总数信息靠左, 页码靠右 */
 .lib-pager .pager-inner { width: 100%; }
 .pager-total { color: var(--muted); margin-right: auto; font-size: 13px; }
+/* 壁纸列表分批加载的哨兵行 */
+.wf-more { padding: 10px 4px; text-align: center; color: var(--muted); font-size: 12px; }
 
 /* 裁剪界面里的「选择已有壁纸」按钮 */
 .crop-dupe { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

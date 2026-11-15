@@ -10310,7 +10310,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261116d" and _mss.group(1) == "20261116d", \
+    assert _mjs and _mss and _mjs.group(1) == "20261116e" and _mss.group(1) == "20261116e", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10405,7 +10405,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261116d', html) and _re.search(r'app\.js\?v=20261116d', html), \
+    assert _re.search(r'style\.css\?v=20261116e', html) and _re.search(r'app\.js\?v=20261116e', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10788,7 +10788,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261116d" in html and "app.js?v=20261116d" in html, \
+        assert "style.css?v=20261116e" in html and "app.js?v=20261116e" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13126,7 +13126,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261116d" in _h and "style.css?v=20261116d" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261116e" in _h and "style.css?v=20261116e" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13269,10 +13269,21 @@ def t137_wallpaper_index_and_admin_page() -> None:
         j = client.get("/api/wallpaper/files").get_json()
         assert "crop_manual.jpg" not in [x["name"] for x in j["items"]], j["items"]
 
+        # ---------- ⑤′ 页号边界 (回退路径): "_p1" 字符串包含会误命中 "_p10" ----------
+        _Img.new("RGB", (1920, 1080), (11, 22, 33)).save(wall / "700001_p10.png")
+        with wsrv._db() as db:
+            with db.conn:
+                db.conn.execute("DELETE FROM wallpaper_files")   # 清索引 → 走现场反推
+        _r = wsrv._wall_dupes_for("700001", 1, "", (1920, 1080), deep=False)
+        _names = [x["name"] for x in _r]
+        assert "700001_p1.png" in _names and "700001_p10.png" not in _names, _names
+        (wall / "700001_p10.png").unlink()
+
         # ---------- ⑥ 前端接线 ----------
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
         js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+        _srv_src = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
         _i_lib = html.index('data-tab="library"')
         _i_auth = html.index('data-tab="authors"')
         _i_wall = html.index('data-tab="wallpapers"')
@@ -13316,6 +13327,24 @@ def t137_wallpaper_index_and_admin_page() -> None:
         assert 'class="lib-toolbar" id="authors-toolbar"' in html, "作者管理顶部工具栏没粘住"
         assert "function pageToolbarWatch()" in js and ".lib-toolbar.compact" in css, \
             "滚动收起没接上"
+        # 抽屉闪烁修复: 收/展必须带迟滞 (>160 / <80), 单一阈值会在临界点反复弹跳
+        assert "st > 160" in js and "st < 80" in js, \
+            "工具栏收起/展开要带迟滞区间, 否则临界点来回切换就是闪烁"
+        # is-stuck 不许改变占位高度 (border 常驻只变色); 高度变化会在滚动临界点抖
+        _tb = css.split(".lib-toolbar {")[1].split("}")[0]
+        assert "border-bottom: 1px solid transparent" in _tb, \
+            "工具栏底边框要常驻透明(贴住时只变色), 出现/消失会改高度 → 滚动临界点抖动"
+        # 壁纸列表分批渲染: 上千张一次塞进 DOM 会卡死页面
+        assert "WF_BATCH" in js and "IntersectionObserver" in js and ".wf-more" in css, \
+            "壁纸列表要分批渲染 (滚动到哨兵再补下一批)"
+        # 单页时顶部 pager 不渲染 (总数只在底部, 免得重复 + 多一条分隔线)
+        assert "$('#lib-pager-top').innerHTML = nav ? html : '';" in js, \
+            "单页时顶部 pager 要置空"
+        # 查重选择弹窗的缩略图: 已知非 R18 直接显示 (不再一律当"不确定"打码)
+        assert "imgSrc(url, { is_r18: it.is_r18 })" in js, \
+            "选择已有壁纸的缩略图要按作品 R18 标记显示"
+        assert '"is_r18": (int(r["is_r18"]) if r["is_r18"] is not None else None)' \
+            in _srv_src, "查重结果要带 is_r18 (供前端决定打码)"
     finally:
         upaths.user_data = orig_ud
         upaths.data_root = orig_dr

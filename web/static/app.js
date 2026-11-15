@@ -359,8 +359,9 @@ function wallDupeChoose() {
   const grid = m.querySelector('#wall-choose-grid');
   grid.innerHTML = hit.items.map((it) => {
     const url = '/api/local-img?p=' + encodeURIComponent(it.name) + '&root=wall&thumb=1';
+    // 已知非 R18 就直接显示; 未知 (回退路径) 才按"不确定"打码
     return '<button class="wall-pick" type="button" data-name="' + esc(it.name) + '">'
-      + '<img src="' + esc(safeThumb(url, null)) + '" alt="" loading="lazy"'
+      + '<img src="' + esc(imgSrc(url, { is_r18: it.is_r18 })) + '" alt="" loading="lazy"'
       + ' onerror="this.style.opacity=.2">'
       + '<span class="wall-pick-tag">' + esc(WALL_DUPE_KIND[it.kind] || '同一张') + '</span>'
       + '<span class="wall-pick-name">' + esc(it.name) + '</span>'
@@ -591,7 +592,7 @@ function wallFilesVisible() {
       .some(v => String(v || '').toLowerCase().includes(q)));
   }
   const sort = ($('#wf-f-sort') || {}).value || 'name';
-  const byName = (a, b) => String(a.name).localeCompare(String(b.name), 'zh');
+  const byName = (a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN');
   if (sort === 'size') list.sort((a, b) => (b.size || 0) - (a.size || 0) || byName(a, b));
   else if (sort === 'owned') {
     list.sort((a, b) => ((b.artwork_id ? 1 : 0) - (a.artwork_id ? 1 : 0)) || byName(a, b));
@@ -601,6 +602,43 @@ function wallFilesVisible() {
     list.sort((a, b) => ((dup.has(b.name) ? 1 : 0) - (dup.has(a.name) ? 1 : 0)) || byName(a, b));
   } else list.sort(byName);
   return list;
+}
+
+// 上千张一次塞进 DOM 会卡死页面 → 分批渲染: 先出第一批, 滚到底部附近再补下一批
+const WF_BATCH = 120;
+
+function wallFilesRenderList(list) {
+  const box = $('#wf-result');
+  if (!box) return;
+  if (box._wfIO) { try { box._wfIO.disconnect(); } catch (e) { /* 忽略 */ } box._wfIO = null; }
+  if (list.length <= WF_BATCH) {
+    box.innerHTML = '<div class="wf-grid">' + list.map(wallFilesCard).join('') + '</div>';
+    return;
+  }
+  const grid = document.createElement('div');
+  grid.className = 'wf-grid';
+  const sentinel = document.createElement('div');
+  sentinel.className = 'wf-more';
+  box.innerHTML = '';
+  box.appendChild(grid);
+  box.appendChild(sentinel);
+  let rendered = 0;
+  const renderBatch = () => {
+    if (rendered >= list.length) { sentinel.textContent = ''; return; }
+    const frag = document.createElement('div');
+    frag.innerHTML = list.slice(rendered, rendered + WF_BATCH).map(wallFilesCard).join('');
+    while (frag.firstChild) grid.appendChild(frag.firstChild);
+    rendered += WF_BATCH;
+    sentinel.textContent = rendered < list.length
+      ? ('已显示 ' + Math.min(rendered, list.length) + ' / ' + list.length + ' 张，继续下滑加载')
+      : '';
+  };
+  renderBatch();
+  const io = new IntersectionObserver((ents) => {
+    if (ents.some(x => x.isIntersecting)) renderBatch();
+  }, { root: document.querySelector('main'), rootMargin: '600px 0px' });
+  io.observe(sentinel);
+  box._wfIO = io;
 }
 
 function wallFilesPaint() {
@@ -630,6 +668,8 @@ function wallFilesPaint() {
   ).join('');
 
   const items = d.items || [];
+  // 换视图前先摘掉旧的分批观察器 (它盯着的哨兵节点马上要被替换掉)
+  if (box._wfIO) { try { box._wfIO.disconnect(); } catch (e) { /* 忽略 */ } box._wfIO = null; }
   if (!items.length) {
     box.innerHTML = '<div class="hint">' + (d.scanned
       ? '壁纸夹里没有图片。'
@@ -660,9 +700,8 @@ function wallFilesPaint() {
     }).join('') : '<div class="hint">没有发现重复：同一张图在壁纸夹里都只有一份。</div>';
   } else {
     const list = wallFilesVisible();
-    box.innerHTML = list.length
-      ? '<div class="wf-grid">' + list.map(wallFilesCard).join('') + '</div>'
-      : '<div class="hint">没有符合条件的壁纸。</div>';
+    if (!list.length) box.innerHTML = '<div class="hint">没有符合条件的壁纸。</div>';
+    else wallFilesRenderList(list);
   }
   wallFilesSyncSel();
 }
@@ -836,21 +875,27 @@ window.wallFilesRecycle = wallFilesRecycle;
 
 // ============ 📌 三个管理页的顶部工具栏: 粘住 + 下滑收起 (2026-11-16) ============
 // 列表往下翻时把统计卡/筛选收起来, 只留搜索与常用操作; 回到顶部再展开。
-// 用 rAF 合并滚动事件, 避免每帧多次改 class。
+// 用 rAF 合并滚动事件; 收/展用**迟滞区间** (>160 收 / <80 展):
+// 单一阈值会在临界点来回切换, 收起又使内容变短, 列表反复"弹跳" —— 这就是抽屉闪烁。
 function pageToolbarWatch() {
   const main = document.querySelector('main');
   if (!main) return;
   if (!main._tbBound) {
     main._tbBound = true;
     let raf = 0;
+    let compact = false;      // 当前是否收起 (迟滞状态, 不直接由 scrollTop 推出)
     const apply = () => {
       raf = 0;
       const st = main.scrollTop;
+      if (!compact && st > 160) compact = true;      // 下滚够深才收
+      else if (compact && st < 80) compact = false;  // 回到接近顶部才展
+      const stuck = st > 4;
       ['#lib-toolbar', '#authors-toolbar', '#wf-toolbar'].forEach((sel) => {
         const el = $(sel);
         if (!el) return;
-        el.classList.toggle('is-stuck', st > 4);
-        el.classList.toggle('compact', st > 120);
+        // class 没变就不写 DOM: 反复写同样的 class 也会触发无谓的样式重算
+        if (el.classList.contains('is-stuck') !== stuck) el.classList.toggle('is-stuck', stuck);
+        if (el.classList.contains('compact') !== compact) el.classList.toggle('compact', compact);
       });
     };
     main.addEventListener('scroll', () => {
@@ -4968,7 +5013,8 @@ function renderLibPagers() {
       <button class="btn ghost" onclick="goLibPage(${libPages})" ${libPage >= libPages ? 'disabled' : ''} title="尾页">»</button>
   ` : '';
   const html = `<div class="pager-inner"><span class="pager-total">${totalTxt}</span>${nav}</div>`;
-  $('#lib-pager-top').innerHTML = html;
+  // 单页时顶部不渲染: 那里紧贴工具栏, 只剩总数会跟底部重复还多出一条分隔线
+  $('#lib-pager-top').innerHTML = nav ? html : '';
   $('#lib-pager-bottom').innerHTML = html;
 }
 

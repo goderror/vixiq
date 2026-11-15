@@ -1360,17 +1360,20 @@ def _wall_dupes_for(aid: str, page_num: "int | None" = None, page_md5: str = "",
         with _db() as db:
             wheres, args = [], []
             if page_md5:
-                wheres.append("(md5 IS NOT NULL AND md5 <> '' AND md5 = ?)")
+                wheres.append("(wf.md5 IS NOT NULL AND wf.md5 <> '' AND wf.md5 = ?)")
                 args.append(page_md5)
             if aid and pn is not None:
-                wheres.append("(artwork_id = ? AND page_num = ?)")
+                wheres.append("(wf.artwork_id = ? AND wf.page_num = ?)")
                 args += [aid, pn]
             idx_rows = []
             if wheres:
                 idx_rows = db.conn.execute(
-                    "SELECT file_name, size, match_kind, page_num, confidence "
-                    "FROM wallpaper_files WHERE " + " OR ".join(wheres) +
-                    " ORDER BY size DESC LIMIT 20", args).fetchall()
+                    "SELECT wf.file_name, wf.size, wf.match_kind, wf.page_num, "
+                    "       wf.confidence, a.is_r18 AS is_r18 "
+                    "FROM wallpaper_files wf "
+                    "LEFT JOIN artworks a ON a.artwork_id = wf.artwork_id "
+                    "WHERE " + " OR ".join(wheres) +
+                    " ORDER BY wf.size DESC LIMIT 20", args).fetchall()
             indexed = int(db.conn.execute(
                 "SELECT COUNT(*) FROM wallpaper_files").fetchone()[0] or 0)
     except Exception:
@@ -1381,7 +1384,10 @@ def _wall_dupes_for(aid: str, page_num: "int | None" = None, page_md5: str = "",
                  "size": int(r["size"] or 0),
                  "kind": str(r["match_kind"] or "name"),
                  "artwork_id": aid, "page_num": r["page_num"],
-                 "confidence": float(r["confidence"] or 1.0)} for r in idx_rows]
+                 "confidence": float(r["confidence"] or 1.0),
+                 # 归属已知 → 按作品标记; 悬空/未知 → None (前端按"不确定"打码)
+                 "is_r18": (int(r["is_r18"]) if r["is_r18"] is not None else None)
+                 } for r in idx_rows]
         if hits:
             return hits
         # 索引里没命中 → 再做一遍快扫 (文件名/MD5), 刚放进夹子的图不必等重扫;
@@ -1395,7 +1401,8 @@ def _wall_dupes_for(aid: str, page_num: "int | None" = None, page_md5: str = "",
     files = wallpaper_folder_images(wall_dir)
     hits: "list[dict]" = []
     pending: "list[tuple]" = []
-    page_tag = ("_p%d" % pn) if pn is not None else ""
+    # 页号必须精确到边界: "_p1" 字符串包含会误命中 "_p10/_p12…", 把别的页当成同页重复
+    page_rx = (re.compile(r"_p%d(?!\d)" % pn) if pn is not None else None)
     for f in files:
         try:
             sz = f.stat().st_size
@@ -1403,7 +1410,7 @@ def _wall_dupes_for(aid: str, page_num: "int | None" = None, page_md5: str = "",
             continue
         kind = ""
         # 文件名带作品 ID: 有页号时还要求页号一致 —— 同作品的其他页不是重复
-        if aid and (aid in f.name) and (not page_tag or page_tag in f.name):
+        if aid and (aid in f.name) and (page_rx is None or page_rx.search(f.name)):
             kind = "name"
         elif page_md5:
             try:
