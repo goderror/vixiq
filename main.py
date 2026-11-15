@@ -126,6 +126,20 @@ def _port_free(port: int) -> bool:
             return False
 
 
+def _lan_ipv4() -> "str | None":
+    """取本机局域网 IPv4 (UDP connect 只查路由, 不发包); 取不到返回 None。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        return ip if ip and not ip.startswith("127.") else None
+    except Exception:
+        return None
+
+
 def _kill_zombie_port(port: int):
     """端口被占但无 HTTP 响应 (僵尸进程残留 socket) → 找到并杀掉占用端口的进程。
     Windows: netstat 查 PID → taskkill /F。"""
@@ -782,8 +796,16 @@ def main():
         _set_watch_browser(should_watch_browser(config))
     except Exception as e:
         _app_log(f"心跳守护未启用: {e}")
+    # 监听地址: 默认 127.0.0.1 (仅本机)。设 web.host=0.0.0.0 后手机/局域网可访问,
+    # 配合 Tailscale 时建议用防火墙只放行 100.64.0.0/10, 不要暴露到公网。
+    host = str(config.get("web", {}).get("host") or "127.0.0.1").strip()
+    if host not in ("127.0.0.1", "localhost"):
+        lan_ip = _lan_ipv4()
+        extra = f" · 局域网 http://{lan_ip}:{port}/" if lan_ip else ""
+        print(f"🌐 监听 {host}:{port} — 手机可访问{extra}")
+        _app_log(f"监听 {host}:{port} (对外开放, 仅建议配合 Tailscale 使用)")
     try:
-        app.run(host="127.0.0.1", port=port, threaded=True, use_reloader=False)
+        app.run(host=host, port=port, threaded=True, use_reloader=False)
     except Exception:
         _close_splash(splash_stop)   # 服务异常退出也别让启动画面卡住
         raise

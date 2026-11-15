@@ -1447,3 +1447,25 @@ body.ob-open { overflow: hidden; }
 .ob-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; }
 .ob-foot { display: flex; align-items: center; gap: 10px; padding: 14px 22px 20px; }
 .ob-foot #ob-next { margin-left: auto; }
+
+/* ===== 📱 手机 / 窄屏适配 =================================================
+   手机访问的是同一个 Web 界面 (Tailscale/局域网直连), 这里只做必要的收缩:
+   顶栏换行、tab 横向滑动、作品网格降到 2 列、表格整块横滑, 避免整页被撑宽。 */
+@media (max-width: 720px) {
+  .topbar { padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
+  .brand { font-size: 16px; }
+  .search-wrap { order: 3; flex: 1 1 100%; max-width: none; margin: 0; }
+  .tabs {
+    padding: 6px 8px 0; flex-wrap: nowrap; overflow-x: auto;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; padding: 9px 12px; font-size: 13px; white-space: nowrap; }
+  main { padding: 12px; }
+  .works-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .work-card .w-body { padding: 8px 9px 10px; }
+  .work-card .w-title { font-size: 12px; }
+  .work-card .w-actions .btn { font-size: 11px; padding: 6px 4px; }
+  .work-card .w-actions .btn.ghost.icon-btn,
+  .work-card .w-actions .btn.danger.icon-btn { flex: 0 0 28px; }
+}
