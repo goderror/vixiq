@@ -7605,18 +7605,21 @@ def create_app() -> Flask:
                 for x in src:
                     if not isinstance(x, dict):
                         continue
+                    # 先补标识再去重: 旧报告里同类型条目常常都没写 ref,
+                    # 直接拿 (type, "") 去重会把第二条起全部当成重复丢掉。
+                    if not x.get("ref"):
+                        x["ref"] = str(x.get("artwork_id") or x.get("name")
+                                       or x.get("path") or x.get("md5")
+                                       or f"idx:{len(merged)}")
                     k = (str(x.get("type") or ""), str(x.get("ref") or ""))
                     if k in seen:
                         continue
                     seen.add(k)
                     merged.append(x)
             for i, it in enumerate(merged):
-                # 旧结构里有些条目 (corrupt / 整步失败的提示) 没带任何标识 → 用下标兜底,
-                # 保证每条都能被单独「忽略」(前端按下标取条目, 缺 ref 会让忽略按钮报错)
+                # 兜底: 理论上上面已补齐, 这里只防手写报告里 ref 是空串
                 if not it.get("ref"):
-                    it["ref"] = str(it.get("artwork_id") or it.get("name")
-                                    or it.get("path") or it.get("md5")
-                                    or f"idx:{i}")
+                    it["ref"] = f"idx:{i}"
             _check_state["report"] = {
                 "time": old.get("time"),
                 "suspicious": [x for x in merged if x.get("type") in _CK_SUSPICIOUS],

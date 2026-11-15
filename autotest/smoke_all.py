@@ -1459,41 +1459,61 @@ def t26_library_manage_crud() -> None:
         db.close()
 
     # ⑧ Web API: /items(筛选排序) /facets /delete /tags /update
-    app = create_app()
-    client = app.test_client()
-    r = client.get("/api/library/items?type=1")
-    assert r.status_code == 200 and isinstance(r.get_json().get("items"), list) and "total" in r.get_json(), r.status_code
-    r = client.get("/api/library/facets")
-    j = r.get_json()
-    assert "tags" in j and "authors" in j, j
-    # 用真实 db 文件路径的临时库测写接口? 冒烟用: memory: 无法跨请求共享,
-    # 这里仅验证 404 缺参校验与返回结构 (写接口已由上面数据层覆盖)。
-    r = client.post("/api/library/delete", json={"ids": []})
-    assert r.status_code == 200 and r.get_json()["deleted"] == 0, r.status_code
-    r = client.post("/api/library/delete-pages", json={"items": []})
-    assert r.status_code == 200 and r.get_json()["pages_deleted"] == 0, r.status_code
-    r = client.post("/api/library/merge-pages", json={"items": []})
-    assert r.status_code == 400, r.status_code
-    r = client.post("/api/library/merge-pages", json={"items": [{"artwork_id": "1", "page_num": 0}]})
-    assert r.status_code == 400, r.status_code
-    # 数字 ID = pixiv 作品 → 合并闸门先拦下 (400); 非数字 ID 则因库里查无此页而 400
-    r = client.post("/api/library/merge-pages", json={"items": [{"artwork_id": "1", "page_num": 0},
-                                                                  {"artwork_id": "2", "page_num": 0}]})
-    assert r.status_code == 400, r.status_code
-    r = client.post("/api/library/merge-pages", json={"items": [{"artwork_id": "ext_x", "page_num": 0},
-                                                                  {"artwork_id": "ext_y", "page_num": 0}]})
-    assert r.status_code == 400, r.status_code
-    r = client.post("/api/library/tags", json={})
-    assert r.status_code == 400, r.status_code
-    r = client.post("/api/library/update", json={})
-    assert r.status_code == 400, r.status_code
-    # 自检报告可回看 (日志提示「39 个可疑项」但界面无处查看明细):
-    # 该接口必须始终返回 {running, result} 结构, result 内含 suspicious 明细供前端弹窗回显
-    r = client.get("/api/library/self-check-last")
-    j = r.get_json()
-    assert r.status_code == 200 and "running" in j and "result" in j, j
-    if j["result"]:
-        assert "suspicious" in j["result"] and "fixed" in j["result"], j["result"]
+    #    必须把 paths 指到临时目录: 否则会去读本机真实配置的图库目录,
+    #    换一台没迁数据盘的机器上就变成 500 (FileNotFoundError: ...\img)。
+    import tempfile
+    import utils.paths as _t26up
+
+    _t26tmp = Path(tempfile.mkdtemp(prefix="t26web_"))
+    _t26_ud, _t26_dr = _t26up.user_data, _t26up.data_root
+
+    def _t26_fake_user_data(rel):
+        p = _t26tmp / str(rel)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    _t26up.user_data = _t26_fake_user_data
+    _t26up.data_root = lambda: _t26tmp
+    (_t26tmp / "img").mkdir(parents=True, exist_ok=True)
+    try:
+        app = create_app()
+        client = app.test_client()
+        r = client.get("/api/library/items?type=1")
+        assert r.status_code == 200 and isinstance(r.get_json().get("items"), list) and "total" in r.get_json(), r.status_code
+        r = client.get("/api/library/facets")
+        j = r.get_json()
+        assert "tags" in j and "authors" in j, j
+        # 用真实 db 文件路径的临时库测写接口? 冒烟用: memory: 无法跨请求共享,
+        # 这里仅验证 404 缺参校验与返回结构 (写接口已由上面数据层覆盖)。
+        r = client.post("/api/library/delete", json={"ids": []})
+        assert r.status_code == 200 and r.get_json()["deleted"] == 0, r.status_code
+        r = client.post("/api/library/delete-pages", json={"items": []})
+        assert r.status_code == 200 and r.get_json()["pages_deleted"] == 0, r.status_code
+        r = client.post("/api/library/merge-pages", json={"items": []})
+        assert r.status_code == 400, r.status_code
+        r = client.post("/api/library/merge-pages", json={"items": [{"artwork_id": "1", "page_num": 0}]})
+        assert r.status_code == 400, r.status_code
+        # 数字 ID = pixiv 作品 → 合并闸门先拦下 (400); 非数字 ID 则因库里查无此页而 400
+        r = client.post("/api/library/merge-pages", json={"items": [{"artwork_id": "1", "page_num": 0},
+                                                                      {"artwork_id": "2", "page_num": 0}]})
+        assert r.status_code == 400, r.status_code
+        r = client.post("/api/library/merge-pages", json={"items": [{"artwork_id": "ext_x", "page_num": 0},
+                                                                      {"artwork_id": "ext_y", "page_num": 0}]})
+        assert r.status_code == 400, r.status_code
+        r = client.post("/api/library/tags", json={})
+        assert r.status_code == 400, r.status_code
+        r = client.post("/api/library/update", json={})
+        assert r.status_code == 400, r.status_code
+        # 自检报告可回看 (日志提示「39 个可疑项」但界面无处查看明细):
+        # 该接口必须始终返回 {running, result} 结构, result 内含 suspicious 明细供前端弹窗回显
+        r = client.get("/api/library/self-check-last")
+        j = r.get_json()
+        assert r.status_code == 200 and "running" in j and "result" in j, j
+        if j["result"]:
+            assert "suspicious" in j["result"] and "fixed" in j["result"], j["result"]
+    finally:
+        _t26up.user_data = _t26_ud
+        _t26up.data_root = _t26_dr
 
 
 # ==============================================================
@@ -3835,21 +3855,26 @@ def t54_selfcheck_approval_actions() -> None:
         wsrv._self_check_state.update(running=False, result=None)
         client = create_app().test_client()
 
-        # ① 内存为空 → 回落读盘, 三条可疑项齐备
+        # 桶边界: no_author 属「待办项」, empty_dir 属「可疑项」—— 计数与查找都跨两个桶
+        def _items(rep):
+            rep = rep or {}
+            return list(rep.get("suspicious") or []) + list(rep.get("todos") or [])
+
+        # ① 内存为空 → 回落读盘, 三条条目齐备
         j = client.get("/api/library/self-check-last").get_json()
-        assert len(j["result"]["suspicious"]) == 3, j["result"]
+        assert len(_items(j["result"])) == 3, j["result"]
 
         # ② dismiss 处理掉的那条 (内存 + 返回体同步)
         r = client.post("/api/library/self-check-dismiss", json={"artwork_id": "111"})
         j2 = r.get_json()
         assert r.status_code == 200 and j2["removed"] == 1, j2
-        left_ids = [s.get("artwork_id") for s in j2["result"]["suspicious"]]
+        left_ids = [s.get("artwork_id") for s in _items(j2["result"])]
         assert "111" not in left_ids and "222" in left_ids, left_ids
 
         # ③ 落盘同步: 页面刷新/服务重启后不会把已处理项列回来
         disk = json.loads((tmp / "self_check.json").read_text(encoding="utf-8"))
-        assert len(disk["suspicious"]) == 2, disk["suspicious"]
-        assert all(s.get("artwork_id") != "111" for s in disk["suspicious"]), disk
+        assert len(_items(disk)) == 2, disk
+        assert all(s.get("artwork_id") != "111" for s in _items(disk)), disk
 
         # ④ 非 no_author 条目 / 不存在的 id / 缺参 都不误删
         assert client.post("/api/library/self-check-dismiss",
@@ -3857,7 +3882,7 @@ def t54_selfcheck_approval_actions() -> None:
         assert client.post("/api/library/self-check-dismiss",
                            json={}).get_json()["removed"] == 0
         j3 = client.get("/api/library/self-check-last").get_json()
-        assert len(j3["result"]["suspicious"]) == 2, j3["result"]
+        assert len(_items(j3["result"])) == 2, j3["result"]
 
         # ⑤ 前端接线静态检查 (改前端时别把逐条审批按钮丢掉)
         appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
@@ -10281,7 +10306,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261020l" and _mss.group(1) == "20261020l", \
+    assert _mjs and _mss and _mjs.group(1) == "20261115a" and _mss.group(1) == "20261115a", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10376,7 +10401,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261020l', html) and _re.search(r'app\.js\?v=20261020l', html), \
+    assert _re.search(r'style\.css\?v=20261115a', html) and _re.search(r'app\.js\?v=20261115a', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10753,7 +10778,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261020l" in html and "app.js?v=20261020l" in html, \
+        assert "style.css?v=20261115a" in html and "app.js?v=20261115a" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -10940,7 +10965,10 @@ def t129_tray_lifecycle_policy():
     src = (_P(PROJECT_ROOT) / "main.py").read_text(encoding="utf-8")
     assert "_open_when_ready" not in src, "旧的「就绪即开浏览器」入口应已被 _start_ui_when_ready 取代"
     assert "def _start_ui_when_ready()" in src
-    assert "if ln.get(\"auto_open_browser\"):" in src, "自动开浏览器必须由开关决定"
+    assert ("if ln.get(\"auto_open_browser\"):" in src
+            or "if ln.get(\"auto_open_browser\") or _first_run:" in src), \
+        "自动开浏览器必须由开关决定（首次引导可作为唯一例外）"
+    assert "onboarding_needed()" in src, "首次引导判定没接上"
     assert "if ln.get(\"tray_enabled\", True):" in src, "托盘默认必须是开"
     assert "if ln.get(\"wall_widget\"):" in src
     assert "should_watch_browser(config)" in src, "心跳守护必须过开关, 不能无条件启动"
@@ -13083,7 +13111,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261020l" in _h and "style.css?v=20261020l" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261115a" in _h and "style.css?v=20261115a" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
