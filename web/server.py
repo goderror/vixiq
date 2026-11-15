@@ -804,6 +804,11 @@ def _cached_reconcile(force: bool = False):
                     or (now - state["ts"]) > _RECONCILE_TTL):
                 return state["rep"]
             img_root = paths.user_data(_config["paths"]["img_subdir"])
+            # 用户手动删掉图片目录后也不该让图库接口 500：扫描前补建空目录
+            try:
+                Path(img_root).mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
             with _db() as db:
                 state["rep"] = db.reconcile_output(img_root, verify_corrupt=False)
                 # 外来作品标题随文件移动刷新 (懒收敛: 整理/同步/归档搬走的 ext_ 标题不再过期)
@@ -3131,6 +3136,15 @@ def _save_path_overrides(body: dict) -> "tuple[dict | None, str]":
 def create_app() -> Flask:
     app = Flask(__name__)
     static_dir = Path(__file__).resolve().parent / "static"
+
+    # 全新环境第一次打开图库时，图片目录还不存在 —— 对账/扫描接口会直接
+    # FileNotFoundError: ...\data\img。先建一个空目录（无副作用），
+    # 让「刚装好、还没下载任何图」的图库是空列表而不是 500。
+    try:
+        Path(paths.user_data(_config["paths"].get("img_subdir") or "img")).mkdir(
+            parents=True, exist_ok=True)
+    except Exception:
+        pass
 
     # ---- 实时活动日志  ----------------------------------
     # 把「程序在做什么 + 用户点了什么」逐条打屏并落盘, 出事时有现场可回放。
