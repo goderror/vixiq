@@ -3375,6 +3375,45 @@ def create_app() -> Flask:
         return jsonify({"ok": True, "app": "vixiq",
                         "cookies_exist": _cookies_path().exists()})
 
+    # ---------------- 🧭 首次使用引导 ----------------
+    @app.route("/api/onboarding")
+    def api_onboarding_status():
+        """全新环境才需要引导 (没完成过 + 没有数据库/登录态), 前端打开页面时问一次。"""
+        from utils.config import onboarding_needed
+        return jsonify({"needed": onboarding_needed()})
+
+    @app.route("/api/onboarding/complete", methods=["POST"])
+    def api_onboarding_complete():
+        """标记引导已完成, 之后不再自动出现 (设置页仍可手动重看)。"""
+        from datetime import datetime
+        from utils.config import save_user_config
+        try:
+            save_user_config({"onboarding": {
+                "done": True,
+                "completed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": True})
+
+    @app.route("/api/env")
+    def api_env():
+        """运行环境自检: 本机 Edge 与内置驱动版本 (引导页给普通用户看人话状态)。"""
+        from utils import paths as _p
+        from utils.browser import _driver_version, _edge_info, _major
+        exe, edge_ver = _edge_info()
+        drv = _p.resource("msedgedriver.exe")
+        drv_ver = _driver_version(str(drv)) if drv.exists() else None
+        return jsonify({
+            "edge": {"path": exe or "", "version": edge_ver or ""},
+            "driver": {
+                "bundled": drv.exists(),
+                "version": drv_ver or "",
+                "matched": bool(edge_ver and drv_ver
+                                and _major(edge_ver) == _major(drv_ver)),
+            },
+        })
+
     @app.route("/api/diag/liveness")
     def api_diag_liveness():
         """诊断「浏览器是否还活着」的原始信号 (排障用, 只读)。

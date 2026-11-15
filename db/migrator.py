@@ -69,6 +69,18 @@ class MigrationManager:
         applied: list[str] = []
         pending = self._pending_migrations(conn=conn)
         if not pending:
+            # 迁移目录为空 + 库里一张业务表都没有 → 永远建不出表。
+            # 不显式报错的话, 上层只会看到一堆 "no such table: pages", 极难定位
+            # (最常见根因: PyInstaller 打包漏带 db/migrations, 见 build.spec 的 datas)。
+            if not any(self.migrations_dir.glob('*.sql')):
+                has_table = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations' "
+                    "LIMIT 1").fetchone()
+                if not has_table:
+                    raise RuntimeError(
+                        f"未找到任何迁移脚本: {self.migrations_dir}/*.sql, "
+                        f"新数据库无法建表。若运行的是打包版, 请检查打包时是否带上 db/migrations。")
             return applied
         conn.executescript(_SCHEMA_VER_SQL)
         for mf in pending:

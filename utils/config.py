@@ -207,3 +207,28 @@ def save_user_config(updates: dict) -> None:
     merged = _deep_merge(existing, updates)
     with open(user_path, "w", encoding="utf-8") as f:
         json.dump(merged, f, ensure_ascii=False, indent=2)
+
+
+def onboarding_needed() -> bool:
+    """是否处于「全新环境、尚未完成首次引导」的状态。
+
+    普通用户拿到新机器后最需要的是「先把图放哪儿、先登录」这两件事,
+    判定口径宁可少打扰:
+      - config/user.json 里 onboarding.done=true → 不需要;
+      - 已有登录 Cookies(含从旧版本升级) → 视为老用户, 不需要;
+      - 其余 → 需要。
+    **不看数据库文件是否存在** —— 页面里任意接口第一次访问都会建出一个空库,
+    拿它当「老用户」会把首次引导直接吞掉 (实测: 首屏并发请求抢先建库)。
+    只读判定不写盘；完成标记由 /api/onboarding/complete 落盘。
+    """
+    cfg = load_config()
+    if bool((cfg.get("onboarding") or {}).get("done")):
+        return False
+    p = cfg.get("paths") or {}
+    try:
+        ck = paths.user_data(str(p.get("cookies_filename") or "cookies.bin"))
+        if ck.exists():
+            return False
+    except OSError:
+        pass
+    return True

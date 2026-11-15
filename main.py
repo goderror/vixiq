@@ -657,6 +657,13 @@ def main():
         return
     config = load_config()
     port = int(config.get("web", {}).get("port", DEFAULT_PORT))
+    # 全新环境(没数据库/登录态、也没完成过引导) → 首次启动自动打开界面,
+    # 否则普通用户双击 exe 后只看到托盘图标, 完全不知道下一步该做什么。
+    try:
+        from utils.config import onboarding_needed
+        _first_run = onboarding_needed()
+    except Exception:
+        _first_run = False
 
     # 启动画面文字动画: 在导入重模块 (Flask/cv2/selenium) 之前起, 覆盖这段启动延迟。
     # 只驱动 PyInstaller 原生 splash 的文字 (pyi_splash IPC), 不用 Python tkinter
@@ -725,8 +732,10 @@ def main():
         _close_splash(splash_stop)   # 服务就绪 → 收掉启动画面
         if ln.get("tray_enabled", True):
             _start_tray(port)
-        if ln.get("auto_open_browser"):
+        if ln.get("auto_open_browser") or _first_run:
             webbrowser.open(url)
+            if _first_run and not ln.get("auto_open_browser"):
+                print("🌱 首次使用：已自动打开浏览器引导（完成后不再自动弹出）")
         if ln.get("wall_widget"):
             _start_wall_widget(port)
         if _tray is not None:

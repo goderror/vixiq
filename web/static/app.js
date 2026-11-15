@@ -6964,6 +6964,201 @@ window.quitApp = async function () {
   showExitMask();
 };
 
+// ============ 🧭 首次使用引导 ============
+// 只在全新环境自动出现一次: 后端按「没完成过引导 + 没有数据库/登录态」判定。
+// 设置页「🧭 使用引导」可随时重看, 手动打开不会改写完成标记。
+let obStep = 0, obManual = false, obChangedPath = false, obData = {}, obLoginTimer = null;
+const OB_STEPS = ['存放位置', '登录 Pixiv', '准备完成'];
+
+function obLoggedIn() {
+  return !!((obData.auth || {}).cookies_exist);
+}
+
+function obPathRows() {
+  const eff = (obData.paths || {}).effective || {};
+  return `
+    <div class="ob-label">数据目录<span class="ob-sub">数据库 · 日志 · 缩略图</span></div>
+    <div class="ob-path">${esc(eff.data_root || '读取中…')}</div>
+    <div class="ob-label" style="margin-top:12px">图片目录<span class="ob-sub">原始图片，体积大</span></div>
+    <div class="ob-path">${esc(eff.img || '读取中…')}</div>`;
+}
+
+function obEnvLine() {
+  const env = obData.env || {};
+  const edge = (env.edge || {}).version || '未检测到';
+  const drv = env.driver || {};
+  let s = '本机 Edge ' + edge;
+  if (!drv.bundled) s += ' · 未内置驱动，启动浏览器时自动获取匹配版本';
+  else if (drv.matched) s += ' · 内置驱动 ' + drv.version + ' 可用';
+  else s += ' · 内置驱动 ' + drv.version + ' 与本机不一致，启动浏览器时自动使用匹配版本';
+  return s;
+}
+
+function obStepHtml() {
+  if (obStep === 0) {
+    return `
+      <div id="ob-title" class="ob-title">把文件放在合适的位置</div>
+      <p class="ob-lead">图片、数据库、日志都保存在本机，不经过中转服务器。默认放在程序目录；图片体积大，建议换到空间充足的非系统盘。</p>
+      ${obPathRows()}
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn ghost" type="button" onclick="obPick('img')">更换图片目录</button>
+        <button class="btn ghost" type="button" onclick="obPick('data')">更换数据目录</button>
+      </div>
+      ${obChangedPath
+        ? '<div class="ob-warn">路径已保存，重启 Vixiq 后生效。</div>'
+        : '<div class="ob-tip">保持默认也可以，之后可在「设置 → 数据与路径」修改。</div>'}`;
+  }
+  if (obStep === 1) {
+    const acc = ((obData.auth || {}).account) || {};
+    return `
+      <div id="ob-title" class="ob-title">登录 Pixiv</div>
+      <p class="ob-lead">查询、下载、收藏需要登录态。登录信息经系统加密后只保存在本机。</p>
+      <div class="ob-account">
+        <div class="ob-avatar${obLoggedIn() ? ' ok' : ''}">${obLoggedIn() ? '✓' : '👤'}</div>
+        <div>
+          <div class="ob-account-name">${obLoggedIn() ? esc(acc.name || '已登录') : '未登录'}</div>
+          <div class="ob-sub">${obLoggedIn() ? '登录态已保存，查询和下载会自动使用' : '可以稍后再登录，但下载等功能需要登录'}</div>
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button id="ob-login" class="btn ${obLoggedIn() ? 'ghost' : 'accent'}" type="button" onclick="obLogin()">
+          ${obLoggedIn() ? '重新登录' : '🔑 登录 Pixiv'}
+        </button>
+      </div>
+      <div id="ob-login-hint" class="ob-tip hidden">登录窗口已打开，完成后自动保存。</div>
+      <div class="ob-env">${esc(obEnvLine())}</div>`;
+  }
+  const eff = (obData.paths || {}).effective || {};
+  const autoOpen = obManual ? !!((obData.launcher || {}).auto_open_browser) : true;
+  return `
+    <div id="ob-title" class="ob-title">准备完成</div>
+    <div class="ob-summary">
+      <div><span>数据目录</span><code>${esc(eff.data_root || '')}</code></div>
+      <div><span>图片目录</span><code>${esc(eff.img || '')}</code></div>
+      <div><span>登录状态</span><code>${obLoggedIn() ? '已登录' : '未登录'}</code></div>
+    </div>
+    <label class="ob-check"><input type="checkbox" id="ob-autoopen" ${autoOpen ? 'checked' : ''}> 启动时自动打开界面</label>
+    <div class="ob-tip">桌面壁纸、托盘常驻、缩略图缓存等可在「设置」里调整。</div>
+    ${obChangedPath ? '<div class="ob-warn">路径已保存，需要重启 Vixiq 后生效。</div>' : ''}`;
+}
+
+function obRender() {
+  const body = $('#ob-body');
+  if (!body) return;
+  const dots = $('#ob-dots');
+  if (dots) {
+    dots.innerHTML = OB_STEPS.map((t, i) =>
+      `<span class="ob-dot${i === obStep ? ' active' : ''}" title="${esc(t)}"></span>`).join('');
+  }
+  const back = $('#ob-back'), next = $('#ob-next'), skip = $('#ob-skip');
+  if (back) back.style.visibility = obStep === 0 ? 'hidden' : '';
+  if (next) next.textContent = obStep === 2 ? '开始使用' : '下一步';
+  if (skip) skip.textContent = obManual ? '关闭' : '跳过';
+  body.innerHTML = obStepHtml();
+}
+
+async function openOnboarding(manual) {
+  obManual = !!manual;
+  obStep = 0;
+  obChangedPath = false;
+  obData = {};
+  try { obData.paths = await api('/api/paths'); } catch (e) { /* 读不到仍然可引导 */ }
+  try { obData.auth = await api('/api/auth/status'); } catch (e) { /* 同上 */ }
+  try { obData.env = await api('/api/env'); } catch (e) { /* 同上 */ }
+  try { obData.launcher = await api('/api/launcher'); } catch (e) { /* 同上 */ }
+  obRender();
+  const mask = $('#onboarding');
+  if (mask) mask.classList.remove('hidden');
+  document.body.classList.add('ob-open');
+}
+window.openOnboarding = openOnboarding;
+
+function obClose() {
+  clearInterval(obLoginTimer);
+  obLoginTimer = null;
+  const mask = $('#onboarding');
+  if (mask) mask.classList.add('hidden');
+  document.body.classList.remove('ob-open');
+}
+
+async function obPick(which) {
+  toast('已打开系统「选择文件夹」窗口，请在弹出的窗口中选择', 'ok');
+  try {
+    const r = await api('/api/paths/pick', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ which }),
+    });
+    if (r && r.cancelled) return;
+    if (!r || r.ok !== true) throw new Error((r && r.error) || '保存失败');
+    obData.paths = r;
+    obChangedPath = true;
+    obRender();
+  } catch (e) { toast('选择文件夹失败: ' + (e.message || e), 'err'); }
+}
+window.obPick = obPick;
+
+async function obLogin() {
+  try { await api('/api/auth/login', { method: 'POST' }); }
+  catch (e) { toast('打开登录浏览器失败: ' + (e.message || e), 'err'); return; }
+  const btn = $('#ob-login'), hint = $('#ob-login-hint');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 等待登录…'; }
+  if (hint) hint.classList.remove('hidden');
+  clearInterval(obLoginTimer);
+  obLoginTimer = setInterval(async () => {
+    try {
+      const st = await api('/api/auth/login-status');
+      if (st.state === 'success') {
+        clearInterval(obLoginTimer); obLoginTimer = null;
+        try { obData.auth = await api('/api/auth/status'); } catch (e) { /* 忽略 */ }
+        obRender();
+        refreshAuth();
+        toast('登录成功', 'ok');
+      } else if (st.state === 'idle' && st.msg && !st.account) {
+        clearInterval(obLoginTimer); obLoginTimer = null;
+        if (hint) hint.classList.add('hidden');
+        if (btn) { btn.disabled = false; btn.textContent = '🔑 登录 Pixiv'; }
+        toast(st.msg, 'err');
+      }
+    } catch (e) { /* 轮询偶发失败忽略 */ }
+  }, 2000);
+}
+window.obLogin = obLogin;
+
+async function obFinish() {
+  const chk = $('#ob-autoopen');
+  if (chk) {
+    try {
+      await api('/api/launcher', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_open_browser: !!chk.checked }),
+      });
+    } catch (e) { /* 保存失败不挡引导结束 */ }
+  }
+  if (!obManual) {
+    try { await api('/api/onboarding/complete', { method: 'POST' }); } catch (e) { /* 忽略 */ }
+  }
+  const changed = obChangedPath;
+  obClose();
+  if (!obManual) switchTab('search');
+  if (changed) toast('路径已保存，重启 Vixiq 后生效', '');
+}
+
+async function obSkip() {
+  if (obManual) { obClose(); return; }
+  try { await api('/api/onboarding/complete', { method: 'POST' }); } catch (e) { /* 忽略 */ }
+  obClose();
+  toast('已跳过引导，可在「设置」里重新打开', '');
+}
+
+function obNext() {
+  if (obStep < OB_STEPS.length - 1) { obStep++; obRender(); }
+  else obFinish();
+}
+
+function obBack() {
+  if (obStep > 0) { obStep--; obRender(); }
+}
+
 // ============ 事件绑定 / 初始化 ============
 // 输入框右侧小叉叉: 有内容时显示, 点击清空文本并触发 onClear
 function attachInputClear(input, onClear) {
@@ -7214,6 +7409,12 @@ function bind() {
     if (b) toggleLauncher(b.dataset.k);
   });
   $('#top-quit-btn').addEventListener('click', quitApp);
+
+  // 🧭 首次使用引导的上一页/下一页/跳过
+  const obNextBtn = $('#ob-next'), obBackBtn = $('#ob-back'), obSkipBtn = $('#ob-skip');
+  if (obNextBtn) obNextBtn.addEventListener('click', obNext);
+  if (obBackBtn) obBackBtn.addEventListener('click', obBack);
+  if (obSkipBtn) obSkipBtn.addEventListener('click', obSkip);
 
   // 图库同步按钮 + 「仅看缺失文件」筛选 (走后端, 与缺元数据 AND)
   $('#lib-sync-btn').addEventListener('click', () => libSync(true));
@@ -8257,6 +8458,14 @@ function bind() {
 }
 
 bind();
+// 🧭 全新环境: 自动弹出首次使用引导 (后端判定, 完成过就不再出现)。
+// 放在其他数据请求**之前**发起: 首屏并发接口会建空库, 晚问容易被误判成老用户。
+(async () => {
+  try {
+    const st = await api('/api/onboarding');
+    if (st && st.needed) await openOnboarding(false);
+  } catch (e) { /* 引导失败不影响正常使用 */ }
+})();
 connectEvents();
 refreshAuth();
 refreshCart();
