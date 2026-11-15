@@ -146,31 +146,17 @@ def _kill_zombie_port(port: int):
 
 
 def _kill_orphan_drivers():
-    """清理本项目遗留的孤儿 msedgedriver.exe。
+    """清理上次异常退出遗留的 msedgedriver / msedge 自动化进程。
 
-    僵尸端口的真凶往往是它: exe 被强杀/崩溃后, 其子进程 msedgedriver 仍存活,
-    会锁住 driver 文件 (导致 PyInstaller 重建失败) 并让已死父进程的监听 socket
-    变成『幻影占用』(netstat 显示死 PID, taskkill 找不到, 端口 7810 反复被占)。
-    只匹配命令行含本项目路径(pixiv-toolkit 开发目录 / vixiq 打包目录)的 driver,
-    不误杀用户其他程序。"""
+    僵尸端口的真凶往往是它们: exe 被强杀/崩溃后, 子进程仍存活, 会锁住 driver
+    与 profile 文件 (导致整个程序目录删不掉), 并让已死父进程的监听 socket
+    变成『幻影占用』。只认本项目特征 (profile 路径 / 安装目录名),
+    不误杀用户日常 Edge。"""
     try:
-        out = subprocess.run(
-            "wmic process where \"name='msedgedriver.exe'\" get ProcessId,CommandLine /format:csv",
-            shell=True, capture_output=True, text=True, timeout=8)
-        for line in out.stdout.strip().splitlines()[1:]:
-            parts = line.split(',', 2)
-            if len(parts) < 3:
-                continue
-            pid = parts[1].strip()
-            cl = parts[2].lower()
-            if pid.isdigit() and int(pid) != os.getpid() \
-                    and 'msedgedriver.exe' in cl \
-                    and ('pixiv-toolkit' in cl or 'vixiq' in cl):
-                # /T 连 Edge 子树一起杀: 只杀 driver 的话, Edge 子进程仍持有
-                # 继承来的监听 socket 句柄, 幻影端口不会消失
-                subprocess.run(f'taskkill /F /T /PID {pid}',
-                               shell=True, capture_output=True, timeout=5)
-                print(f"🧹 已清理孤儿 msedgedriver 进程树 (PID {pid} 及 Edge 子进程)")
+        from utils.browser import kill_orphan_browser_tree
+        n = kill_orphan_browser_tree()
+        if n:
+            print(f"🧹 已清理孤儿浏览器进程 {n} 个 (driver / Edge 自动化实例)")
     except Exception:
         pass
 
@@ -680,8 +666,16 @@ def main():
     # —— 见 _splash_text_anim 注释里那次 tcl86t.dll 崩溃的教训。
     splash_stop = _splash_text_anim()
 
-    # 启动前先清孤儿 msedgedriver: 强杀/崩溃后它常让 7810 变幻影占用(锁文件+僵尸 socket)
+    # 启动前先清孤儿 driver/Edge: 强杀/崩溃后它们常让 7810 变幻影占用
+    # (锁住 driver 与 profile 文件, 导致整个程序目录删不掉)
     _kill_orphan_drivers()
+    try:
+        from utils.browser import clean_stale_browser_profiles
+        n = clean_stale_browser_profiles()
+        if n:
+            print(f"🧹 已清理过期浏览器 profile {n} 个")
+    except Exception:
+        pass
 
     try:
         from web.server import create_app

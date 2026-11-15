@@ -169,6 +169,84 @@ def _assign_browser_tree_to_job(driver_pid: int, user_data_dir: "Path") -> None:
     threading.Thread(target=_tail, daemon=True).start()
 
 
+# 本项目 Selenium profile 的路径特征:
+#   新版 = %LOCALAPPDATA%\vixiq\browser\p<pid>_...
+#   旧版 = <安装目录>\data\temp\browser\p<pid>_...
+_PROFILE_MARKERS = ("\\vixiq\\browser\\", "\\data\\temp\\browser\\")
+
+
+def kill_orphan_browser_tree(timeout: int = 8) -> int:
+    """杀掉 user-data-dir 指向本项目临时 profile 的 msedge / msedgedriver 进程树。
+
+    主进程被强杀、崩溃或 driver 未回收时, 这些孤儿进程会一直持有 profile 与
+    driver 文件的句柄 —— 用户删除/改名整个 vixiq 文件夹会提示「被另一个程序占用」。
+    只认本项目特征 (profile 路径 / 安装目录名), 不碰用户日常 Edge。
+    返回结束的进程数。"""
+    killed = 0
+    try:
+        out = subprocess.run(
+            "wmic process where \"name='msedge.exe' or name='msedgedriver.exe'\" "
+            "get ProcessId,CommandLine /format:csv",
+            shell=True, capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return 0
+    for line in out.stdout.strip().splitlines():
+        line = line.strip()
+        if not line or line.lower().startswith("node,"):
+            continue
+        # csv 列序: Node,CommandLine,ProcessId —— CommandLine 可能含逗号,
+        # 从右切一刀拿最后那个字段
+        fields = line.rsplit(",", 1)
+        if len(fields) < 2:
+            continue
+        cl = fields[0].lower()
+        pid = fields[1].strip()
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        hit_profile = any(m in cl for m in _PROFILE_MARKERS)
+        hit_driver = "msedgedriver.exe" in cl and (
+            "vixiq" in cl or "pixiv-toolkit" in cl)
+        if hit_profile or hit_driver:
+            try:
+                # /T 连带 Edge 子树一起杀: 只杀 driver 的话, 渲染/GPU 子进程会留下
+                subprocess.run(f"taskkill /F /T /PID {pid}", shell=True,
+                               capture_output=True, timeout=5)
+                killed += 1
+            except Exception:
+                pass
+    return killed
+
+
+def clean_stale_browser_profiles(max_age_hours: float = 6.0) -> int:
+    """清理异常退出遗留的浏览器 profile 目录 (调用前先杀孤儿进程)。
+
+    只删 p 开头且超过 max_age_hours 没动过的目录, 避免误删其他实例正在用的;
+    新旧两个位置都扫 (旧版的 data/temp/browser 升级后不再使用)。"""
+    roots = [paths.browser_temp_root()]
+    try:
+        roots.append(paths.temp_path("browser"))
+    except Exception:
+        pass
+    now = time.time()
+    removed = 0
+    for root in dict.fromkeys(roots):
+        try:
+            children = list(root.iterdir())
+        except Exception:
+            continue
+        for child in children:
+            if not child.is_dir() or not child.name.startswith("p"):
+                continue
+            try:
+                if now - child.stat().st_mtime < max_age_hours * 3600:
+                    continue
+                shutil.rmtree(child, ignore_errors=True)
+                removed += 1
+            except Exception:
+                pass
+    return removed
+
+
 def _file_version(exe_path: str) -> "str | None":
     """通过 Win32 GetFileVersionInfo 读 exe 的 FileVersion,不需要管理员权限。"""
     try:
@@ -312,8 +390,8 @@ def make_browser(
     if explicit_wait is None:
         explicit_wait = bcfg.get("explicit_wait_crawler", 10)
 
-    # ========== 项目专属 temp profile (关键: 不在系统盘 %TEMP% 堆垃圾) ==========
-    browser_root = paths.temp_path("browser")
+    # ========== 项目专属 temp profile (关键: 不放安装目录, 见 paths.browser_temp_root) ==========
+    browser_root = paths.browser_temp_root()
     profile_name = f"p{os.getpid()}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
     user_data_dir = browser_root / profile_name
     user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -346,8 +424,9 @@ def make_browser(
         options.binary_location = edge_binary
 
     driver_path = paths.resource("msedgedriver.exe")
-    # driver 日志必须落在可写区,否则往 cwd 写会失败(只读区不允许写)
-    log_path = paths.user_data("logs/msedgedriver.log")
+    # driver 日志跟 profile 一起放临时区: 放 data/logs 的话, 残留 driver 会锁住
+    # 安装目录里的日志文件, 整个程序文件夹都删不掉
+    log_path = browser_root / "msedgedriver.log"
 
     driver = None
     # 优先用捆绑 driver,但只在主版本与已装 Edge 匹配时才用,

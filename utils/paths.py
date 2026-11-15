@@ -125,6 +125,25 @@ def temp_path(rel: "str | Path | None" = None) -> Path:
     return p
 
 
+def browser_temp_root() -> Path:
+    """Selenium profile / driver 日志的落点 —— 刻意不默认放进安装目录。
+
+    旧默认是 data/temp/browser。一旦 driver/Edge 没被回收, 残留进程会锁住
+    安装目录里的文件, 导致整个 vixiq 文件夹无法删除/改名 (2026-11 实测:
+    8 个孤儿 msedge + msedgedriver 锁住 data/temp/browser)。
+
+    现在: 用户显式配了 temp_root_override 就跟随它 (老行为不变); 否则放
+    %LOCALAPPDATA%\\vixiq\\browser, 最坏情况也只锁系统盘的临时区。"""
+    override = _paths_cfg().get("temp_root_override") or ""
+    if override:
+        d = Path(os.path.expandvars(override)).expanduser().resolve() / "browser"
+    else:
+        base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+        d = Path(base) / "vixiq" / "browser"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def resource(rel: "str | Path") -> Path:
     """resources/ 下的只读资源路径。rel 形如 'msedgedriver.exe' / 'default.json'"""
     return resource_root() / 'resources' / rel

@@ -9254,6 +9254,13 @@ def _kill_browsers_fast() -> None:
         _search_client_headless = True
     with _manual_lock:
         _manual_driver = None
+    # 兜底: driver 已退出但 Edge 子树逃逸时, 按 profile 特征再扫一遍 ——
+    # 否则它们继续持有 profile 句柄, 用户删/改名程序文件夹会提示被占用
+    try:
+        from utils.browser import kill_orphan_browser_tree
+        kill_orphan_browser_tree()
+    except Exception:
+        pass
 
 
 def _close_all_browsers() -> None:
