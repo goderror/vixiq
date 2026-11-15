@@ -2513,18 +2513,25 @@ async function clearWallDir() {
   } catch (e) { toast('清除失败: ' + (e.message || e), 'err'); }
 }
 
-// 多页作品角标: 缩略图右上角的「纸叠」图标 + 页数。半透明、不接收鼠标事件,
-// 不挡卡片点击/多选; 单页作品不显示。
+// 多页作品角标: 缩略图右上角的「纸叠」图标 + 页数。
+// 有库内页清单 (图库作品视图) 时显示「库内/总数」, 例: 1/3 —— 不能只报远端总数,
+// 否则库里只有 1 张也写着 3, 用户会以为图下全了。搜索结果没有库内页, 只显示总数。
 function pagesBadgeHtml(w) {
   const raw = (w && w.page_count != null && w.page_count !== '')
     ? w.page_count : (w && w.total_pages);
-  const total = Number(raw);
-  if (!(total > 1)) return '';
-  return `<span class="pages-badge" title="多页作品 · 共 ${total} 页" aria-label="共 ${total} 页">`
+  const total = Number(raw) || 0;
+  const have = (w && Array.isArray(w.pages)) ? w.pages.length : -1;
+  if (total <= 1 && have <= 1) return '';
+  const label = have >= 0 && total > 0 ? `${have}/${total}`
+    : (total > 0 ? String(total) : String(Math.max(have, 0)));
+  const tip = total > 0
+    ? `库内 ${Math.max(have, 0)} 张 · 作品共 ${total} 页`
+    : `库内 ${Math.max(have, 0)} 张`;
+  return `<span class="pages-badge" title="${esc(tip)}" aria-label="${esc(tip)}">`
     + '<svg viewBox="0 0 16 16" aria-hidden="true">'
     + '<rect x="5.2" y="1.6" width="8.2" height="10.8" rx="1.2"/>'
     + '<path d="M3.4 4v9.2a1.2 1.2 0 0 0 1.2 1.2h6.8"/></svg>'
-    + `<b>${total}</b></span>`;
+    + `<b>${esc(label)}</b></span>`;
 }
 
 function renderWorksGrid(works, gallery = false) {
