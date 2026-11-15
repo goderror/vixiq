@@ -7030,6 +7030,9 @@ function obStepHtml() {
   }
   const eff = (obData.paths || {}).effective || {};
   const autoOpen = obManual ? !!((obData.launcher || {}).auto_open_browser) : true;
+  // 新用户默认「关页面即退出」: 否则程序常驻托盘, 用户以为已经关了,
+  // 去删程序文件夹却提示被占用 (msedgedriver/vixiq.exe 还活着)
+  const exitOnClose = obManual ? !!((obData.launcher || {}).exit_on_browser_close) : true;
   return `
     <div id="ob-title" class="ob-title">准备完成</div>
     <div class="ob-summary">
@@ -7038,7 +7041,8 @@ function obStepHtml() {
       <div><span>登录状态</span><code>${obLoggedIn() ? '已登录' : '未登录'}</code></div>
     </div>
     <label class="ob-check"><input type="checkbox" id="ob-autoopen" ${autoOpen ? 'checked' : ''}> 启动时自动打开界面</label>
-    <div class="ob-tip">桌面壁纸、托盘常驻、缩略图缓存等可在「设置」里调整。</div>
+    <label class="ob-check"><input type="checkbox" id="ob-exitclose" ${exitOnClose ? 'checked' : ''}> 关闭页面后退出程序</label>
+    <div class="ob-tip">不勾选「关闭页面后退出」时程序留在托盘后台运行（桌面壁纸、后台下载需要）；彻底退出请右键托盘图标。</div>
     ${obChangedPath ? '<div class="ob-warn">路径已保存，需要重启 Vixiq 后生效。</div>' : ''}`;
 }
 
@@ -7125,12 +7129,15 @@ async function obLogin() {
 window.obLogin = obLogin;
 
 async function obFinish() {
-  const chk = $('#ob-autoopen');
-  if (chk) {
+  const chk = $('#ob-autoopen'), chkExit = $('#ob-exitclose');
+  const upd = {};
+  if (chk) upd.auto_open_browser = !!chk.checked;
+  if (chkExit) upd.exit_on_browser_close = !!chkExit.checked;
+  if (Object.keys(upd).length) {
     try {
       await api('/api/launcher', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auto_open_browser: !!chk.checked }),
+        body: JSON.stringify(upd),
       });
     } catch (e) { /* 保存失败不挡引导结束 */ }
   }

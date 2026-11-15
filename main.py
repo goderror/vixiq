@@ -176,7 +176,17 @@ def _kill_orphan_drivers():
 
 
 def _shutdown_browser():
-    """显式退出 Selenium 共享浏览器 (driver.quit 删临时 profile + 释放 driver 端口)。"""
+    """退出 Selenium 浏览器: 直接杀 driver 进程树。
+
+    不用 driver.quit(): 页面加载中它会卡十几秒, 期间 msedgedriver.exe 锁着程序
+    目录, 用户退出后删整个文件夹会提示「被另一个程序占用」。进程树已不在时
+    再走原来的优雅 reset 兜底。"""
+    try:
+        from web.server import _kill_browsers_fast
+        _kill_browsers_fast()
+        return
+    except Exception:
+        pass
     try:
         from web.server import _reset_search_client
         _reset_search_client()
