@@ -38,6 +38,10 @@ from utils.sec import load_cookies_smart
 # 也能挂进来, 整棵树一个不漏。
 _kill_job_handle = None  # 作业句柄: 整个进程存活期持有, 绝不提前 CloseHandle
 
+# driver 版本号缓存 (并发启动时只探测一次; 见 _driver_version)
+_DRV_VER_CACHE: "dict[str, str | None]" = {}
+_DRV_VER_LOCK = threading.Lock()
+
 
 def _assign_to_kill_job(pid: int) -> bool:
     """把进程 pid 挂进「父死子随」作业对象。成功 True; 非 Windows/失败静默 False
@@ -49,7 +53,25 @@ def _assign_to_kill_job(pid: int) -> bool:
         import ctypes
         from ctypes import wintypes
 
-        kernel32 = ctypes.windll.kernel32
+        # 私有 WinDLL 实例 + 明确声明 restype/argtypes:
+        # 不声明时 ctypes 默认按 32 位 int 处理返回值, 64 位句柄会被截断,
+        # 导致 SetInformationJobObject / AssignProcessToJobObject 全部失败 ——
+        # 之前 "已挂入作业对象" 只是日志假象, 实际一个进程都没绑上,
+        # 主进程被强杀后 driver 就成了孤儿 (2026-11 用户实测 PID 37944)。
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [
+            wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
         if _kill_job_handle is None:
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
@@ -115,21 +137,27 @@ def _assign_to_kill_job(pid: int) -> bool:
         return False
 
 
-def _assign_browser_tree_to_job(driver_pid: int, user_data_dir: "Path") -> None:
+def _assign_browser_tree_to_job(driver_pid: int, user_data_dir: "Path") -> bool:
     """把 driver + 本次 profile 的整棵 Edge 进程树全部挂进「父死子随」作业对象。
 
     只挂 driver 有竞态: webdriver.Edge() 返回时 Edge 主进程可能已经被 driver 拉起
     (它不继承后挂的作业); 而 Edge 的渲染/GPU 子进程还会在接下来几秒陆续出生。
     因此这里按本次专属 --user-data-dir 路径做特征匹配, 全量扫 msedge/msedgedriver,
-    首轮同步执行, 之后 daemon 线程再补扫 ~6s 兜住晚出生的子进程。"""
+    首轮同步执行, 之后 daemon 线程再补扫 ~6s 兜住晚出生的子进程。
+
+    返回 driver 本身是否绑定成功 —— 调用方据此如实报日志, 不能再无条件写「已挂入」。"""
     tag = str(user_data_dir).lower()
 
     def _matched_pids() -> "set[int]":
         try:
+            # errors="replace": 中文 Windows 的 wmic 输出混有 GBK 字节,
+            # 严格 UTF-8 解码会抛 UnicodeDecodeError → 这里返回空集 →
+            # 整棵进程树一个都没挂进作业对象 (2026-11 孤儿驱动的真正原因)
             out = subprocess.run(
                 "wmic process where \"name='msedge.exe' or name='msedgedriver.exe'\" "
                 "get ProcessId,ParentProcessId,CommandLine /format:csv",
-                shell=True, capture_output=True, text=True, timeout=8)
+                shell=True, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=8)
         except Exception:
             return set()
         pids: "set[int]" = set()
@@ -149,8 +177,16 @@ def _assign_browser_tree_to_job(driver_pid: int, user_data_dir: "Path") -> None:
         return pids
 
     tried: "set[int]" = set()
+    bound_driver = False
 
     def _round():
+        nonlocal bound_driver
+        # 先直接绑 driver: 不能依赖 wmic 扫描结果 —— 扫描失败时它是最后一道保险
+        dp = int(driver_pid)
+        if dp not in tried:
+            tried.add(dp)
+            if _assign_to_kill_job(dp):
+                bound_driver = True
         for pid in _matched_pids():
             if pid not in tried:
                 tried.add(pid)
@@ -167,6 +203,7 @@ def _assign_browser_tree_to_job(driver_pid: int, user_data_dir: "Path") -> None:
                 pass
 
     threading.Thread(target=_tail, daemon=True).start()
+    return bound_driver
 
 
 # 本项目 Selenium profile 的路径特征:
@@ -187,7 +224,8 @@ def kill_orphan_browser_tree(timeout: int = 8) -> int:
         out = subprocess.run(
             "wmic process where \"name='msedge.exe' or name='msedgedriver.exe'\" "
             "get ProcessId,CommandLine /format:csv",
-            shell=True, capture_output=True, text=True, timeout=timeout)
+            shell=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout)
     except Exception:
         return 0
     for line in out.stdout.strip().splitlines():
@@ -342,16 +380,33 @@ def _edge_info() -> "tuple[str | None, str | None]":
 
 
 def _driver_version(exe: str) -> "str | None":
-    """运行 msedgedriver.exe --version 取版本号,失败返回 None。"""
-    try:
-        out = subprocess.run([exe, "--version"], capture_output=True,
-                             text=True, timeout=8)
-        combined = (out.stdout or "") + " " + (out.stderr or "")
-        for tok in combined.split():
-            if tok and tok[0].isdigit() and tok.count(".") >= 2:
-                return tok
-    except Exception:
-        return None
+    """运行 msedgedriver.exe --version 取版本号,失败返回 None。
+
+    进程内缓存 + 串行: 并发启动多个浏览器时重复 subprocess 可能超时返回 None,
+    导致某个实例误判「版本匹配」而继续用旧 driver 启动 (2026-11 实测:
+    两个实例并发, 一个跳过捆绑、另一个仍拿 152 的 driver 去开 Edge 157)。
+    失败的结果不缓存, 下次仍可重试。"""
+    key = os.path.abspath(exe).lower()
+    with _DRV_VER_LOCK:
+        if key in _DRV_VER_CACHE:
+            return _DRV_VER_CACHE[key]
+        try:
+            # errors="replace": msedgedriver 的 --version 输出里混有 GBK 字节,
+            # 按 UTF-8 严格解码会抛 UnicodeDecodeError → 版本读成 None →
+            # 误判「版本不明」而跳过捆绑 (2026-11 实测)
+            out = subprocess.run([exe, "--version"], capture_output=True,
+                                 text=True, encoding="utf-8",
+                                 errors="replace", timeout=8)
+            combined = (out.stdout or "") + " " + (out.stderr or "")
+            ver = None
+            for tok in combined.split():
+                if tok and tok[0].isdigit() and tok.count(".") >= 2:
+                    ver = tok
+                    break
+            _DRV_VER_CACHE[key] = ver
+            return ver
+        except Exception:
+            return None
     return None
 
 
@@ -442,13 +497,21 @@ def make_browser(
                         f"捆绑 driver(v{drv_ver})与 Edge(v{edge_ver})主版本不匹配,"
                         f"跳过捆绑,改用 Selenium Manager 自动下载匹配版本")
                 use_bundled = False
+        elif edge_ver:
+            # 读不到 driver 版本就不能赌: 并发探测超时/文件损坏时拿旧 driver
+            # 启动必然 session not created, 还会留下僵尸进程
+            if reporter:
+                reporter.warn("读不到捆绑 driver 版本, 改用 Selenium Manager 自动匹配")
+            use_bundled = False
         if use_bundled:
             try:
                 # close_fds=True: 禁止 driver 继承本进程的句柄 (关键是 Flask 监听 socket),
                 # 从源头切断「父死子在、socket 句柄被子进程持有 → 幻影端口」链条。
-                # Win 上 Python 3.7+ 支持 close_fds 与标准流重定向共存 (stdout 日志不受影响)。
+                # cwd=browser_root: driver 的工作目录绝不能是安装目录 —— 否则它一旦
+                # 残留, 就持有安装目录句柄, 整个文件夹删不掉/改不了名 (2026-11 实测)。
                 service = EdgeService(str(driver_path), log_output=str(log_path),
-                                      popen_kw={"close_fds": True})
+                                      popen_kw={"close_fds": True,
+                                                "cwd": str(browser_root)})
                 driver = webdriver.Edge(service=service, options=options)
             except Exception as e:
                 if reporter:
@@ -458,12 +521,14 @@ def make_browser(
     if driver is None:
         try:
             service = EdgeService(log_output=str(log_path),
-                                  popen_kw={"close_fds": True})
+                                  popen_kw={"close_fds": True,
+                                            "cwd": str(browser_root)})
             driver = webdriver.Edge(service=service, options=options)
         except Exception:
             # 极端兜底:log_output 参数旧版不支持时完全不传
             try:
-                service = EdgeService(popen_kw={"close_fds": True})
+                service = EdgeService(popen_kw={"close_fds": True,
+                                                "cwd": str(browser_root)})
                 driver = webdriver.Edge(service=service, options=options)
             except Exception as e2:
                 # driver 没起来, 清理已经 mkdir 过的空 profile
@@ -482,9 +547,14 @@ def make_browser(
     # 不留孤儿 driver 锁文件、不产生幻影端口。
     try:
         _drv_pid = int(driver.service.process.pid)
-        _assign_browser_tree_to_job(_drv_pid, user_data_dir)
+        _bound = _assign_browser_tree_to_job(_drv_pid, user_data_dir)
         if reporter:
-            reporter.log(f"浏览器子进程树 (driver PID {_drv_pid}) 已挂入退出联动作业对象")
+            if _bound:
+                reporter.log(f"浏览器子进程树 (driver PID {_drv_pid}) 已挂入退出联动作业对象")
+            else:
+                reporter.warn(
+                    f"作业对象绑定失败 (driver PID {_drv_pid}): 退出时依赖进程清理兜底"
+                    "——若被强杀, 残留 driver 可能锁住安装目录")
     except Exception:
         pass
 

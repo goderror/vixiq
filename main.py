@@ -132,7 +132,8 @@ def _kill_zombie_port(port: int):
     try:
         out = subprocess.run(
             f'netstat -ano | findstr ":{port}" | findstr LISTENING',
-            shell=True, capture_output=True, text=True, timeout=5)
+            shell=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=5)
         for line in out.stdout.strip().splitlines():
             parts = line.split()
             if len(parts) >= 5:

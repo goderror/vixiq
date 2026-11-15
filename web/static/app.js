@@ -2249,6 +2249,20 @@ async function clearWallDir() {
   } catch (e) { toast('清除失败: ' + (e.message || e), 'err'); }
 }
 
+// 多页作品角标: 缩略图右上角的「纸叠」图标 + 页数。半透明、不接收鼠标事件,
+// 不挡卡片点击/多选; 单页作品不显示。
+function pagesBadgeHtml(w) {
+  const raw = (w && w.page_count != null && w.page_count !== '')
+    ? w.page_count : (w && w.total_pages);
+  const total = Number(raw);
+  if (!(total > 1)) return '';
+  return `<span class="pages-badge" title="多页作品 · 共 ${total} 页" aria-label="共 ${total} 页">`
+    + '<svg viewBox="0 0 16 16" aria-hidden="true">'
+    + '<rect x="5.2" y="1.6" width="8.2" height="10.8" rx="1.2"/>'
+    + '<path d="M3.4 4v9.2a1.2 1.2 0 0 0 1.2 1.2h6.8"/></svg>'
+    + `<b>${total}</b></span>`;
+}
+
 function renderWorksGrid(works, gallery = false) {
   const typeMap = {0: '插画', 1: '漫画', 2: '动图'};
   return `<div class="works-grid">` + works.map(w => {
@@ -2257,6 +2271,7 @@ function renderWorksGrid(works, gallery = false) {
     return `
     <div class="work-card${w.file_missing ? ' is-missing' : ''}" data-key="${esc(w._key)}"${origUrl ? ` data-url="${esc(origUrl)}"` : ''} data-aid="${esc(w.artwork_id)}" data-r18="${w.is_r18 ? '1' : '0'}">
       ${gallery ? `<label class="card-sel" title="Shift+点击可范围多选"><input type="checkbox" data-key="${esc(w._key)}" ${libSelected.has(w._key) ? 'checked' : ''}></label>` : ''}
+      ${pagesBadgeHtml(w)}
       ${w.file_missing
         ? `<img class="thumb" src="${imgSrc((w.image_urls || [])[0], w)}" alt=""
                title="本地文件已缺失（显示删前的缓存缩略图）"
