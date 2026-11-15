@@ -153,6 +153,8 @@ def _canonicalize(cfg: dict) -> dict:
     web.setdefault('port', 7788)
     # 监听地址: 127.0.0.1=仅本机; 0.0.0.0=允许手机/局域网访问
     web.setdefault('host', '127.0.0.1')
+    # 公网访问密码: 空=不启用; 走 Cloudflare Tunnel/内网穿透时务必设置
+    web.setdefault('access_pin', '')
 
     # ---- 启动器形态默认 (2026-09-24 · 托盘常驻) ----
     # 双击 exe 只驻右下角托盘, 不再强制弹浏览器; 退出唯一口径 = 托盘右键「退出 Vixiq」。

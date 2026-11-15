@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import atexit
 import hashlib
+import hmac
 import json
 import os
 import queue
@@ -28,7 +29,7 @@ from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory
 
 from core.models import DownloadStrategy
 from core.search_client import (
@@ -3145,6 +3146,77 @@ def create_app() -> Flask:
             parents=True, exist_ok=True)
     except Exception:
         pass
+
+    # ---- 公网访问密码 (web.access_pin; 空 = 不启用) ------------------------
+    # 通过 Cloudflare Tunnel / 内网穿透暴露到公网时, 所有外部请求先输一次密码
+    # (Cookie 记住 30 天)。本机回环放行, 否则托盘 / 桌面小控件 / 内部健康检查
+    # 都会被挡。隧道请求虽然从 127.0.0.1 进来, 但带 Cloudflare 头, 必须按外部
+    # 处理 —— 否则密码形同虚设。
+    _ACCESS_COOKIE = "vixiq_access"
+
+    def _pin_token(pin: str) -> str:
+        return hashlib.sha256(("vixiq:" + pin).encode("utf-8")).hexdigest()
+
+    def _is_local_request() -> bool:
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            return False
+        return not (request.headers.get("CF-Connecting-IP")
+                    or request.headers.get("CF-Ray")
+                    or request.headers.get("X-Forwarded-For"))
+
+    _UNLOCK_PAGE = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vixiq · 访问验证</title>
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#f4f6f8;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#171717}
+form{background:#fff;border:1px solid #e3e7ec;border-radius:14px;padding:28px;
+width:min(340px,86vw);box-shadow:0 10px 30px rgba(0,0,0,.06)}
+h1{margin:0 0 6px;font-size:18px}
+p{margin:0 0 16px;color:#6b7280;font-size:13px;line-height:1.6}
+input{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #d6dbe2;
+border-radius:9px;font-size:16px;letter-spacing:2px;text-align:center;outline:none}
+input:focus{border-color:#1976d2}
+button{margin-top:14px;width:100%;padding:11px;border:0;border-radius:9px;
+background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
+.err{color:#c62828;font-size:13px;margin:10px 0 0;text-align:center}
+</style></head><body>
+<form method="post" action="/unlock">
+<h1>Vixiq</h1>
+<p>请输入访问密码</p>
+<input name="pin" inputmode="numeric" autocomplete="current-password" autofocus
+ maxlength="12" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;">
+<button type="submit">进入</button>
+{{ERR}}
+</form></body></html>"""
+
+    @app.before_request
+    def _guard_access():
+        pin = str((_config.get("web") or {}).get("access_pin") or "").strip()
+        if not pin or _is_local_request():
+            return None
+        if request.cookies.get(_ACCESS_COOKIE) == _pin_token(pin):
+            return None
+        if request.path == "/unlock":
+            if request.method == "POST":
+                got = (request.form.get("pin") or "").strip()
+                if hmac.compare_digest(got, pin):
+                    nxt = request.args.get("next") or "/"
+                    if not nxt.startswith("/") or nxt.startswith("//"):
+                        nxt = "/"
+                    resp = redirect(nxt)
+                    resp.set_cookie(_ACCESS_COOKIE, _pin_token(pin),
+                                    max_age=30 * 24 * 3600, httponly=True,
+                                    samesite="Lax")
+                    return resp
+                return Response(
+                    _UNLOCK_PAGE.replace("{{ERR}}", '<p class="err">密码不对</p>'),
+                    mimetype="text/html", status=401)
+            return Response(_UNLOCK_PAGE.replace("{{ERR}}", ""), mimetype="text/html")
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": "需要访问密码",
+                            "need_pin": True}), 401
+        return Response(_UNLOCK_PAGE.replace("{{ERR}}", ""), mimetype="text/html")
 
     # ---- 实时活动日志  ----------------------------------
     # 把「程序在做什么 + 用户点了什么」逐条打屏并落盘, 出事时有现场可回放。
