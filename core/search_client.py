@@ -1094,7 +1094,8 @@ class SearchClient:
         sess = self._http_session()
         if sess:
             try:
-                from urllib.request import Request, urlopen
+                from urllib.request import Request
+                from utils.net import urlopen
                 from urllib.error import HTTPError
                 try:
                     with urlopen(Request(url, headers=sess["headers"]), timeout=15) as resp:
@@ -1393,7 +1394,8 @@ def http_fetch_user_name(session, user_id: str, timeout: float = 12.0):
     """HTTP 直连查 pixiv 用户最新昵称 (作者改名同步用)。
     返回 None = 用户不存在/已注销; 抛异常 = 网络/登录问题 (调用方自行容错)。"""
     import json as _json
-    from urllib.request import Request, urlopen
+    from urllib.request import Request
+    from utils.net import urlopen
     from urllib.error import HTTPError
     req = Request(f"https://www.pixiv.net/ajax/user/{user_id}?lang=zh",
                   headers=session["headers"])
@@ -1445,7 +1447,8 @@ def http_fetch_user_works(session, user_id: str, *, limit: int = 800,
     两步: profile/all 拿 id 列表 → profile/illusts 每 50 个批量取元数据(含缩略图 URL)。
     个别作品被删/不可见自动跳过; 抛异常 = 网络/登录问题 (调用方容错)。"""
     import json as _json
-    from urllib.request import Request, urlopen
+    from urllib.request import Request
+    from utils.net import urlopen
     hdr = session["headers"]
     base = "https://www.pixiv.net/ajax"
 
@@ -1483,7 +1486,8 @@ def http_fetch_illust(session, artwork_id: str, *, timeout: float = 15.0) -> Art
     """urllib 直连 ajax 作品接口 → ArtworkInfo。
     作品不存在/删除 → ArtworkNotFoundError; 登录态失效 → PermissionError。"""
     import json as _json
-    from urllib.request import Request, urlopen
+    from urllib.request import Request
+    from utils.net import urlopen
     from urllib.error import HTTPError
     url = f"https://www.pixiv.net/ajax/illust/{artwork_id}?lang=zh"
     try:
@@ -1521,7 +1525,8 @@ def http_fetch_illust_pages(session, artwork_id: str,
     错误映射沿用既有约定: 401/403 → PermissionError; 404 → ArtworkNotFoundError;
     空 body → RuntimeError。不加页级缓存 (与搜索同一防风控口径)。"""
     import json as _json
-    from urllib.request import Request, urlopen
+    from urllib.request import Request
+    from utils.net import urlopen
     from urllib.error import HTTPError
     url = f"https://www.pixiv.net/ajax/illust/{artwork_id}/pages?lang=zh"
     try:
@@ -1605,7 +1610,8 @@ def _web_http(session, url: str, *, data: "bytes | None" = None,
               method: "str | None" = None):
     """网页端请求底层 (单独抽出来, 便于离线测试替换)。返回 (status, text)。
     HTTPError 不抛出, 统一把状态码与响应体交回调用方判断。"""
-    from urllib.request import Request, urlopen
+    from urllib.request import Request
+    from utils.net import urlopen
     from urllib.error import HTTPError
     hdr = dict(session["headers"])
     hdr["Accept"] = "application/json, text/html;q=0.9, */*;q=0.8"

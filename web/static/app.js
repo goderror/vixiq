@@ -68,40 +68,53 @@ function wallFold() {
 try { wallApplyFold(localStorage.getItem(WALL_FOLD_KEY) === '1'); } catch (e) {}
 window.wallFold = wallFold;
 
-// 图库某张图直接设为桌面壁纸 (后端只认库内已下载的页, 不接受任意路径)
-async function wallApply(aid, page, force) {
+// ============ 🖼 设为桌面壁纸: 预览 + 裁剪 ============
+// 后端只认库内已下载的页, 不接受任意路径; 裁剪参数是相对原图的 0~1 比例。
+async function wallApply(aid, page, force, crop) {
+  const body = { artwork_id: String(aid), page_num: Number(page) || 0,
+                 force: !!force };
+  if (crop) body.crop = crop;
   return (await api('/api/wallpaper/apply', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ artwork_id: String(aid), page_num: Number(page) || 0,
-                           force: !!force }),
+    body: JSON.stringify(body),
   })) || {};
-}
-
-function wallFitTip(fit) {
-  if (!fit || !fit.level) return '';
-  if (fit.level === 'wide' || fit.level === 'ok') return '';
-  return '（' + (fit.text || '尺寸可能不适合') + '）';
 }
 
 function wallDupeNames(r) {
   return (r.existing || []).map(x => x.name).slice(0, 5).join('、');
 }
 
-async function setWallpaperAs(aid, page) {
+// 缩略图 URL → 原图 URL (去掉 thumb 参数): 裁剪要按原图算比例
+function wallFullUrl(u) {
+  if (!u) return '';
   try {
-    let r = await wallApply(aid, page, false);
-    if (r.status === 'dupe') {
-      if (!confirm(`壁纸夹里已有这个作品的壁纸：\n${wallDupeNames(r)}\n\n仍要再设置一张吗？`)) return;
-      r = await wallApply(aid, page, true);
-    }
-    if (r.status !== 'ok') { toast('设置壁纸失败: ' + (r.msg || '未知原因'), 'err'); return; }
-    toast('已设为桌面壁纸' + wallFitTip(r.fit), 'ok');
-    if (isTabActive('library')) wallRefresh({ deep: true });
-  } catch (e) { toast('设置壁纸失败: ' + (e.message || e), 'err'); }
+    const x = new URL(u, location.origin);
+    x.searchParams.delete('thumb');
+    return x.pathname + (x.search || '');
+  } catch (e) { return u; }
+}
+
+// 图片视图: 点卡片上的 🖼️ 直接进裁剪 (图片地址从卡片缩略图取)
+function setWallpaperAs(aid, page, btn) {
+  let src = '';
+  try {
+    const card = btn && btn.closest ? btn.closest('.work-card') : null;
+    const img = card && card.querySelector('img.thumb');
+    src = img ? img.src : '';
+  } catch (e) { /* 取不到就走下面的报错 */ }
+  if (!src) { toast('图片还没加载出来，稍后再试', 'err'); return; }
+  openWallCrop(aid, page, wallFullUrl(src));
 }
 window.setWallpaperAs = setWallpaperAs;
 
-// 作品卡片「设为壁纸」: 先列出已下载的页让用户挑, 长条/竖图会明确标注会被裁切
+// 作品卡片: 先选页 (只显示缩略图与页码, 不做尺寸评判)
+function wallPageThumb(p) {
+  // 优先用本地缩略图接口: 部分作品的 pages.url 是 i.pximg.net 直链,
+  // 浏览器直接请求会被防盗链 403 (显示成破图)
+  if (p && p.rel) return '/api/local-img?p=' + encodeURIComponent(p.rel) + '&thumb=1';
+  return (p && (p.thumb || p.url)) || '';
+}
+
 function openWallPicker(aid) {
   const box = $('#lib-result');
   const raw = (box && box._rawItems) || [];
@@ -109,17 +122,10 @@ function openWallPicker(aid) {
   const pages = ((w && w.pages) || []).slice()
     .sort((a, b) => (Number(a.page_num) || 0) - (Number(b.page_num) || 0));
   if (!pages.length) { toast('这个作品还没有已下载的页', 'err'); return; }
-  const rows = pages.map(p => {
-    const ratio = (p.width && p.height) ? p.width / p.height : 0;
-    const ok = ratio >= 1.2;
-    const tip = !ratio ? '尺寸未知'
-      : (ok ? '横图 · 适合' : (ratio < 0.75 ? '长条/竖图 · 会裁切' : '接近方形 · 会裁切'));
-    return `<button class="wall-pick" onclick="wallPickApply('${esc(aid)}', ${Number(p.page_num) || 0}, this)">
-      <img src="${esc(p.thumb || p.url || '')}" alt="" loading="lazy">
-      <span class="wall-pick-tag">p${esc(p.page_num)} · ${p.width || '?'}×${p.height || '?'}</span>
-      <span class="wall-pick-tip ${ok ? 'ok' : 'warn'}">${tip}</span>
-    </button>`;
-  }).join('');
+  const rows = pages.map(p => `<button class="wall-pick" onclick="wallPickPage('${esc(aid)}', ${Number(p.page_num) || 0}, this)">
+      <img src="${esc(wallPageThumb(p))}" alt="" loading="lazy" onerror="this.style.opacity=.25">
+      <span class="wall-pick-tag">p${esc(p.page_num)}</span>
+    </button>`).join('');
   let m = $('#wall-picker');
   if (!m) {
     m = document.createElement('div');
@@ -137,31 +143,180 @@ function openWallPicker(aid) {
 }
 window.openWallPicker = openWallPicker;
 
+function wallPickPage(aid, page, btn) {
+  let src = '';
+  try {
+    const im = btn && btn.querySelector('img');
+    src = im ? im.src : '';
+  } catch (e) { /* 忽略 */ }
+  closeWallPicker();
+  openWallCrop(aid, page, wallFullUrl(src));
+}
+window.wallPickPage = wallPickPage;
+
 function closeWallPicker() {
   const m = $('#wall-picker');
   if (m) m.classList.add('hidden');
 }
 window.closeWallPicker = closeWallPicker;
 
-async function wallPickApply(aid, page, btn) {
-  if (btn) btn.disabled = true;
+// ---- 裁剪界面 (原生 pointer 事件, 电脑拖拽 / 手机手指同一套) ----
+const WC = { aid: '', page: 0, ratio: 16 / 9,
+             box: { x: 0, y: 0, w: 0, h: 0 }, drag: null };
+
+function wallCropEls() {
+  return { img: $('#crop-img'), stage: $('#crop-stage'), box: $('#crop-box') };
+}
+
+function wallCropEnsure() {
+  let m = $('#wall-crop');
+  if (m) return m;
+  m = document.createElement('div');
+  m.id = 'wall-crop';
+  m.className = 'crop-mask hidden';
+  m.innerHTML = `<div class="crop-wrap">
+    <div class="crop-stage" id="crop-stage">
+      <img id="crop-img" alt="">
+      <div class="crop-box" id="crop-box">
+        <i class="crop-h tl"></i><i class="crop-h tr"></i>
+        <i class="crop-h bl"></i><i class="crop-h br"></i>
+      </div>
+    </div>
+    <div class="crop-bar">
+      <div class="crop-ratios">
+        <button class="crop-r active" data-r="1.777778" type="button">16:9</button>
+        <button class="crop-r" data-r="1.6" type="button">16:10</button>
+        <button class="crop-r" data-r="0" type="button">自由</button>
+      </div>
+      <button class="btn ghost" type="button" onclick="closeWallCrop()">取消</button>
+      <button class="btn accent" type="button" onclick="confirmWallCrop()">设为壁纸</button>
+    </div>
+  </div>`;
+  document.body.appendChild(m);
+  m.addEventListener('click', e => { if (e.target === m) closeWallCrop(); });
+  m.querySelectorAll('.crop-r').forEach(b => {
+    b.addEventListener('click', () => {
+      m.querySelectorAll('.crop-r').forEach(x => x.classList.toggle('active', x === b));
+      WC.ratio = parseFloat(b.dataset.r) || 0;
+      wallCropInitBox();
+    });
+  });
+  const box = m.querySelector('#crop-box');
+  box.addEventListener('pointerdown', wallCropDown);
+  box.addEventListener('pointermove', wallCropMove);
+  box.addEventListener('pointerup', wallCropUp);
+  box.addEventListener('pointercancel', wallCropUp);
+  return m;
+}
+
+function wallCropInitBox() {
+  const { img } = wallCropEls();
+  if (!img || !img.clientWidth) return;
+  const iw = img.clientWidth, ih = img.clientHeight;
+  const ratio = WC.ratio || (iw / ih);
+  let bw, bh;
+  if (iw / ih > ratio) { bh = ih * 0.9; bw = bh * ratio; }
+  else { bw = iw * 0.9; bh = bw / ratio; }
+  wallCropSet((iw - bw) / 2, (ih - bh) / 2, bw, bh);
+}
+
+function wallCropSet(x, y, w, h) {
+  const { img, box } = wallCropEls();
+  if (!box || !img) return;
+  const iw = img.clientWidth, ih = img.clientHeight;
+  w = Math.max(40, Math.min(w, iw));
+  h = Math.max(40, Math.min(h, ih));
+  x = Math.max(0, Math.min(x, iw - w));
+  y = Math.max(0, Math.min(y, ih - h));
+  WC.box = { x, y, w, h };
+  box.style.left = x + 'px';
+  box.style.top = y + 'px';
+  box.style.width = w + 'px';
+  box.style.height = h + 'px';
+}
+
+function wallCropDown(e) {
+  const handle = (e.target.classList && e.target.classList.contains('crop-h'))
+    ? e.target.classList[1] : '';
+  WC.drag = { mode: handle || 'move', sx: e.clientX, sy: e.clientY,
+              box: { ...WC.box } };
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+  e.preventDefault();
+}
+
+function wallCropMove(e) {
+  if (!WC.drag) return;
+  const { img } = wallCropEls();
+  if (!img) return;
+  const b = WC.drag.box;
+  const dx = e.clientX - WC.drag.sx, dy = e.clientY - WC.drag.sy;
+  if (WC.drag.mode === 'move') { wallCropSet(b.x + dx, b.y + dy, b.w, b.h); return; }
+  let x = b.x, y = b.y, w = b.w, h = b.h;
+  if (WC.drag.mode.includes('l')) { x = b.x + dx; w = b.w - dx; }
+  if (WC.drag.mode.includes('r')) { w = b.w + dx; }
+  if (WC.drag.mode.includes('t')) { y = b.y + dy; h = b.h - dy; }
+  if (WC.drag.mode.includes('b')) { h = b.h + dy; }
+  if (WC.ratio) {
+    h = w / WC.ratio;
+    if (WC.drag.mode.includes('t')) y = b.y + b.h - h;
+  }
+  wallCropSet(x, y, w, h);
+}
+
+function wallCropUp(e) {
+  WC.drag = null;
+  try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+}
+
+function openWallCrop(aid, page, src) {
+  if (!src) { toast('图片地址无效', 'err'); return; }
+  wallCropEnsure();
+  WC.aid = String(aid);
+  WC.page = Number(page) || 0;
+  WC.ratio = 16 / 9;
+  const m = $('#wall-crop');
+  m.querySelectorAll('.crop-r').forEach(x => x.classList.toggle(
+    'active', x.dataset.r === '1.777778'));
+  m.classList.remove('hidden');
+  const { img, box } = wallCropEls();
+  if (box) { box.style.width = '0px'; box.style.height = '0px'; }
+  img.onload = () => { wallCropInitBox(); };
+  img.onerror = () => { toast('图片加载失败', 'err'); };
+  img.src = src;
+}
+window.openWallCrop = openWallCrop;
+
+function closeWallCrop() {
+  const m = $('#wall-crop');
+  if (m) m.classList.add('hidden');
+  const { img } = wallCropEls();
+  if (img) img.src = '';
+  WC.drag = null;
+}
+window.closeWallCrop = closeWallCrop;
+
+async function confirmWallCrop() {
+  const { img } = wallCropEls();
+  if (!img || !img.clientWidth) return;
+  const iw = img.clientWidth, ih = img.clientHeight;
+  const b = WC.box;
+  if (!b.w || !b.h) { toast('请先选择裁剪范围', 'err'); return; }
+  const crop = { x: b.x / iw, y: b.y / ih, w: b.w / iw, h: b.h / ih };
   try {
-    let r = await wallApply(aid, page, false);
-    if (r.status === 'dupe') {
-      if (!confirm(`壁纸夹里已有这个作品的壁纸：\n${wallDupeNames(r)}\n\n仍要再设置一张吗？`)) return;
-      r = await wallApply(aid, page, true);
+    const r = await wallApply(WC.aid, WC.page, true, crop);
+    if (r.status !== 'ok') {
+      toast('设置壁纸失败: ' + (r.msg || '未知原因'), 'err');
+      return;
     }
-    if (r.status !== 'ok') { toast('设置壁纸失败: ' + (r.msg || '未知原因'), 'err'); return; }
-    toast('已设为桌面壁纸' + wallFitTip(r.fit), 'ok');
+    toast('已设为桌面壁纸（已裁剪）', 'ok');
+    closeWallCrop();
     closeWallPicker();
     if (isTabActive('library')) wallRefresh({ deep: true });
   } catch (e) {
     toast('设置壁纸失败: ' + (e.message || e), 'err');
-  } finally {
-    if (btn) btn.disabled = false;
   }
 }
-window.wallPickApply = wallPickApply;
+window.confirmWallCrop = confirmWallCrop;
 
 function wallWatch() {
   // 图库页开着才轮询, 离开就停 (没人看着的页面不该白跑请求)
@@ -3113,7 +3268,7 @@ ${authorCellHtml(w, true)}
         </div>
         <div class="w-actions">
           ${cartActionHtml(w)}
-          <button class="btn ghost icon-btn" title="设为桌面壁纸" onclick="setWallpaperAs('${esc(w.artwork_id)}', ${Number(w.page_num) || 0})">🖼️</button>
+          <button class="btn ghost icon-btn" title="设为桌面壁纸" onclick="setWallpaperAs('${esc(w.artwork_id)}', ${Number(w.page_num) || 0}, this)">🖼️</button>
           <button class="btn danger icon-btn" title="删除这张图片" onclick="libDeletePage('${esc(w.artwork_id)}', ${Number(w.page_num) || 0})">🗑️</button>
           <button class="btn ghost icon-btn" title="跳转到该作者（搜索作者）" onclick="jumpAuthor('${esc(w.author_id)}')">👤</button>
         </div>

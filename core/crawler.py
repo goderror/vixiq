@@ -307,7 +307,8 @@ class PixivDownloader:
         return self._http or None
 
     def _http_get_json(self, url: str, timeout: float = 15.0):
-        from urllib.request import Request, urlopen
+        from urllib.request import Request
+        from utils.net import urlopen
         with urlopen(Request(url, headers=self._http_ctx()["headers"]),
                      timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
@@ -660,7 +661,8 @@ class PixivDownloader:
         一键整理的「文件名规范化」也会因自然键命中而**原样保留**它, 两边口径一致。
         库内仍是 1 页 (page_num=0), 所以页数/缺页/对账逻辑不用改。
         """
-        from urllib.request import Request, urlopen
+        from urllib.request import Request
+        from utils.net import urlopen
         if self._should_abort():
             self._abort_now(artwork_id, 0, 1, 0)
         try:
@@ -941,13 +943,16 @@ class PixivDownloader:
         retries = ccfg["max_retries"]
         min_size = ccfg["min_file_size"]
 
-        opener = urllib.request.build_opener()
-        opener.addheaders = [('Referer', 'https://www.pixiv.net/')]
-        urllib.request.install_opener(opener)
+        # 下载也走系统代理 (utils.net): 直连 i.pximg.net 在国内会超时。
+        # 不用 install_opener —— 那是全局副作用, 会把本机 127.0.0.1 的请求
+        # (托盘/小控件/健康检查) 也塞进代理。
+        from utils.net import build_opener
+        opener = build_opener({"Referer": "https://www.pixiv.net/"})
 
         for attempt in range(retries + 1):
             try:
-                urllib.request.urlretrieve(url, save_path)
+                with opener.open(url, timeout=30) as r, open(save_path, "wb") as f:
+                    shutil.copyfileobj(r, f)
                 # 简单验证文件是否真的下载成功(避免 403 返回 HTML)
                 if os.path.getsize(save_path) < min_size:
                     raise Exception("文件太小,可能是 403 页面")

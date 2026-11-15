@@ -27,7 +27,7 @@ import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory
 
@@ -63,6 +63,8 @@ from db.store import PixivDatabase, WSt, PSt, pixiv_natural_key, parse_foreign_a
     folder_author_name_usable
 from utils import paths
 from utils import audit_log
+# 外网请求统一走 utils.net: 自动跟随 Windows 系统代理 (直连 pixiv 会被墙)
+from utils.net import urlopen
 # 作者夹命名唯一规则 (2026-09-21 治本): 一键整理/下载器/反搜/自检共用同一套,
 # 不再各写一份非法字符处理规则 —— 否则同一位作者会被摆成两个夹
 from utils.author_naming import (
@@ -5987,26 +5989,41 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         if not p.is_file():
             return jsonify({"status": "error", "msg": "文件不存在"}), 404
 
-        # 适合做桌面壁纸的判据: 横图 + 足够宽; 长条/竖图/方形都会被系统裁切或留边
-        if width <= 0 or height <= 0:
+        # 裁剪: 前端传相对原图的 0~1 比例 {x,y,w,h}, 这里按原图像素裁好另存一份
+        # (存进壁纸夹, 避免壁纸指向会被清理的临时目录)
+        crop = body.get("crop")
+        cropped = False
+        if isinstance(crop, dict):
             try:
-                from PIL import Image
-                with Image.open(p) as im:
-                    width, height = im.size
+                cx = float(crop.get("x")); cy = float(crop.get("y"))
+                cw = float(crop.get("w")); ch = float(crop.get("h"))
             except Exception:
-                pass
-        ratio = (width / height) if height else 0
-        if not width or not height:
-            fit = {"level": "unknown", "text": "读不到尺寸"}
-        elif ratio >= 1.2 and width >= 1280:
-            fit = {"level": "wide", "text": f"{width}×{height} 横图，适合做壁纸"}
-        elif ratio < 0.75:
-            fit = {"level": "tall", "text": f"{width}×{height} 长条/竖图，桌面会裁切或留边"}
-        elif ratio <= 1.1:
-            fit = {"level": "square", "text": f"{width}×{height} 接近方形，桌面会裁切"}
-        else:
-            fit = {"level": "ok", "text": f"{width}×{height}"}
-        fit.update({"width": width, "height": height, "ratio": round(ratio, 3)})
+                return jsonify({"status": "error", "msg": "裁剪参数无效"}), 400
+            if (not (0 <= cx < 1 and 0 <= cy < 1 and 0 < cw <= 1 and 0 < ch <= 1)
+                    or cx + cw > 1.001 or cy + ch > 1.001):
+                return jsonify({"status": "error", "msg": "裁剪范围超出图片"}), 400
+            try:
+                from PIL import Image, ImageOps
+                with Image.open(p) as im:
+                    im = ImageOps.exif_transpose(im)
+                    W, H = im.size
+                    box = (int(round(cx * W)), int(round(cy * H)),
+                           int(round((cx + cw) * W)), int(round((cy + ch) * H)))
+                    if box[2] - box[0] < 16 or box[3] - box[1] < 16:
+                        return jsonify({"status": "error", "msg": "裁剪区域太小"}), 400
+                    im2 = im.crop(box)
+                    if im2.mode not in ("RGB", "L"):
+                        im2 = im2.convert("RGB")
+                    from core.wallpaper_trace import candidates_dir
+                    out_dir = candidates_dir() or paths.user_data("wallpaper_crops")
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    out = out_dir / f"{aid}_p{page}_crop.jpg"
+                    im2.save(out, quality=92)
+                p = out
+                cropped = True
+            except Exception as e:
+                return jsonify({"status": "error",
+                                "msg": f"裁剪失败: {type(e).__name__}: {e}"}), 500
 
         # 壁纸夹里已经有同作品的文件 → 先让用户确认, 不要重复往里塞
         if not bool(body.get("force")):
@@ -6025,13 +6042,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 pass
             if existing:
                 return jsonify({"status": "dupe", "msg": "壁纸夹里已有这个作品的壁纸",
-                                "existing": existing, "fit": fit}), 409
+                                "existing": existing}), 409
 
         if not apply_wallpaper(p):
             return jsonify({"status": "error", "msg": "系统没接受这次换壁纸"}), 500
         _notify_widget()
         return jsonify({"status": "ok", "file": str(p), "name": p.name,
-                        "fit": fit, "info": _wall_info_payload(p)})
+                        "cropped": cropped, "info": _wall_info_payload(p)})
 
     @app.route("/api/wallpaper/dir")
     def api_wallpaper_dir_get():

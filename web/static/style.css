@@ -1513,3 +1513,48 @@ body.ob-open { overflow: hidden; }
 }
 .wall-pick-tip.ok { color: #1b7f4b; }
 .wall-pick-tip.warn { color: #a86400; }
+
+/* ===== 设为壁纸 · 预览与裁剪 ===== */
+.crop-mask {
+  position: fixed; inset: 0; z-index: 3600; padding: 12px;
+  background: rgba(10, 12, 16, .78);
+  display: flex; align-items: center; justify-content: center;
+}
+.crop-mask.hidden { display: none; }
+.crop-wrap {
+  display: flex; flex-direction: column; gap: 10px;
+  width: min(1100px, 100%); max-height: 94vh;
+}
+.crop-stage {
+  position: relative; align-self: center;
+  max-width: 100%; max-height: calc(94vh - 64px); line-height: 0;
+}
+.crop-stage img {
+  display: block; max-width: 100%; max-height: calc(94vh - 64px);
+  user-select: none; -webkit-user-drag: none;
+}
+.crop-box {
+  position: absolute; left: 0; top: 0; width: 0; height: 0;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .55);
+  outline: 1px solid rgba(255, 255, 255, .9);
+  cursor: move; touch-action: none;
+}
+.crop-h {
+  position: absolute; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; border: 2px solid #1976d2;
+  transform: translate(-50%, -50%);
+}
+.crop-h.tl { left: 0; top: 0; cursor: nwse-resize; }
+.crop-h.tr { left: 100%; top: 0; cursor: nesw-resize; }
+.crop-h.bl { left: 0; top: 100%; cursor: nesw-resize; }
+.crop-h.br { left: 100%; top: 100%; cursor: nwse-resize; }
+.crop-bar {
+  display: flex; align-items: center; gap: 8px;
+  justify-content: center; flex-wrap: wrap;
+}
+.crop-ratios { display: flex; gap: 6px; margin-right: 8px; }
+.crop-r {
+  border: 1px solid rgba(255, 255, 255, .35); background: rgba(255, 255, 255, .12);
+  color: #fff; border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+}
+.crop-r.active { background: #fff; color: #171717; border-color: #fff; }
