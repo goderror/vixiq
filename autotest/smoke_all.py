@@ -1474,7 +1474,8 @@ def t26_library_manage_crud() -> None:
 
     _t26up.user_data = _t26_fake_user_data
     _t26up.data_root = lambda: _t26tmp
-    (_t26tmp / "img").mkdir(parents=True, exist_ok=True)
+    # 刻意不建 img 目录: 全新机器第一次打开图库时它本来就不存在，
+    # 接口必须自己兜住（返回空列表而不是 500 FileNotFoundError）。
     try:
         app = create_app()
         client = app.test_client()
