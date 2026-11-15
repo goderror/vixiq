@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -214,18 +215,21 @@ def _edge_info() -> "tuple[str | None, str | None]":
                         try:
                             exe, _ = winreg.QueryValueEx(k, "")
                             if exe and os.path.isfile(exe):  # type: ignore[name-defined]
-                                v = _file_version(exe)
-                                return exe, v
+                                # 版本一律以 exe 的文件版本为准: Edge 自动升级后注册表里的
+                                # BLBeacon/InstallLocation 可能仍是旧值, 拿旧版本号去跟捆绑
+                                # driver 比对会误判"版本匹配", 启动后必然 session not created
+                                # (2026-11 实测: 注册表 152 / 真实 Edge 157)。
+                                return exe, _file_version(exe)
                         except OSError:
                             pass
                         try:
-                            v, _ = winreg.QueryValueEx(k, "version")
-                            if v and v[0].isdigit():
+                            reg_ver, _ = winreg.QueryValueEx(k, "version")
+                            if reg_ver and reg_ver[0].isdigit():
                                 try:
                                     ip, _ = winreg.QueryValueEx(k, "InstallLocation")
                                     exe = os.path.join(ip, "Application", "msedge.exe")  # type: ignore[arg-type]
                                     if os.path.isfile(exe):
-                                        return exe, v
+                                        return exe, (_file_version(exe) or reg_ver)
                                 except OSError:
                                     pass
                         except OSError:

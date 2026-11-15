@@ -24,6 +24,11 @@ datas = []
 datas += collect_data_files('cv2')
 datas += collect_data_files('numpy')
 
+# 数据库迁移脚本必须随包: PyInstaller 只自动收集 .py, 不会收 db/migrations/*.sql。
+# 漏带 → 新机器上首次启动建不出任何表, 图库接口全部报
+# "OperationalError: no such table: pages"(本机有旧库所以开发期发现不了)。
+datas += [('db/migrations', 'db/migrations')]
+
 # 随包只读资源(放到 exe 内 resources/ 下,运行期 utils.paths.resource() 读)
 extra_resources = [
     ('resources/default.json', 'resources'),

@@ -1372,4 +1372,60 @@ tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
   .wall-thumb { width: 100%; height: 160px; }
 }
 
-
+/* ===== 🧭 首次使用引导 ===== */
+body.ob-open { overflow: hidden; }
+.ob-mask {
+  position: fixed; inset: 0; z-index: 4000;
+  background: rgba(20, 24, 30, .45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.ob-box {
+  width: min(560px, 100%); max-height: 86vh; overflow: auto;
+  background: var(--panel); border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .28);
+}
+.ob-head { display: flex; align-items: center; gap: 12px; padding: 16px 20px 0; }
+.ob-brand { font-weight: 700; font-size: 15px; }
+.ob-dots { display: flex; gap: 6px; margin-left: auto; }
+.ob-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+.ob-dot.active { background: var(--accent); }
+.ob-body { padding: 18px 22px 8px; }
+.ob-title { font-size: 19px; font-weight: 700; margin-bottom: 8px; }
+.ob-lead { color: var(--muted); line-height: 1.7; margin-bottom: 16px; }
+.ob-label { font-weight: 600; font-size: 13px; }
+.ob-sub { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 12px; }
+.ob-path {
+  margin: 6px 0 0; padding: 8px 10px; border-radius: 8px;
+  background: #f6f8fa; border: 1px solid var(--border);
+  font-family: Consolas, "Courier New", monospace; font-size: 12px;
+  word-break: break-all;
+}
+.ob-tip { color: var(--muted); font-size: 12px; line-height: 1.6; margin-top: 10px; }
+.ob-warn {
+  margin-top: 12px; padding: 8px 10px; border-radius: 8px;
+  background: #fdf3e0; color: #8a5a00; font-size: 12px; line-height: 1.6;
+}
+.ob-account {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px; border: 1px solid var(--border); border-radius: 10px;
+}
+.ob-avatar {
+  width: 42px; height: 42px; border-radius: 50%; flex: none;
+  background: #eef1f5; display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+}
+.ob-avatar.ok { background: #e7f5ea; color: var(--success); }
+.ob-account-name { font-weight: 600; }
+.ob-env {
+  margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border);
+  color: var(--muted); font-size: 12px; line-height: 1.6;
+}
+.ob-summary { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.ob-summary > div { display: flex; gap: 12px; padding: 9px 12px; font-size: 12px; }
+.ob-summary > div + div { border-top: 1px solid var(--border); }
+.ob-summary span { width: 70px; color: var(--muted); flex: none; }
+.ob-summary code { word-break: break-all; }
+.ob-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; }
+.ob-foot { display: flex; align-items: center; gap: 10px; padding: 14px 22px 20px; }
+.ob-foot #ob-next { margin-left: auto; }

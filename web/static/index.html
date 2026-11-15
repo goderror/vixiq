@@ -8,7 +8,7 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261020l">
+<link rel="stylesheet" href="/static/style.css?v=20261115a">
 </head>
 <body>
 
@@ -439,6 +439,7 @@
               <button class="btn ghost" data-k="wall_widget">🖼️ 桌面壁纸小控件</button>
               <button class="btn ghost" data-k="notify_on_wall_change">🔔 壁纸切换提示</button>
               <button class="btn ghost" data-k="exit_on_browser_close">🚪 关页面即退出</button>
+              <button class="btn ghost" onclick="openOnboarding(true)">🧭 使用引导</button>
             </div>
             <div class="hint" style="margin-top:8px">当前状态：<span id="launcher-state">读取中…</span>（亮起 = 已开启）</div>
           </div>
@@ -642,6 +643,22 @@
   </svg>
 </button>
 
+<!-- ===== 首次使用引导 (全新环境自动出现; 设置页可重看) ===== -->
+<div id="onboarding" class="ob-mask hidden" role="dialog" aria-modal="true" aria-label="首次使用引导">
+  <div class="ob-box">
+    <div class="ob-head">
+      <div class="ob-brand">✦ Vixiq</div>
+      <div id="ob-dots" class="ob-dots"></div>
+      <button id="ob-skip" class="btn ghost" type="button">跳过</button>
+    </div>
+    <div id="ob-body" class="ob-body"></div>
+    <div class="ob-foot">
+      <button id="ob-back" class="btn ghost" type="button">上一步</button>
+      <button id="ob-next" class="btn accent" type="button">下一步</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== 全局弹窗 (图库/作者/统计共用, 必须放在 body 直属, 否则切 tab 后被隐藏的 section 藏住) ===== -->
 <div id="lib-modal" class="modal-mask" style="display:none"
      onmousedown="window._libModalDownOnMask = (event.target === this)"
@@ -662,7 +679,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261020l"></script>
+<script src="/static/app.js?v=20261115a"></script>
 </body>
 </html>
 
