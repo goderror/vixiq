@@ -989,8 +989,6 @@ async function loadAuthors(opts = {}) {
     authorsTotal = r.total ?? 0;
     authorsPages = Math.max(1, Math.ceil(authorsTotal / AUTHORS_PAGE_SIZE));
     if (authorsPage > authorsPages) authorsPage = authorsPages;
-    const pos = authorsTotal > AUTHORS_PAGE_SIZE ? ` · 第 ${authorsPage}/${authorsPages} 页` : '';
-    $('#authors-total-inline').textContent = `共 ${authorsTotal} 位${pos}`;
     renderAuthorsPagers();
     renderAuthors(items);
     if (silent) window.scrollTo(0, prevScroll);
@@ -1001,8 +999,9 @@ async function loadAuthors(opts = {}) {
 }
 
 function renderAuthorsPagers() {
-  const html = authorsTotal > AUTHORS_PAGE_SIZE ? `
-    <div class="pager-inner">
+  // 左侧总数、右侧页码 (与图库/壁纸同一套); 分页行在吸顶区内, 收起菜单仍可见
+  const totalTxt = `共 ${authorsTotal} 位`;
+  const nav = authorsTotal > AUTHORS_PAGE_SIZE ? `
       <button class="btn ghost" onclick="goAuthorsPage(1)" ${authorsPage <= 1 ? 'disabled' : ''} title="首页">«</button>
       <button class="btn ghost" onclick="goAuthorsPage(${authorsPage - 1})" ${authorsPage <= 1 ? 'disabled' : ''} title="上一页">‹</button>
       <span class="pager-info">第
@@ -1011,7 +1010,8 @@ function renderAuthorsPagers() {
       </span>
       <button class="btn ghost" onclick="goAuthorsPage(${authorsPage + 1})" ${authorsPage >= authorsPages ? 'disabled' : ''} title="下一页">›</button>
       <button class="btn ghost" onclick="goAuthorsPage(${authorsPages})" ${authorsPage >= authorsPages ? 'disabled' : ''} title="尾页">»</button>
-    </div>` : '';
+  ` : '';
+  const html = `<div class="pager-inner"><span class="pager-total">${totalTxt}</span>${nav}</div>`;
   $('#authors-pager-top').innerHTML = html;
   $('#authors-pager-bottom').innerHTML = html;
 }
@@ -4693,8 +4693,8 @@ function flashLibCard(aid) {
 
 // ---- 图库分页栏 (顶部/底部同步渲染): 首页/上一页/页码输入/下一页/尾页 ----
 function renderLibPagers() {
-  const html = `<span class="lib-result-count">共 ${libCounts.artworks} 个作品 · ${libCounts.images} 张图片</span>
-    <div class="pager-inner">
+  const html = `<div class="pager-inner">
+    <span class="pager-total">共 ${libCounts.artworks} 个作品 · ${libCounts.images} 张图片</span>
       <button class="btn ghost" onclick="goLibPage(1)" ${libPage <= 1 ? 'disabled' : ''} title="首页">«</button>
       <button class="btn ghost" onclick="goLibPage(${libPage - 1})" ${libPage <= 1 ? 'disabled' : ''} title="上一页">‹</button>
       <span class="pager-info">第
@@ -4704,6 +4704,7 @@ function renderLibPagers() {
       <button class="btn ghost" onclick="goLibPage(${libPage + 1})" ${libPage >= libPages ? 'disabled' : ''} title="下一页">›</button>
       <button class="btn ghost" onclick="goLibPage(${libPages})" ${libPage >= libPages ? 'disabled' : ''} title="尾页">»</button>
     </div>`;
+  // 顶部那条在吸顶工具栏内: 收起菜单后仍能看到总数与页码
   $('#lib-pager-top').innerHTML = html;
   $('#lib-pager-bottom').innerHTML = html;
 }

@@ -23,7 +23,13 @@ function wallFilesEnter() {
       const preview = e.target.closest('[data-preview]');
       if (preview) wallFilesPreview(preview.dataset.preview);
       const page = e.target.closest('[data-wall-page]');
-      if (page) { WFA.page = Number(page.dataset.wallPage); wallFilesPaint(); $('#wf-result').scrollIntoView({ block: 'start' }); }
+      if (page) wallGoPage(Number(page.dataset.wallPage));
+    });
+    root.addEventListener('keydown', e => {
+      if (!e.target.matches('[data-wall-page-input]') || e.key !== 'Enter') return;
+      const n = parseInt(e.target.value, 10);
+      if (Number.isFinite(n)) wallGoPage(n);
+      else e.target.value = WFA.page;
     });
     root.addEventListener('change', e => {
       if (e.target.matches('input[data-name]')) wallFilesToggle(e.target);
@@ -109,8 +115,28 @@ function wallFilesPaint() {
     }).join('');
   } else content = `<div class="wf-grid">${WFA.visible.map(wallFilesCard).join('')}</div>`;
   $('#wf-result').innerHTML = list.length ? content : '<div class="hint">没有符合条件的壁纸。</div>';
-  $('#wf-pager').innerHTML = `<span>共 ${list.length} 张 · ${WFA.page} / ${pages} 页</span><button class="btn" data-wall-page="${WFA.page - 1}"${WFA.page === 1 ? ' disabled' : ''}>上一页</button><button class="btn" data-wall-page="${WFA.page + 1}"${WFA.page === pages ? ' disabled' : ''}>下一页</button>`;
+  // 与图库/作者同一套分页: 左侧总数, 右侧首页/上一页/页码输入/下一页/尾页
+  const pagerNav = pages > 1 ? `
+      <button class="btn ghost" data-wall-page="1"${WFA.page === 1 ? ' disabled' : ''} title="首页">«</button>
+      <button class="btn ghost" data-wall-page="${WFA.page - 1}"${WFA.page === 1 ? ' disabled' : ''} title="上一页">‹</button>
+      <span class="pager-info">第
+        <input class="lib-page-input" type="number" min="1" max="${pages}" value="${WFA.page}"
+               data-wall-page-input aria-label="跳转页码"> / ${pages} 页
+      </span>
+      <button class="btn ghost" data-wall-page="${WFA.page + 1}"${WFA.page === pages ? ' disabled' : ''} title="下一页">›</button>
+      <button class="btn ghost" data-wall-page="${pages}"${WFA.page === pages ? ' disabled' : ''} title="尾页">»</button>` : '';
+  $('#wf-pager').innerHTML = `<div class="pager-inner"><span class="pager-total">共 ${list.length} 张</span>${pagerNav}</div>`;
   wallFilesSyncSel();
+}
+
+// 翻页: 页码越界钳制到有效范围; 页码输入框由重新渲染复位
+function wallGoPage(n) {
+  const pages = Math.max(1, Math.ceil(WFA.results.length / WFA.per));
+  const next = Math.min(Math.max(1, n | 0), pages);
+  if (next === WFA.page) { wallFilesPaint(); return; }
+  WFA.page = next;
+  wallFilesPaint();
+  $('#wf-result').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function wallFilesToggle(cb) {

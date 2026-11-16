@@ -195,13 +195,19 @@ main.management-compact .management-selection {
   margin-left: auto;
 }
 
-/* 分页行 */
+/* 分页行: 在吸顶区内常驻, 收起菜单后总数与页码选择仍可见 */
 .management-pager:empty {
   display: none;
 }
 .management-pager {
   margin: 8px 0;
   padding: 6px 0;
+}
+/* 吸顶区内不画分隔线, 与上方搜索条紧凑相接 */
+.management-toolbar .lib-pager.management-pager {
+  border-top: 0;
+  margin: 6px 0 0;
+  padding: 4px 0 0;
 }
 main.management-compact .management-pager {
   margin: 6px 0;

@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261117b">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117b">
+<link rel="stylesheet" href="/static/style.css?v=20261117c">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117c">
 </head>
 <body>
 
@@ -318,8 +318,10 @@
         <button id="lib-batch-del" class="btn danger lib-delete" disabled title="删除所选项（移入应用回收站）" aria-label="删除">🗑️</button>
       </div>
       </div>
+      <!-- 分页行留在吸顶区内: 收起菜单后仍能看到总数与页码 -->
+      <div id="lib-pager-top" class="lib-pager management-pager"></div>
       </div>
-      <!-- 以下内容随列表滚走，不吸顶 (统计/当前壁纸/提示/分页) -->
+      <!-- 以下内容随列表滚走，不吸顶 (统计/当前壁纸/提示) -->
       <div id="wall-card" class="wall-card hidden">
         <div class="wall-head">
           <span class="wall-title">🖼️ 当前壁纸</span>
@@ -336,7 +338,6 @@
       <div id="lib-missing-hint" class="hint" style="display:none"></div>
       <div id="lib-health-hint" class="health-row" style="display:none"></div>
       <div id="lib-only-banner" class="lib-only-banner" hidden></div>
-      <div id="lib-pager-top" class="lib-pager"></div>
       <div id="lib-result"></div>
       <div id="lib-pager-bottom" class="lib-pager"></div>
     </div>
@@ -378,7 +379,6 @@
           <button id="authors-search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
         </div>
         <button id="authors-search-btn" class="btn accent">搜索</button>
-        <span id="authors-total-inline" class="status-line"></span>
         <button type="button" class="btn ghost management-toggle" aria-expanded="true" aria-controls="authors-filters">收起菜单</button>
       </div>
       <div class="management-extra">
@@ -390,8 +390,8 @@
         </div>
       </div>
       <div class="management-selection"></div>
+      <div id="authors-pager-top" class="lib-pager management-pager"></div>
       </div>
-      <div id="authors-pager-top" class="lib-pager"></div>
       <div id="authors-result" class="table-wrap">
         <div class="hint">加载中…</div>
       </div>
@@ -451,12 +451,12 @@
         <button id="wf-recycle" class="btn danger" onclick="wallAction('delete')">删除…</button>
       </div>
       </div>
+      <div id="wf-pager" class="lib-pager management-pager"></div>
       </div>
       <!-- 以下随列表滚走 -->
       <div class="wf-location-row"><span id="wf-dir" class="status-line"></span><span id="wf-scan-tip" class="status-line"></span></div>
       <div id="wf-stats" class="stats-grid"></div>
       <div id="wf-result"><div class="hint">加载中…</div></div>
-      <div id="wf-pager" class="lib-pager"></div>
     </div>
   </section>
 
@@ -781,10 +781,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261117b"></script>
-<script src="/static/wallpaper-admin.js?v=20261117b"></script>
-<script src="/static/management-drawer-state.js?v=20261117b"></script>
-<script src="/static/management-toolbar.js?v=20261117b"></script>
+<script src="/static/app.js?v=20261117c"></script>
+<script src="/static/wallpaper-admin.js?v=20261117c"></script>
+<script src="/static/management-drawer-state.js?v=20261117c"></script>
+<script src="/static/management-toolbar.js?v=20261117c"></script>
 </body>
 </html>
 

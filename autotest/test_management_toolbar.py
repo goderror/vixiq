@@ -303,12 +303,21 @@ class ManagementToolbarTests(unittest.TestCase):
             )
 
         for ident in ("lib-result", "authors-result", "wf-result",
-                      "lib-pager-bottom", "authors-pager-bottom", "wf-pager"):
+                      "lib-pager-bottom", "authors-pager-bottom"):
             element = self.doc.find_by_id(ident)
             self.assertIsNotNone(element, "missing #%s" % ident)
             self.assertFalse(
                 element.has_ancestor_class("management-toolbar"),
                 "#%s must not be inside .management-toolbar" % ident,
+            )
+
+        # 顶部总数+页码必须留在吸顶工具栏里: 收起菜单后仍能看到并翻页 (2026-11-17)
+        for ident in ("lib-pager-top", "authors-pager-top", "wf-pager"):
+            element = self.doc.find_by_id(ident)
+            self.assertIsNotNone(element, "missing #%s" % ident)
+            self.assertTrue(
+                element.has_ancestor_class("management-toolbar"),
+                "#%s must stay inside .management-toolbar" % ident,
             )
 
     # ------------------------------------------------------------------ #

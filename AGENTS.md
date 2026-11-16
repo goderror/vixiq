@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261116i`，HEAD 记录仍为 `3ee57ad`，本轮改动尚未提交）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117c`，上一提交 `68ddb0f`，本轮分页修正尚未提交）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261116i`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117c`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -220,6 +220,16 @@
 - `/api/library/items` 附带 `counts={artworks,images}`，统计复用查询筛选条件且不受分页影响，去重标签关联，排除回收和未下载占位图片。
 - 壁纸管理移除顶部说明，壁纸夹路径与张数/大小/扫描时间合并一行。
 - T142 覆盖 8 项接口/前端行为回归，包含 Node.js 下载替身验证；不真实联网下载。当时源码与前端资源版本为 `20261116h`（现为 `20261116i`）。
+
+### 4.6.1 三管理页分页行修正（2026-11-17，版本 `20261117c`）
+
+- 顶部总数与页码移入吸顶工具栏（`#lib-pager-top`、`#authors-pager-top`、`#wf-pager`），
+  收起菜单后仍可见、可翻页；底部分页（`#lib-pager-bottom`、`#authors-pager-bottom`）仍随列表滚走。
+- 三页统一 `.pager-inner` 结构：左侧 `.pager-total`（如「共 1600 个作品 · 2186 张图片」），右侧首页/上一页/页码输入/下一页/尾页。
+- 壁纸管理分页由「上一页/下一页」半成品补齐为同一套控件（`wallGoPage`，页码输入回车生效）；壁纸每页 80 张。
+- 作者页删除已不存在的 `#authors-total-inline` 引用，总数改由 pager 渲染，单页时只显示「共 N 位」。
+- 验收：全量冒烟 135/135；合成数据无头实测（`_dev_runtime/diagnostics/check_pager_ui.py`）三页总数靠左、页码靠右、收起态分页可见；
+  7 个资源已同步候选包/dist/安装版，配置哈希未变。安装版程序当时未运行，下次启动生效。
 
 ### 4.7 壁纸相关接口速查
 
