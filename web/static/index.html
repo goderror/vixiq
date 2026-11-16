@@ -8,7 +8,7 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261116e">
+<link rel="stylesheet" href="/static/style.css?v=20261116c">
 </head>
 <body>
 
@@ -48,8 +48,8 @@
   <button class="tab" data-tab="tasks">📥 下载任务<span id="cart-badge" class="badge hidden">0</span></button>
   <button class="tab" data-tab="reverse">🔎 反搜来源</button>
   <button class="tab" data-tab="library">📚 图库管理</button>
-  <button class="tab" data-tab="wallpapers">🖼️ 壁纸管理</button>
   <button class="tab" data-tab="authors">👤 作者管理</button>
+  <button class="tab" data-tab="wallpapers">🖼️ 壁纸管理</button>
   <button class="tab" data-tab="stats">📊 统计</button>
   <button class="tab" data-tab="settings">⚙ 设置</button>
   <button class="tab tab-subtle" data-tab="trash" title="回收站" aria-label="回收站">🗑️<span id="trash-badge" class="badge hidden">0</span></button>
@@ -207,8 +207,6 @@
   <!-- ===== 图库管理 ===== -->
   <section id="tab-library" class="tabpage">
     <div class="panel">
-      <!-- 顶部工具栏: 粘住不随列表滚动; 往下滚后收成紧凑模式 (见 app.js 的 pageToolbarWatch) -->
-      <div class="lib-toolbar" id="lib-toolbar">
       <div class="panel-head">
         <h2>📚 图库管理</h2>
         <div class="panel-actions">
@@ -286,38 +284,25 @@
         </select>
         <button id="lib-f-order" class="btn ghost" title="切换升降序">↓ 降序</button>
       </div>
-      <!-- 操作行: 已选信息靠左; 右侧按性质分组 —— 异常筛选 / 选择 / 操作 -->
+      <!-- 操作行: 条数靠左 + 状态筛选/批量按钮靠右, 与筛选控件分行 -->
       <div class="lib-ops-row">
         <span id="lib-total" class="status-line"></span>
         <div class="lib-batch-group">
-          <span class="lib-btn-group filters" title="按异常状态筛选">
-            <button id="lib-f-missing" type="button" class="btn icon-toggle" title="缺标题/标签/封面等信息的作品">🏷️ 缺元数据</button>
-            <button id="lib-f-missing-file" type="button" class="btn icon-toggle" title="数据库有记录但磁盘文件已丢失的作品">⚠ 缺失文件</button>
-            <button id="lib-f-deleted" type="button" class="btn icon-toggle" title="pixiv 作品页已确认不存在（404）的作品，本地文件仍可查看">🗑️ 已失效</button>
-          </span>
-          <span class="lib-btn-group selects" title="选择">
-            <button id="lib-sel-all" type="button" class="btn icon-toggle" title="全选 / 取消全选">☑ 全选</button>
-            <button id="lib-sel-clear" class="btn ghost" disabled title="取消全部选中">✕ 取消选择</button>
-          </span>
-          <span class="lib-btn-group ops">
-            <span class="lib-menu-wrap">
-              <button id="lib-batch-redownload" class="btn" disabled
-                      title="补完作品：加进下载队列，缺页补页、已完整跳过，永不覆盖本地文件；修复原图：用 pixiv 官方源覆盖重下，旧文件自动备份为 .bak">重新下载(<span id="lib-sel-count3">0</span>) ▾</button>
-              <span id="lib-redownload-menu" class="lib-menu hidden">
-                <button type="button" data-act="complete" title="缺页补页、已完整跳过，不覆盖本地文件">补完作品</button>
-                <button type="button" data-act="repair" title="官方源覆盖重下，旧文件备份为 .bak（只对 pixiv 作品有效）">修复原图</button>
-              </span>
-            </span>
-            <button id="lib-batch-edit" class="btn" disabled title="批量改选中项的作者/标签/类型/R18/来源，只改勾选的字段">编辑(<span id="lib-sel-count2">0</span>)</button>
-            <button id="lib-batch-merge" class="btn" disabled title="把选中的图片并为同一作品的多页，可并入已有作品或新建作品">合并</button>
-            <button id="lib-batch-split" class="btn" disabled title="把选中的图片从原作品拆出（每张独立或组成新作品）；只改数据库归属，图片文件不动">拆分</button>
-            <button id="lib-batch-srcsearch" class="btn" disabled title="已记录来源URL的直接归类；其余用 SauceNAO 反搜（较慢）。反搜结果只作参考">搜索来源</button>
-            <button id="lib-batch-del" class="btn danger" disabled title="移入回收站（可恢复）">删除(<span id="lib-sel-count">0</span>)</button>
-          </span>
+          <button id="lib-f-missing" type="button" class="btn icon-toggle" title="缺标题/标签/封面等信息的作品">🏷️ 缺元数据</button>
+          <button id="lib-f-missing-file" type="button" class="btn icon-toggle" title="数据库有记录但磁盘文件已丢失的作品">⚠ 缺失文件</button>
+          <button id="lib-f-deleted" type="button" class="btn icon-toggle" title="pixiv 作品页已确认不存在（404）的作品，本地文件仍可查看">🗑️ 已失效</button>
+          <button id="lib-sel-all" type="button" class="btn icon-toggle" title="全选 / 取消全选">☑ 全选</button>
+          <button id="lib-sel-clear" class="btn ghost" disabled title="取消全部选中">✕ 取消选择</button>
+          <button id="lib-batch-addcart" class="btn" disabled title="加进下载队列并开始；库里已完整的不重下，缺页的只补缺失页，永不覆盖本地文件">➕ 批量加入下载(<span id="lib-sel-count3">0</span>)</button>
+          <button id="lib-batch-repair" class="btn danger" disabled title="用 pixiv 官方源覆盖重下，旧文件自动备份为 .bak（可在「💾 备份」里恢复）。只对 pixiv 作品有效">♻ 重下修复(<span id="lib-sel-count4">0</span>)</button>
+          <button id="lib-batch-edit" class="btn" disabled title="批量改选中项的作者/标签/类型/R18/来源，只改勾选的字段">✏️ 批量编辑(<span id="lib-sel-count2">0</span>)</button>
+          <button id="lib-batch-merge" class="btn" disabled title="把选中的图片并为同一作品的多页，可并入已有作品或新建作品">🔗 合并图片</button>
+          <button id="lib-batch-split" class="btn" disabled title="把选中的图片从原作品拆出（每张独立或组成新作品）；只改数据库归属，图片文件不动">✂️ 拆分</button>
+          <button id="lib-batch-srcsearch" class="btn" disabled title="已记录来源URL的直接归类；其余用 SauceNAO 反搜（较慢）。反搜结果只作参考">🔎 批量搜索来源</button>
+          <button id="lib-batch-del" class="btn danger" disabled>🗑️ 批量删除(<span id="lib-sel-count">0</span>)</button>
         </div>
       </div>
       <div id="lib-only-banner" class="lib-only-banner" hidden></div>
-      </div>
       <div id="lib-pager-top" class="lib-pager"></div>
       <div id="lib-result"></div>
       <div id="lib-pager-bottom" class="lib-pager"></div>
@@ -349,8 +334,6 @@
   <!-- ===== 作者管理 (作者维度数据库: 筛选/排序/搜索/编辑) ===== -->
   <section id="tab-authors" class="tabpage">
     <div class="panel">
-      <!-- 顶部工具栏: 粘住不随作者列表滚动; 下滑后收起筛选下拉, 保留搜索 -->
-      <div class="lib-toolbar" id="authors-toolbar">
       <div class="panel-head">
         <h2>👤 作者管理</h2>
         <div class="panel-actions">
@@ -368,7 +351,6 @@
         <span class="lib-spacer"></span>
         <span id="authors-total-inline" class="status-line"></span>
       </div>
-      </div>
       <div id="authors-pager-top" class="lib-pager"></div>
       <div id="authors-result" class="table-wrap">
         <div class="hint">加载中…</div>
@@ -380,48 +362,35 @@
   <!-- ===== 壁纸管理 (归属索引 + 查重; 只读扫描, 删副本必须手动勾选并进回收站) ===== -->
   <section id="tab-wallpapers" class="tabpage">
     <div class="panel">
-      <!-- 顶部工具栏: 粘住不随列表滚动; 往下滚后收成紧凑模式 (见 app.js 的 pageToolbarWatch) -->
-      <div class="lib-toolbar" id="wf-toolbar">
-        <div class="panel-head">
-          <h2>🖼️ 壁纸管理</h2>
+      <div class="panel-head">
+        <h2>🖼️ 壁纸管理</h2>
+        <div class="panel-actions">
           <span id="wf-dir" class="status-line"></span>
-          <div class="panel-actions">
-            <button id="wf-scan-btn" class="btn accent" onclick="wallFilesScan(false)">扫描归属</button>
-            <button id="wf-scan-deep-btn" class="btn" onclick="wallFilesScan(true)"
-                    title="用图像特征识别手动裁剪/另存出来的壁纸（首次较慢，之后只扫新增和改动的文件）">深度扫描</button>
-          </div>
+          <button id="wf-scan-btn" class="btn accent" onclick="wallFilesScan(false)">🔍 扫描归属</button>
+          <button id="wf-scan-deep-btn" class="btn" onclick="wallFilesScan(true)"
+                  title="用图像特征识别手动裁剪/另存出来的壁纸（首次较慢，之后只扫新增和改动的文件）">✨ 深度扫描</button>
         </div>
-        <div id="wf-stats" class="stats-grid"></div>
-        <div class="field-row wf-filters-row">
-          <div class="search-box">
-            <input id="wf-search-input" type="text" placeholder="搜索文件名 / 作品ID / 作者 / 标题…" spellcheck="false">
-            <button id="wf-search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
-          </div>
-          <select id="wf-f-sort" title="排序">
-            <option value="name">排序: 按文件名</option>
-            <option value="size">排序: 按大小</option>
-            <option value="owned">排序: 已归属优先</option>
-            <option value="dupe">排序: 重复优先</option>
-          </select>
-          <div class="lib-spacer"></div>
-          <div class="btn-row" id="wf-filters">
-            <button class="btn filter-btn active" data-f="all">全部</button>
-            <button class="btn filter-btn" data-f="owned">已归属</button>
-            <button class="btn filter-btn" data-f="orphan">未归属</button>
-            <button class="btn filter-btn" data-f="dupe">重复</button>
-          </div>
+      </div>
+      <div class="hint" style="margin:6px 0 10px">
+        壁纸夹里每个文件属于图库的哪一页，扫一次记在本地。已归属的壁纸再次设为壁纸时会先提示，不会重复堆同一作品的多份。
+        扫描只读，不会删文件；删除副本一律勾选后送进 Windows 电脑回收站（可还原）。
+      </div>
+      <div id="wf-scan-bar" class="progress-wrap hidden">
+        <div id="wf-scan-fill" class="progress-bar"></div>
+        <span id="wf-scan-text">0%</span>
+      </div>
+      <div id="wf-scan-tip" class="status-line" style="margin:0 0 8px"></div>
+      <div id="wf-stats" class="stats-grid"></div>
+      <div class="field-row lib-filters">
+        <div class="btn-row" id="wf-filters">
+          <button class="btn filter-btn active" data-f="all">全部</button>
+          <button class="btn filter-btn" data-f="owned">已归属</button>
+          <button class="btn filter-btn" data-f="orphan">未归属</button>
+          <button class="btn filter-btn" data-f="dupe">重复</button>
         </div>
-        <div class="lib-ops-row">
-          <span id="wf-sel-count" class="status-line">未选择</span>
-          <div class="lib-batch-group">
-            <button id="wf-recycle" class="btn danger" disabled onclick="wallFilesRecycle()">删除（进回收站）</button>
-          </div>
-        </div>
-        <div id="wf-scan-bar" class="progress-wrap hidden">
-          <div id="wf-scan-fill" class="progress-bar"></div>
-          <span id="wf-scan-text">0%</span>
-        </div>
-        <div id="wf-scan-tip" class="status-line"></div>
+        <span class="lib-spacer"></span>
+        <span id="wf-sel-count" class="status-line">已选 0 张</span>
+        <button id="wf-recycle" class="btn danger" disabled onclick="wallFilesRecycle()">🗑️ 删除副本（进回收站）</button>
       </div>
       <div id="wf-result"><div class="hint">加载中…</div></div>
     </div>
@@ -748,7 +717,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261116e"></script>
+<script src="/static/app.js?v=20261116c"></script>
 </body>
 </html>
 

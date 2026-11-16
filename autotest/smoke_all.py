@@ -10310,7 +10310,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261116e" and _mss.group(1) == "20261116e", \
+    assert _mjs and _mss and _mjs.group(1) == "20261116c" and _mss.group(1) == "20261116c", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10405,7 +10405,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261116e', html) and _re.search(r'app\.js\?v=20261116e', html), \
+    assert _re.search(r'style\.css\?v=20261116c', html) and _re.search(r'app\.js\?v=20261116c', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10788,7 +10788,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261116e" in html and "app.js?v=20261116e" in html, \
+        assert "style.css?v=20261116c" in html and "app.js?v=20261116c" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13126,7 +13126,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261116e" in _h and "style.css?v=20261116e" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261116c" in _h and "style.css?v=20261116c" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13183,15 +13183,9 @@ def t137_wallpaper_index_and_admin_page() -> None:
         md5 = _hl.md5(src.read_bytes()).hexdigest()
         db.mark_page_status("700001", 0, PSt.DONE, local_path="a/700001_p0.png",
                             md5=md5, width=1920, height=1080)
-        # 同作品的另一页 (画面不同): 用来验证"同作品不同页不算重复"
-        src1 = img_root / "a" / "700001_p1.png"
-        _Img.new("RGB", (1920, 1080), (5, 6, 7)).save(src1)
-        db.mark_page_status("700001", 1, PSt.DONE, local_path="a/700001_p1.png",
-                            width=1920, height=1080)
         db.close()
 
-        shutil.copy(src, wall / "700001_p0.png")                        # MD5 命中 p0
-        shutil.copy(src1, wall / "700001_p1.png")                       # 文件名命中 p1
+        shutil.copy(src, wall / "700001_p0.png")                        # MD5 命中
         _Img.new("RGB", (1920, 1080), (1, 2, 3)).save(wall / "crop_manual.jpg")  # 只走 ORB
         _Img.new("RGB", (800, 600), (9, 9, 9)).save(wall / "999999_p0.png")      # 未归属
         wsrv._wall_orb_candidates = lambda f, root: (
@@ -13217,8 +13211,8 @@ def t137_wallpaper_index_and_admin_page() -> None:
             _time.sleep(0.1)
         assert st.get("status") == "done", st
         res = st.get("result") or {}
-        assert res["total"] == 4 and res["owned"] == 3 and res["orphan"] == 1, res
-        assert res["by_md5"] == 1 and res["by_name"] == 1 and res["by_visual"] == 1, res
+        assert res["total"] == 3 and res["owned"] == 2 and res["orphan"] == 1, res
+        assert res["by_md5"] == 1 and res["by_visual"] == 1, res
         assert res["dupes"] == 1, res
         # 第二次扫描: 已归属且没变的直接复用
         r = client.post("/api/wallpaper/files/scan", json={"deep": True})
@@ -13229,29 +13223,25 @@ def t137_wallpaper_index_and_admin_page() -> None:
             if st.get("status") in ("done", "error"):
                 break
             _time.sleep(0.1)
-        assert st.get("status") == "done" and (st.get("result") or {}).get("reused") == 3, st
+        assert st.get("status") == "done" and (st.get("result") or {}).get("reused") == 2, st
 
         # ---------- ③ 列表 / 统计 / 重复组 ----------
         j = client.get("/api/wallpaper/files").get_json()
-        assert j["scanned"] and j["stats"]["total"] == 4, j["stats"]
-        assert j["stats"]["owned"] == 3 and j["stats"]["orphan"] == 1, j["stats"]
+        assert j["scanned"] and j["stats"]["total"] == 3, j["stats"]
+        assert j["stats"]["owned"] == 2 and j["stats"]["orphan"] == 1, j["stats"]
         assert j["stats"]["dupes"] == 1 and j["stats"]["dupe_files"] == 2, j["stats"]
         g = j["groups"][0]
-        # 重复口径: 同作品**同页**才算一组; 同作品的 p1 是另一张图, 不许混进来
-        assert g["kind"] == "page" and g["artwork_id"] == "700001" and g["page_num"] == 0, g
+        assert g["kind"] == "artwork" and g["artwork_id"] == "700001", g
         assert sorted(g["files"]) == ["700001_p0.png", "crop_manual.jpg"], g
         kinds = {x["name"]: x["match_kind"] for x in j["items"]}
         assert kinds["700001_p0.png"] == "md5" and kinds["crop_manual.jpg"] == "visual", kinds
-        assert kinds["700001_p1.png"] == "name", kinds
         assert all("root=wall" in x["thumb"] for x in j["items"]), "缩略图必须走壁纸夹根"
         assert client.get(j["items"][0]["thumb"]).status_code == 200, j["items"][0]
 
-        # ---------- ④ 设壁纸查重改读索引: 只查同一页, 同作品其他页不算重复 ----------
-        dupes = wsrv._wall_dupes_for("700001", 0)
+        # ---------- ④ 设壁纸查重改读索引 (能查到不带 ID 的裁剪版) ----------
+        dupes = wsrv._wall_dupes_for("700001")
         assert len(dupes) == 2 and {d["kind"] for d in dupes} == {"md5", "visual"}, dupes
-        p1 = wsrv._wall_dupes_for("700001", 1)
-        assert len(p1) == 1 and p1[0]["name"] == "700001_p1.png", p1
-        assert wsrv._wall_dupes_for("800000", 0) == []
+        assert wsrv._wall_dupes_for("800000") == []
 
         # ---------- ⑤ 删除只收壁纸夹内的相对名, 并清掉索引记录 ----------
         caught = []
@@ -13269,27 +13259,16 @@ def t137_wallpaper_index_and_admin_page() -> None:
         j = client.get("/api/wallpaper/files").get_json()
         assert "crop_manual.jpg" not in [x["name"] for x in j["items"]], j["items"]
 
-        # ---------- ⑤′ 页号边界 (回退路径): "_p1" 字符串包含会误命中 "_p10" ----------
-        _Img.new("RGB", (1920, 1080), (11, 22, 33)).save(wall / "700001_p10.png")
-        with wsrv._db() as db:
-            with db.conn:
-                db.conn.execute("DELETE FROM wallpaper_files")   # 清索引 → 走现场反推
-        _r = wsrv._wall_dupes_for("700001", 1, "", (1920, 1080), deep=False)
-        _names = [x["name"] for x in _r]
-        assert "700001_p1.png" in _names and "700001_p10.png" not in _names, _names
-        (wall / "700001_p10.png").unlink()
-
         # ---------- ⑥ 前端接线 ----------
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
         js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-        _srv_src = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
         _i_lib = html.index('data-tab="library"')
         _i_auth = html.index('data-tab="authors"')
         _i_wall = html.index('data-tab="wallpapers"')
         _i_trash = html.index('data-tab="trash"')
-        assert _i_lib < _i_wall < _i_auth, "顺序必须是 图库 → 壁纸 → 作者 (图库和壁纸挨着)"
-        assert not (_i_lib < _i_trash < _i_auth), "回收站不许插在三个管理页中间"
+        assert _i_lib < _i_auth < _i_wall, "图片/作者/壁纸三页要连着"
+        assert not (_i_lib < _i_trash < _i_wall), "回收站不许插在图片/作者/壁纸中间"
         assert _i_trash > html.index('data-tab="stats"'), \
             "回收站要挪到导航右端 (低频操作, 不抢主功能的位置)"
         assert "tab-subtle" in html and ".tab.tab-subtle" in css, "回收站要弱化样式"
@@ -13306,45 +13285,6 @@ def t137_wallpaper_index_and_admin_page() -> None:
         _wc = js.split("wallBtn.addEventListener('click'")[1].split("// 把 url 放到")[0]
         assert "closeLb();" in _wc and "openWallCrop(" in _wc, \
             "点「设为壁纸」要先关掉查看器再进裁剪 (否则底层还压着大图)"
-        # 壁纸卡片的基本操作 + 查重时的「选择已有壁纸」
-        assert "function wallFilesVisible()" in js and 'data-act="use"' in js, \
-            "壁纸卡片要有「设为壁纸 / 在库中查看 / 删除」这些基本操作"
-        assert "/api/wallpaper/use" in js and "function wallDupeChoose()" in js, \
-            "查重提示要能选择已有壁纸设为当前壁纸"
-        assert "g.kind === 'page'" in js, "重复组要按同作品同页判定, 不是同作品"
-        # 图库工具栏: 按性质分组 + 下载/修复合并成「重新下载」
-        assert 'id="lib-batch-redownload"' in html and 'id="lib-redownload-menu"' in html
-        assert 'id="lib-batch-addcart"' not in html and 'id="lib-batch-repair"' not in html
-        assert "lib-btn-group filters" in html and "lib-btn-group selects" in html, \
-            "操作按钮要按性质分组"
-        assert "批量加入下载" not in html and "批量删除" not in html \
-            and "批量编辑" not in html, "按钮文案去掉「批量」"
-        # 总数信息进分页栏, 原位置显示已选多少作品/图片
-        assert "pager-total" in js and "个作品 ·" in js and "张图片" in js
-        # 三个管理页的顶部工具栏: 粘住 + 下滑收起
-        assert 'class="lib-toolbar" id="lib-toolbar"' in html, "图库管理顶部工具栏没粘住"
-        assert 'class="lib-toolbar" id="wf-toolbar"' in html, "壁纸管理顶部工具栏没粘住"
-        assert 'class="lib-toolbar" id="authors-toolbar"' in html, "作者管理顶部工具栏没粘住"
-        assert "function pageToolbarWatch()" in js and ".lib-toolbar.compact" in css, \
-            "滚动收起没接上"
-        # 抽屉闪烁修复: 收/展必须带迟滞 (>160 / <80), 单一阈值会在临界点反复弹跳
-        assert "st > 160" in js and "st < 80" in js, \
-            "工具栏收起/展开要带迟滞区间, 否则临界点来回切换就是闪烁"
-        # is-stuck 不许改变占位高度 (border 常驻只变色); 高度变化会在滚动临界点抖
-        _tb = css.split(".lib-toolbar {")[1].split("}")[0]
-        assert "border-bottom: 1px solid transparent" in _tb, \
-            "工具栏底边框要常驻透明(贴住时只变色), 出现/消失会改高度 → 滚动临界点抖动"
-        # 壁纸列表分批渲染: 上千张一次塞进 DOM 会卡死页面
-        assert "WF_BATCH" in js and "IntersectionObserver" in js and ".wf-more" in css, \
-            "壁纸列表要分批渲染 (滚动到哨兵再补下一批)"
-        # 单页时顶部 pager 不渲染 (总数只在底部, 免得重复 + 多一条分隔线)
-        assert "$('#lib-pager-top').innerHTML = nav ? html : '';" in js, \
-            "单页时顶部 pager 要置空"
-        # 查重选择弹窗的缩略图: 已知非 R18 直接显示 (不再一律当"不确定"打码)
-        assert "imgSrc(url, { is_r18: it.is_r18 })" in js, \
-            "选择已有壁纸的缩略图要按作品 R18 标记显示"
-        assert '"is_r18": (int(r["is_r18"]) if r["is_r18"] is not None else None)' \
-            in _srv_src, "查重结果要带 is_r18 (供前端决定打码)"
     finally:
         upaths.user_data = orig_ud
         upaths.data_root = orig_dr
