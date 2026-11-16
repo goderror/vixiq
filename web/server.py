@@ -6417,7 +6417,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         if f is None:
             return jsonify({"status": "error", "msg": "读不到当前壁纸路径"}), 400
         try:
-            proc.popen(["explorer", f"/select,{f}"])
+            # GUI 程序不能带 SW_HIDE, 否则窗口会被隐藏; 逗号必须在引号外
+            proc.popen(f'explorer /select,"{f}"', hide=False)
             return jsonify({"status": "ok", "path": str(f)})
         except Exception as e:
             return jsonify({"status": "error", "msg": str(e)}), 500
@@ -6810,7 +6811,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             target = img_root
         try:
             if target.is_file():
-                proc.popen(["explorer", f"/select,{target}"])
+                # GUI 程序不能带 SW_HIDE, 否则资源管理器窗口会被一起藏起来
+                # (接口返回成功但什么都没弹出)。逗号在引号外才是 /select 的正确语法。
+                proc.popen(f'explorer /select,"{target}"', hide=False)
             else:
                 os.startfile(str(target))
             return jsonify({"status": "ok"})

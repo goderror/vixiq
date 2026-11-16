@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117h`，上一提交 `ad2a92c`，本轮抽屉式展开尚未提交）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117i`，上一提交 `8007a1f`，本轮三项修复尚未提交）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117h`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117i`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -247,6 +247,14 @@
   悬停时克隆卡片但隐藏缩略图/标题/选择框/角标，只把标题以下的信息贴在卡片底边向下滑出；底部空间不足时贴视口底部。
   `.card-peek` 样式必须放在 `style.css` 末尾（`.work-card/.wf-card` 基础规则之后），否则 `position:fixed` 会被卡片规则覆盖。
   页数角标（`.pages-badge`）在收起态照常显示。
+- 同日修正（版本 `20261117i`）：
+  1. 抽屉只在标题条（图库 `.w-body` / 壁纸 `.wf-meta`）触发，鼠标停在缩略图上不展开。
+  2. 菜单收起/展开改为高度渐变：`:root { interpolate-size: allow-keywords }` + `.management-main` 的
+     `height/opacity` 过渡，`main` 的 `padding-top` 也过渡；不再瞬间跳变把列表顶得一跳。
+     `.management-main` 不再 `display:none`，收起态是 `height:0; opacity:0; overflow:hidden`；peek 浮层里再覆盖回 auto。
+  3. 修复「在资源管理器中打开」只有提示没反应：`proc.popen(..., hide=False)`——GUI 程序带 `SW_HIDE`
+     会被藏起来；命令行改为字符串 `explorer /select,"<路径>"`（逗号必须在引号外，列表参数在含空格路径下会失效）。
+     本轮改了 Python 后端，已重新打包并替换 `dist/vixiq` 与 `D:\Program Files\Vixiq` 的程序文件（config 未动）。
 
 ### 4.7 壁纸相关接口速查
 

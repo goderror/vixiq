@@ -100,8 +100,12 @@ function cardPeekShow(card) {
     }
     const cards = document.querySelectorAll('#tab-library .work-card, #tab-wallpapers .wf-card');
     for (let i = 0; i < cards.length; i++) {
-      const r = cards[i].getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return cards[i];
+      const card = cards[i];
+      // 只认标题条区域: 鼠标停在缩略图上不展开
+      const label = card.classList.contains('wf-card') ? card.querySelector('.wf-meta') : card.querySelector('.w-body');
+      if (!label) continue;
+      const r = label.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return card;
     }
     return null;
   }

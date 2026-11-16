@@ -1,11 +1,15 @@
 /* 独立共享吸顶工具栏样式：仅本文件生效，不改其他文件 */
 
+/* 允许 height: auto ↔ 0 参与过渡 (Chromium 129+) */
+:root { interpolate-size: allow-keywords; }
+
 /* main 作为真实滚动容器 */
 main {
   scroll-padding-top: var(--management-scroll-margin, 0px);
   min-height: 0;
   overflow-anchor: none;
   scrollbar-gutter: stable;
+  transition: padding-top .18s ease;
 }
 
 /* 吸顶工具栏：宽度固定，颜色随状态过渡 */
@@ -17,10 +21,19 @@ main {
   border-bottom: 1px solid transparent;
   padding: 6px 0;
   margin-bottom: 12px;
-  transition: background-color .2s, border-color .2s, box-shadow .2s;
+  transition: background-color .2s, border-color .2s, box-shadow .2s,
+              padding .18s ease, margin .18s ease;
 }
 
-/* 紧凑态：菜单主体完全隐藏, 只留贴顶的总数与页码 */
+/* 菜单主体: 高度/透明度过渡, 收起时平滑收拢, 列表跟着平缓移动而不是猛地跳 */
+.management-main {
+  height: auto;
+  opacity: 1;
+  overflow: visible;
+  transition: height .18s ease, opacity .18s ease;
+}
+
+/* 紧凑态：菜单主体收起到 0 高, 只留贴顶的总数与页码 */
 main.management-compact {
   padding-top: 0;   /* 收起态只剩分页行: 去掉 main 顶部留白, 贴紧标签栏 */
 }
@@ -32,15 +45,24 @@ main.management-compact .management-toolbar {
   margin-bottom: 8px;
 }
 main.management-compact .management-main {
-  display: none;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
-main.management-compact .management-heading,
-main.management-compact .management-extra {
+/* 简化菜单里不显示标题与筛选 */
+main.management-compact.management-peek .management-heading,
+main.management-compact.management-peek .management-extra {
   display: none;
 }
 /* 悬停标签栏叠三角时滑出简化菜单: 浮层不参与布局, 不推挤列表 */
 main.management-compact.management-peek .management-main {
   display: block;
+  height: auto;
+  opacity: 1;
+  overflow: visible;
+  pointer-events: auto;
+  transition: none;
   position: absolute;
   left: 0;
   right: 0;
@@ -244,6 +266,7 @@ main.management-compact .management-selection {
 .management-pager {
   margin: 8px 0;
   padding: 6px 0;
+  transition: margin .18s ease, padding .18s ease;
 }
 /* 吸顶区内不画分隔线, 与上方搜索条紧凑相接 */
 .management-toolbar .lib-pager.management-pager {

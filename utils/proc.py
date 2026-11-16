@@ -39,6 +39,12 @@ def run(cmd, **kw):
     return subprocess.run(cmd, **_hide(kw))
 
 
-def popen(cmd, **kw):
-    """同 :func:`subprocess.Popen`, 但控制台程序不会闪窗。"""
+def popen(cmd, hide=True, **kw):
+    """同 :func:`subprocess.Popen`, 但默认隐藏控制台窗口。
+
+    ``hide=False`` 给资源管理器这类 GUI 程序用: 传 SW_HIDE 会把它们自己的窗口
+    也藏起来, 表现就是接口返回成功、桌面上却什么都没弹出来。
+    """
+    if not hide:
+        return subprocess.Popen(cmd, **kw)
     return subprocess.Popen(cmd, **_hide(kw))
