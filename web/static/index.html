@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261117a">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117a">
+<link rel="stylesheet" href="/static/style.css?v=20261117b">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117b">
 </head>
 <body>
 
@@ -212,11 +212,13 @@
       <div class="panel-head management-heading">
         <h2>📚 图库管理</h2>
         <div class="panel-actions">
-          <button id="lib-tidy-btn" class="btn accent" title="错位作品归位、作者夹规范命名、散落文件归类（先预览后执行）">🧹 一键整理</button>
-          <button id="lib-selfcheck-btn" class="btn accent" title="对账 / 离线清理 / 作者名同步 / 补元数据 / 文件整理 / 汇总报告，可单独跑">🩺 体检</button>
-          <button id="lib-backup" class="btn accent" title="数据库备份（zip）与「重下修复」留下的 .bak 管理">💾 备份</button>
+          <button id="lib-tidy-btn" class="btn ghost" title="错位作品归位、作者夹规范命名、散落文件归类（先预览后执行）">🧹 一键整理</button>
+          <button id="lib-selfcheck-btn" class="btn ghost" title="对账 / 离线清理 / 作者名同步 / 补元数据 / 文件整理 / 汇总报告，可单独跑">🩺 体检</button>
+          <button id="lib-backup" class="btn ghost" title="数据库备份（zip）与「重下修复」留下的 .bak 管理">💾 备份</button>
           <button id="lib-similar-btn" class="btn ghost" title="上传一张图，在图库里找最像的">🔍 以图搜图</button>
           <input id="lib-similar-file" type="file" accept="image/*" style="display:none">
+          <button id="lib-sync-btn" class="btn ghost"
+                  title="立即核对图库记录与磁盘文件，登记新图片并更新缺失提示">🔄 同步磁盘</button>
           <span class="lib-menu-wrap">
             <button id="lib-import-btn" class="btn ghost" aria-haspopup="menu" aria-expanded="false"
                     title="从本机导入图片：文件名含作品ID的直接入库，无ID的转反搜收件箱；源文件进回收站（可还原）">📁 导入 ▾</button>
@@ -225,8 +227,6 @@
               <button id="lib-import-files-item" type="button" role="menuitem">导入图片</button>
             </span>
           </span>
-          <button id="lib-sync-btn" class="btn ghost"
-                  title="立即核对图库记录与磁盘文件，登记新图片并更新缺失提示">🔄 同步磁盘</button>
         </div>
       </div>
       <div class="management-primary field-row">
@@ -337,7 +337,6 @@
       <div id="lib-health-hint" class="health-row" style="display:none"></div>
       <div id="lib-only-banner" class="lib-only-banner" hidden></div>
       <div id="lib-pager-top" class="lib-pager"></div>
-      </div>
       <div id="lib-result"></div>
       <div id="lib-pager-bottom" class="lib-pager"></div>
     </div>
@@ -782,10 +781,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261117a"></script>
-<script src="/static/wallpaper-admin.js?v=20261117a"></script>
-<script src="/static/management-drawer-state.js?v=20261117a"></script>
-<script src="/static/management-toolbar.js?v=20261117a"></script>
+<script src="/static/app.js?v=20261117b"></script>
+<script src="/static/wallpaper-admin.js?v=20261117b"></script>
+<script src="/static/management-drawer-state.js?v=20261117b"></script>
+<script src="/static/management-toolbar.js?v=20261117b"></script>
 </body>
 </html>
 

@@ -58,6 +58,39 @@ main.management-compact .management-extra {
   font-size: 13px;
 }
 
+/* 「导入 ▾」下拉: 必须绝对定位, 否则两个菜单项会作为 inline 内容往右挤开按钮 */
+.lib-menu-wrap { position: relative; display: inline-flex; }
+.lib-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 45;
+  min-width: 150px;
+  padding: 5px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lib-menu[hidden] { display: none; }
+.lib-menu button {
+  border: none; background: transparent; text-align: left;
+  padding: 7px 10px; border-radius: 6px; font-size: 13px;
+  color: var(--text, #222); cursor: pointer;
+}
+.lib-menu button:hover { background: #f1f5f9; }
+
+/* 图库筛选行: 下拉与按钮整体收窄, 让「全部作品」留在同一行 (输入框不动) */
+.management-extra .field-row.lib-filters { gap: 6px; }
+.management-extra .field-row.lib-filters select,
+.management-extra .field-row.lib-filters .btn {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
 /* 主搜索条：可换行，搜索框自适应 */
 .management-primary {
   display: flex;
