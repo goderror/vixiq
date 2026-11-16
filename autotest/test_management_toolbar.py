@@ -346,6 +346,23 @@ class ManagementToolbarTests(unittest.TestCase):
             )
 
     # ------------------------------------------------------------------ #
+    def test_cards_density_toggle(self):
+        """顶栏卡片密度按钮: 收起只留缩略图与标题, 悬停浮层展开。"""
+        btn = self.doc.find_by_id("cards-density-btn")
+        self.assertIsNotNone(btn, "missing #cards-density-btn")
+        self.assertTrue(btn.has_ancestor_class("account-wrap"))
+        self.assertEqual(btn.get("onclick"), "cardsToggle()")
+
+        css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertIn("main.cards-collapsed #tab-library .works-grid", css)
+        self.assertIn("main.cards-collapsed #tab-wallpapers .wf-grid", css)
+        self.assertIn(".card-peek {", css)
+
+        appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        for token in ("function cardsToggle", "function cardPeekShow", "function cardPeekHide"):
+            self.assertIn(token, appjs, token)
+
+    # ------------------------------------------------------------------ #
     def test_asset_versions_and_script_order(self):
         assets = self.doc.elements_with_tag("script") + self.doc.elements_with_tag("link")
         versioned = []

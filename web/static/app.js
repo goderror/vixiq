@@ -26,6 +26,86 @@ window.switchTab = function (name) {
   else if (name === 'settings') { loadThumbsStats(); loadOperations(); paintSelfCheckCard(); loadActivityStats(); loadPixivActions(); loadLauncher(); loadWallDir(); loadWallLib(); loadAiText(); loadPaths(); }
 };
 
+// ============ 卡片密度: 收起只显示标题, 悬停浮层展开 ============
+// 顶栏按钮切换；收起态作用于图库/壁纸的卡片网格。悬停浮层是原卡片的克隆，
+// 用 fixed 定位盖在列表上，不参与布局，所以不会撑动其他卡片。
+const CARDS_COLLAPSED_KEY = 'vixiq.cards.collapsed';
+let cardPeekEl = null, cardPeekSrc = null;
+
+const cardsCollapsed = () => {
+  const m = document.querySelector('main');
+  return !!(m && m.classList.contains('cards-collapsed'));
+};
+
+function cardPeekHide() {
+  if (cardPeekEl) { cardPeekEl.remove(); cardPeekEl = null; }
+  cardPeekSrc = null;
+}
+
+function cardsSetCollapsed(on) {
+  const m = document.querySelector('main');
+  if (!m) return;
+  m.classList.toggle('cards-collapsed', !!on);
+  const btn = $('#cards-density-btn');
+  if (btn) {
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.title = on ? '展开卡片（恢复正常显示）' : '收起卡片（只显示标题，悬停展开）';
+  }
+  cardPeekHide();
+  try { localStorage.setItem(CARDS_COLLAPSED_KEY, on ? '1' : '0'); } catch (e) {}
+}
+
+function cardsToggle() { cardsSetCollapsed(!cardsCollapsed()); }
+window.cardsToggle = cardsToggle;
+
+function cardPeekShow(card) {
+  if (!cardsCollapsed()) return;
+  if (!card.closest('#tab-library, #tab-wallpapers')) return;
+  if (card === cardPeekSrc && cardPeekEl) return;
+  cardPeekHide();
+  const box = card.getBoundingClientRect();
+  if (!box.width || box.bottom < 0 || box.top > window.innerHeight) return;
+  const clone = card.cloneNode(true);
+  clone.classList.add('card-peek');
+  clone.removeAttribute('data-key');
+  clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+  const width = Math.max(box.width, 220);
+  const left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8));
+  const below = window.innerHeight - box.top - 8;
+  const above = box.bottom - 8;
+  clone.style.width = width + 'px';
+  clone.style.left = left + 'px';
+  // 卡片靠下时向上展开, 尽量把完整卡片露出来
+  if (below >= 320 || below >= above) {
+    clone.style.top = Math.max(8, box.top) + 'px';
+    clone.style.maxHeight = below + 'px';
+  } else {
+    clone.style.bottom = Math.max(8, window.innerHeight - box.bottom) + 'px';
+    clone.style.maxHeight = above + 'px';
+  }
+  document.body.appendChild(clone);
+  cardPeekEl = clone;
+  cardPeekSrc = card;
+}
+
+(function initCardsDensity() {
+  if (!$('#cards-density-btn')) return;
+  try { cardsSetCollapsed(localStorage.getItem(CARDS_COLLAPSED_KEY) === '1'); } catch (e) {}
+  document.addEventListener('mouseover', e => {
+    const card = e.target.closest('#tab-library .work-card, #tab-wallpapers .wf-card');
+    if (card) cardPeekShow(card);
+  });
+  document.addEventListener('mouseout', e => {
+    if (!cardPeekSrc) return;
+    if (e.target !== cardPeekSrc && !cardPeekSrc.contains(e.target)) return;
+    if (e.relatedTarget && cardPeekSrc.contains(e.relatedTarget)) return;
+    cardPeekHide();
+  });
+  const main = document.querySelector('main');
+  if (main) main.addEventListener('scroll', cardPeekHide, { passive: true });
+  document.addEventListener('vixiq:tab-change', cardPeekHide);
+})();
+
 // ============ 🖼 当前壁纸 (桌面幻灯片) 信息窗 —— 2026-09-24 ============
 // 桌面幻灯片「现在播的是哪一张」Windows 写在注册表里 (HKCU\Control Panel\Desktop\WallPaper),
 // 后端读得到 → 这里定时问一句: 轮播时看到中意的图, 当场就知道是谁画的、库内对应哪一页、
