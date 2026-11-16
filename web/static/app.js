@@ -69,19 +69,16 @@ function cardPeekShow(card) {
   clone.classList.add('card-peek');
   clone.removeAttribute('data-key');
   clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
-  const width = Math.max(box.width, 220);
-  const left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8));
-  const below = window.innerHeight - box.top - 8;
-  const above = box.bottom - 8;
-  clone.style.width = width + 'px';
-  clone.style.left = left + 'px';
-  // 卡片靠下时向上展开, 尽量把完整卡片露出来
-  if (below >= 320 || below >= above) {
-    clone.style.top = Math.max(8, box.top) + 'px';
+  clone.style.left = box.left + 'px';
+  clone.style.width = box.width + 'px';
+  // 抽屉贴在卡片底边向下滑出; 卡片太靠底时改为贴视口底部, 保证能看到内容
+  const below = window.innerHeight - box.bottom - 8;
+  if (below >= 160) {
+    clone.style.top = box.bottom + 'px';
     clone.style.maxHeight = below + 'px';
   } else {
-    clone.style.bottom = Math.max(8, window.innerHeight - box.bottom) + 'px';
-    clone.style.maxHeight = above + 'px';
+    clone.style.bottom = '8px';
+    clone.style.maxHeight = Math.max(160, box.bottom - 8) + 'px';
   }
   document.body.appendChild(clone);
   cardPeekEl = clone;
@@ -96,6 +93,11 @@ function cardPeekShow(card) {
   // 「浮层出现 → 判定离开 → 移走浮层 → 再次出现」的闪烁循环 (2026-11-17 实际踩到)。
   var peekX = 0, peekY = 0, peekRaf = 0;
   function cardAtPoint(x, y) {
+    // 鼠标在抽屉里时保持当前展开 (抽屉可点击操作)
+    if (cardPeekEl && cardPeekSrc) {
+      const pr = cardPeekEl.getBoundingClientRect();
+      if (x >= pr.left && x <= pr.right && y >= pr.top && y <= pr.bottom) return cardPeekSrc;
+    }
     const cards = document.querySelectorAll('#tab-library .work-card, #tab-wallpapers .wf-card');
     for (let i = 0; i < cards.length; i++) {
       const r = cards[i].getBoundingClientRect();

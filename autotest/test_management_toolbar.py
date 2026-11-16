@@ -354,9 +354,10 @@ class ManagementToolbarTests(unittest.TestCase):
         self.assertEqual(btn.get("onclick"), "cardsToggle()")
 
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-        self.assertIn("main.cards-collapsed #tab-library .works-grid", css)
-        self.assertIn("main.cards-collapsed #tab-wallpapers .wf-grid", css)
+        self.assertIn("main.cards-collapsed #tab-library .work-card .w-body", css)
+        self.assertIn("main.cards-collapsed #tab-wallpapers .wf-card .wf-meta", css)
         self.assertIn(".card-peek {", css)
+        self.assertNotIn("main.cards-collapsed #tab-library .work-card .pages-badge", css)
 
         appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         for token in ("function cardsToggle", "function cardPeekShow", "function cardPeekHide"):

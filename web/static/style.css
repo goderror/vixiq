@@ -312,18 +312,8 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   gap: 14px;
 }
 
-/* ===== 卡片密度: 收起后只留缩略图与标题, 悬停用固定浮层完整展开 ===== */
-/* 收起态: 图库/壁纸网格列变窄, 一屏能放下更多卡片 */
-main.cards-collapsed #tab-library .works-grid {
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 8px;
-}
-main.cards-collapsed #tab-wallpapers .wf-grid {
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 8px;
-}
-/* 图库作品卡: 缩略图 + 来源标签 + 标题, 其余信息与操作按钮全部收起 */
-main.cards-collapsed #tab-library .work-card .pages-badge,
+/* ===== 卡片密度: 收起后保留正常缩略图与标题, 悬停从标题下方拉出抽屉 ===== */
+/* 缩略图与正常卡片同尺寸, 只收掉标题以下的信息; 页数角标照常显示 */
 main.cards-collapsed #tab-library .work-card .w-body > :not(.w-title):not(.tag) {
   display: none;
 }
@@ -332,23 +322,11 @@ main.cards-collapsed #tab-library .work-card .w-title {
   display: block; min-height: 0; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset;
 }
-/* 壁纸卡: 缩略图 + 文件名, 其余信息收起 */
 main.cards-collapsed #tab-wallpapers .wf-card .wf-more,
 main.cards-collapsed #tab-wallpapers .wf-card .wf-meta > :not(.wf-name) {
   display: none;
 }
 main.cards-collapsed #tab-wallpapers .wf-card .wf-meta { padding: 8px 10px; }
-/* 悬停浮层: 克隆完整卡片, 固定定位盖在列表上; 不参与布局所以不撑动其他卡片 */
-.card-peek {
-  position: fixed; z-index: 170; margin: 0;
-  overflow: auto; pointer-events: none;
-  background: var(--panel); border-radius: var(--radius);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, .26);
-}
-.card-peek .card-sel,
-.card-peek .wf-pick,
-.card-peek .pages-badge { display: none; }
-.card-peek .w-title { -webkit-line-clamp: unset; }
 /* 拖拽框选矩形: 半透明蓝, 跟随鼠标拖动 */
 .lib-boxsel {
   position: absolute; z-index: 60; pointer-events: none;
@@ -1813,3 +1791,28 @@ body.ob-open { overflow: hidden; }
   margin-bottom: 10px; font-size: 13px; font-weight: 600;
 }
 .wf-group-head .muted { font-weight: 400; font-size: 12px; color: var(--muted); }
+
+/* 卡片抽屉: 克隆卡片标题以下的内容, 贴在卡片底边向下滑出; 固定在 body 下, 不参与布局。
+   必须放在所有 .work-card/.wf-card 基础规则之后, 否则 position 会被卡片规则覆盖。 */
+.card-peek {
+  position: fixed; z-index: 170; margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--border); border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, .22);
+  overflow: auto;
+  animation: card-drawer .16s ease-out;
+}
+@keyframes card-drawer {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+/* 抽屉里不重复缩略图/标题/选择框/角标 */
+.card-peek .thumb,
+.card-peek .card-sel,
+.card-peek .pages-badge,
+.card-peek .w-title,
+.card-peek .wf-thumb,
+.card-peek .wf-pick,
+.card-peek .wf-more,
+.card-peek .wf-name { display: none; }
