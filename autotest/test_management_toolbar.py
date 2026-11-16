@@ -321,6 +321,31 @@ class ManagementToolbarTests(unittest.TestCase):
             )
 
     # ------------------------------------------------------------------ #
+    def test_peek_trigger_and_collapsed_menu(self):
+        """收起态只留总数与页码; 标签栏叠三角悬停滑出简化菜单。"""
+        peek = self.doc.find_by_id("mgmt-peek")
+        self.assertIsNotNone(peek, "missing #mgmt-peek")
+        self.assertTrue(peek.has_ancestor_class("tabs"), "#mgmt-peek must live in .tabs")
+        self.assertIsNotNone(peek.get("hidden"), "#mgmt-peek 默认隐藏")
+
+        css = (PROJECT_ROOT / "web" / "static" / "management-toolbar.css").read_text(encoding="utf-8")
+        self.assertIn("main.management-compact .management-main", css)
+        self.assertIn("main.management-compact.management-peek .management-main", css)
+
+        js = (PROJECT_ROOT / "web" / "static" / "management-toolbar.js").read_text(encoding="utf-8")
+        for token in ("function peekOpen", "function peekClose", "function paintPeek"):
+            self.assertIn(token, js, token)
+
+        for name in ("library", "authors", "wallpapers"):
+            toolbar = self._toolbar_for(name)
+            mains = toolbar.find_descendants(
+                lambda e: e.has_class("management-main")
+            )
+            self.assertEqual(
+                len(mains), 1, "toolbar %r needs one .management-main" % name
+            )
+
+    # ------------------------------------------------------------------ #
     def test_asset_versions_and_script_order(self):
         assets = self.doc.elements_with_tag("script") + self.doc.elements_with_tag("link")
         versioned = []

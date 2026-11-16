@@ -20,17 +20,59 @@ main {
   transition: background-color .2s, border-color .2s, box-shadow .2s;
 }
 
-/* 紧凑态：只变背景/边框/阴影与少量 padding，不做高度动画 */
+/* 紧凑态：菜单主体完全隐藏, 只留贴顶的总数与页码 */
+main.management-compact {
+  padding-top: 0;   /* 收起态只剩分页行: 去掉 main 顶部留白, 贴紧标签栏 */
+}
 main.management-compact .management-toolbar {
   background: var(--panel, #fff);
   border-bottom-color: var(--border, #ddd);
   box-shadow: 0 2px 6px rgba(0, 0, 0, .08);
-  padding: 4px 0;
+  padding: 0;
+  margin-bottom: 8px;
+}
+main.management-compact .management-main {
+  display: none;
 }
 main.management-compact .management-heading,
 main.management-compact .management-extra {
   display: none;
 }
+/* 悬停标签栏叠三角时滑出简化菜单: 浮层不参与布局, 不推挤列表 */
+main.management-compact.management-peek .management-main {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 30;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ddd);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .16);
+  padding: 8px 10px 10px;
+  animation: mgmt-peek-in .18s ease;
+}
+@keyframes mgmt-peek-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 标签栏的叠三角: 仅三个管理页且菜单收起时出现 */
+.tab.mgmt-peek {
+  margin-left: auto;
+  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tab.mgmt-peek[hidden] { display: none; }
+.tab.mgmt-peek svg { transition: transform .18s ease; }
+.tab.mgmt-peek[aria-expanded="true"] { color: var(--accent); background: #f4f6f8; }
+.tab.mgmt-peek[aria-expanded="true"] svg { transform: rotate(180deg); }
+/* 三角出现时回收站紧跟其后 */
+.tab.mgmt-peek:not([hidden]) ~ .tab-subtle { margin-left: 0; }
 
 /* 标题与页面工具同一行: 省掉一整行高度, 窄窗口允许换行 */
 .management-heading {
@@ -213,6 +255,11 @@ main.management-compact .management-pager {
   margin: 6px 0;
   padding: 4px 0;
 }
+/* 收起态吸顶区只剩分页行: 去掉所有留白, 贴紧标签栏 */
+main.management-compact .management-toolbar .lib-pager.management-pager {
+  margin: 0;
+  padding: 4px 0;
+}
 
 /* 滚动定位预留吸顶高度 */
 #lib-result,
@@ -266,7 +313,6 @@ main.management-compact .lib-action-toolbar,
 main.management-compact .wf-batch { padding: 6px; gap: 6px; }
 main.management-compact .management-selection .btn { padding: 6px 10px; font-size: 13px; }
 main.management-compact .lib-action-group + .lib-action-group { padding-left: 10px; }
-main.management-compact .management-pager { padding: 4px 0; margin-top: 4px; }
 
 /* 减少动画偏好 */
 @media (prefers-reduced-motion: reduce) {

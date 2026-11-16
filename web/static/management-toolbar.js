@@ -87,19 +87,68 @@
     });
   }
 
+  // ---- 标签栏叠三角: 收起态悬停滑出简化菜单 ----
+  var peekBtn = document.getElementById('mgmt-peek');
+  var peekTimer = 0;
+
+  function peekCancelClose() { clearTimeout(peekTimer); }
+
+  function peekOpen() {
+    if (!active || !state.compact) return;
+    clearTimeout(peekTimer);
+    if (!main.classList.contains('management-peek')) main.classList.add('management-peek');
+    if (peekBtn) peekBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  function peekClose() {
+    clearTimeout(peekTimer);
+    main.classList.remove('management-peek');
+    if (peekBtn) peekBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function peekFocused() {
+    var t = activeToolbar();
+    if (!t || !t.bar || !document.activeElement) return false;
+    if (peekBtn && peekBtn.contains(document.activeElement)) return false;
+    return t.bar.contains(document.activeElement);
+  }
+
+  function peekCloseSoon() {
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(function () {
+      if (peekFocused()) return;   // 焦点还在菜单里(例如正在输入搜索词)就不收起
+      peekClose();
+    }, 220);
+  }
+
+  function paintPeek() {
+    if (!peekBtn) return;
+    var show = !!active && !!state.compact;
+    if (show) {
+      peekBtn.removeAttribute('hidden');
+    } else {
+      peekBtn.setAttribute('hidden', '');
+      peekClose();
+    }
+  }
+
   // ---- 布局保护 + settle 世代 ----
   var settleGen = 0;
 
   function paint(force) {
-    if (!active) return;
+    if (!active) { paintPeek(); return; }
     var compact = !!state.compact;
     var changed = force || compact !== lastPaintCompact;
-    if (!changed && lastToggleText === (compact ? '展开菜单' : '收起菜单')) return;
+    if (!changed && lastToggleText === (compact ? '展开菜单' : '收起菜单')) {
+      paintPeek();
+      return;
+    }
 
     if (changed) {
       // beginLayout 防止 class 切换触发的回流被 state 当作“用户滚动”再次收起
       try { state.beginLayout(); } catch (e) {}
       applyCompactClass(compact);
+      if (!compact) peekClose();   // 菜单已完全展开, 不再需要浮层
       try { window.closeLibRedownload && window.closeLibRedownload(); } catch (e) {}
       var gen = ++settleGen;
       requestAnimationFrame(function () {
@@ -111,6 +160,7 @@
       });
     }
     paintToggles();
+    paintPeek();
   }
 
   // ---- 测量：只给结果定位留吸顶高度 ----
@@ -188,6 +238,8 @@
       decayIntent();
 
       var top = main.scrollTop;
+      // 滚动列表时收起滑出的简化菜单
+      if (main.classList.contains('management-peek') && !peekFocused()) peekClose();
 
       // 正在拖动滚动条：按 scrollTop 差推断意图
       if (dragging) {
@@ -237,6 +289,7 @@
 
   function onKeydown(e) {
     if (!active) return;
+    if (e.key === 'Escape' && main.classList.contains('management-peek')) { peekClose(); return; }
     if (isEditable(document.activeElement)) return;
     var k = e.key;
     var dir = 0;
@@ -369,12 +422,16 @@
       try { state.reset(0); } catch (err) {}
       applyCompactClass(false);
       lastPaintCompact = false;
+      peekClose();
       paintToggles();
+      paintPeek();
       scheduleMeasure();
     } else {
       active = null;
       main.classList.remove('management-compact');
       lastPaintCompact = null;
+      peekClose();
+      paintPeek();
       main.style.setProperty('--management-scroll-margin', '0px');
       lastMainMargin = '0px';
     }
@@ -398,6 +455,7 @@
       lastPaintCompact = false;
       paintToggles();
     }
+    paintPeek();
 
     // 只装一次监听
     main.addEventListener('scroll', onScroll, { passive: true });
@@ -411,6 +469,29 @@
     main.addEventListener('click', onPageClick);
     document.addEventListener('click', onToTopClick, true);
     document.addEventListener('vixiq:tab-change', onTabChange);
+
+    // 叠三角: 悬停/聚焦滑出, 移开或失焦延时收起; 点一下也能切换
+    if (peekBtn) {
+      peekBtn.addEventListener('mouseenter', function () { peekCancelClose(); peekOpen(); });
+      peekBtn.addEventListener('mouseleave', peekCloseSoon);
+      peekBtn.addEventListener('focus', peekOpen);
+      peekBtn.addEventListener('blur', peekCloseSoon);
+      peekBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (main.classList.contains('management-peek')) peekClose();
+        else peekOpen();
+      });
+    }
+    TABS.forEach(function (n) {
+      var t = toolbars[n];
+      if (!t || !t.bar) return;
+      t.bar.addEventListener('mouseenter', function () {
+        if (main.classList.contains('management-peek')) peekCancelClose();
+      });
+      t.bar.addEventListener('mouseleave', function () {
+        if (main.classList.contains('management-peek')) peekCloseSoon();
+      });
+    });
 
     // ResizeObserver：main + 3 toolbar
     if (typeof ResizeObserver === 'function') {
