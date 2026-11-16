@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117c`，上一提交 `68ddb0f`，本轮分页修正尚未提交）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117d`，上一提交 `6014800`，本轮壁纸页顶部调整尚未提交）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117c`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117d`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -230,6 +230,8 @@
 - 作者页删除已不存在的 `#authors-total-inline` 引用，总数改由 pager 渲染，单页时只显示「共 N 位」。
 - 验收：全量冒烟 135/135；合成数据无头实测（`_dev_runtime/diagnostics/check_pager_ui.py`）三页总数靠左、页码靠右、收起态分页可见；
   7 个资源已同步候选包/dist/安装版，配置哈希未变。安装版程序当时未运行，下次启动生效。
+- 同日追加（版本 `20261117d`）：壁纸夹路径与「共 X 张 · 大小 · 上次扫描」移入筛选按钮行并靠右（`.wf-location-row` 在 `#wf-filters` 内）；
+  `#wf-stats` 四个统计卡改为紧凑小卡片横排（高约 55px、总宽约 400px），不再占大块高度。
 
 ### 4.7 壁纸相关接口速查
 

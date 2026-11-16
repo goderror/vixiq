@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261117c">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117c">
+<link rel="stylesheet" href="/static/style.css?v=20261117d">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117d">
 </head>
 <body>
 
@@ -432,6 +432,8 @@
         <button class="btn filter-btn" data-f="orphan">未归属</button>
         <button class="btn filter-btn" data-f="dupe">重复</button>
         <button class="btn filter-btn" data-f="favorite">收藏</button>
+        <!-- 壁纸夹路径与扫描信息跟筛选按钮同一行, 靠右 -->
+        <span class="wf-location-row"><span id="wf-dir" class="status-line"></span><span id="wf-scan-tip" class="status-line"></span></span>
       </div>
         </div>
       </div>
@@ -454,7 +456,6 @@
       <div id="wf-pager" class="lib-pager management-pager"></div>
       </div>
       <!-- 以下随列表滚走 -->
-      <div class="wf-location-row"><span id="wf-dir" class="status-line"></span><span id="wf-scan-tip" class="status-line"></span></div>
       <div id="wf-stats" class="stats-grid"></div>
       <div id="wf-result"><div class="hint">加载中…</div></div>
     </div>
@@ -781,10 +782,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261117c"></script>
-<script src="/static/wallpaper-admin.js?v=20261117c"></script>
-<script src="/static/management-drawer-state.js?v=20261117c"></script>
-<script src="/static/management-toolbar.js?v=20261117c"></script>
+<script src="/static/app.js?v=20261117d"></script>
+<script src="/static/wallpaper-admin.js?v=20261117d"></script>
+<script src="/static/management-drawer-state.js?v=20261117d"></script>
+<script src="/static/management-toolbar.js?v=20261117d"></script>
 </body>
 </html>
 
