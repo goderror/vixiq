@@ -43,6 +43,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from utils.config import load_config
+from utils import proc
 
 DEFAULT_PORT = 7790
 # 全局退出标志: 后台线程检测到后应尽快退出
@@ -144,17 +145,19 @@ def _kill_zombie_port(port: int):
     """端口被占但无 HTTP 响应 (僵尸进程残留 socket) → 找到并杀掉占用端口的进程。
     Windows: netstat 查 PID → taskkill /F。"""
     try:
-        out = subprocess.run(
-            f'netstat -ano | findstr ":{port}" | findstr LISTENING',
-            shell=True, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=5)
+        # 不用 shell 管道: 打包版没控制台, 起 cmd.exe 会闪一下黑框
+        out = proc.run(["netstat", "-ano"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=8)
+        port_tag = f":{port} "
         for line in out.stdout.strip().splitlines():
+            if "LISTENING" not in line or port_tag not in line:
+                continue
             parts = line.split()
             if len(parts) >= 5:
                 pid = parts[-1]
                 if pid.isdigit() and int(pid) != os.getpid():
-                    subprocess.run(f'taskkill /F /PID {pid}',
-                                   shell=True, capture_output=True, timeout=5)
+                    proc.run(["taskkill", "/F", "/PID", pid],
+                             capture_output=True, timeout=5)
                     print(f"🧹 已清理占用端口 {port} 的残留进程 (PID {pid})")
     except Exception:
         pass

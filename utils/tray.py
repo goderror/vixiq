@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import subprocess
 import threading
 import time
 import webbrowser
@@ -33,6 +32,7 @@ from pathlib import Path
 
 from core.wallpaper_trace import trace_current_wallpaper, wallpaper_file
 from utils import paths
+from utils import proc
 
 # ── 菜单命令 id (TrackPopupMenu 直接返回它, 省掉 WM_COMMAND 分发) ──
 CMD_OPEN_GALLERY = 1001
@@ -721,7 +721,7 @@ class Tray:
         if not p or not os.path.isfile(p):
             return
         try:
-            subprocess.Popen(["explorer", f"/select,{os.path.normpath(p)}"])
+            proc.popen(["explorer", f"/select,{os.path.normpath(p)}"])
         except Exception:
             pass
 

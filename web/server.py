@@ -22,7 +22,6 @@ import os
 import queue
 import re
 import sqlite3
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -70,6 +69,7 @@ from core.wallpaper_index import (
 from db.store import PixivDatabase, WSt, PSt, pixiv_natural_key, parse_foreign_account, \
     folder_author_name_usable
 from utils import paths
+from utils import proc
 from utils import audit_log
 # 外网请求统一走 utils.net: 自动跟随 Windows 系统代理 (直连 pixiv 会被墙)
 from utils.net import urlopen
@@ -1122,10 +1122,10 @@ def _run_ps_dialog(ps: str) -> "list[str]":
     if os.name != "nt":
         return []
     try:
-        p = subprocess.run(
+        p = proc.run(
             ["powershell", "-NoProfile", "-STA", "-Command", ps],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=300, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            timeout=300)
     except Exception:
         return []
     return [ln.strip() for ln in (p.stdout or "").splitlines() if ln.strip()]
@@ -1208,11 +1208,10 @@ def _recycle_files(paths: "list[str]") -> "tuple[int, list[str]]":
             "foreach ($b in $bad) { [Console]::Out.Write($b + \"`n\") }"
         )
         env = dict(os.environ, PIXIV_RECYCLE_LIST=str(lst))
-        p = subprocess.run(
+        p = proc.run(
             ["powershell", "-NoProfile", "-STA", "-Command", ps],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=600, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            env=env)
+            timeout=600, env=env)
         out = [ln.strip() for ln in (p.stdout or "").splitlines()]
         n = int(out[0]) if out and out[0].isdigit() else 0
         bad = [x for x in out[1:] if x]
@@ -6353,7 +6352,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         if f is None:
             return jsonify({"status": "error", "msg": "读不到当前壁纸路径"}), 400
         try:
-            subprocess.Popen(f'explorer /select,"{f}"', shell=True)
+            proc.popen(["explorer", f"/select,{f}"])
             return jsonify({"status": "ok", "path": str(f)})
         except Exception as e:
             return jsonify({"status": "error", "msg": str(e)}), 500
@@ -6722,7 +6721,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             target = img_root
         try:
             if target.is_file():
-                subprocess.Popen(f'explorer /select,"{target}"', shell=True)
+                proc.popen(["explorer", f"/select,{target}"])
             else:
                 os.startfile(str(target))
             return jsonify({"status": "ok"})
@@ -9773,8 +9772,8 @@ def _kill_browsers_fast() -> None:
             pass
     for pid in pids:
         try:
-            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True,
-                           capture_output=True, timeout=5)
+            proc.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                     capture_output=True, timeout=5)
         except Exception:
             pass
     with _client_lock:

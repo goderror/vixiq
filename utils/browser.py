@@ -12,7 +12,6 @@ __init__ 里逐字重复的 EdgeOptions 配置。
 import json
 import os
 import shutil
-import subprocess
 import threading
 import time
 import uuid
@@ -24,6 +23,7 @@ from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 
 from utils import paths
+from utils import proc
 from utils.config import load_config
 from utils.reporter import Reporter
 from utils.sec import load_cookies_smart
@@ -153,10 +153,11 @@ def _assign_browser_tree_to_job(driver_pid: int, user_data_dir: "Path") -> bool:
             # errors="replace": 中文 Windows 的 wmic 输出混有 GBK 字节,
             # 严格 UTF-8 解码会抛 UnicodeDecodeError → 这里返回空集 →
             # 整棵进程树一个都没挂进作业对象 (2026-11 孤儿驱动的真正原因)
-            out = subprocess.run(
-                "wmic process where \"name='msedge.exe' or name='msedgedriver.exe'\" "
-                "get ProcessId,ParentProcessId,CommandLine /format:csv",
-                shell=True, capture_output=True, text=True,
+            out = proc.run(
+                ["wmic", "process", "where",
+                 "name='msedge.exe' or name='msedgedriver.exe'",
+                 "get", "ProcessId,ParentProcessId,CommandLine", "/format:csv"],
+                capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=8)
         except Exception:
             return set()
@@ -221,10 +222,11 @@ def kill_orphan_browser_tree(timeout: int = 8) -> int:
     返回结束的进程数。"""
     killed = 0
     try:
-        out = subprocess.run(
-            "wmic process where \"name='msedge.exe' or name='msedgedriver.exe'\" "
-            "get ProcessId,CommandLine /format:csv",
-            shell=True, capture_output=True, text=True,
+        out = proc.run(
+            ["wmic", "process", "where",
+             "name='msedge.exe' or name='msedgedriver.exe'",
+             "get", "ProcessId,CommandLine", "/format:csv"],
+            capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout)
     except Exception:
         return 0
@@ -247,8 +249,8 @@ def kill_orphan_browser_tree(timeout: int = 8) -> int:
         if hit_profile or hit_driver:
             try:
                 # /T 连带 Edge 子树一起杀: 只杀 driver 的话, 渲染/GPU 子进程会留下
-                subprocess.run(f"taskkill /F /T /PID {pid}", shell=True,
-                               capture_output=True, timeout=5)
+                proc.run(["taskkill", "/F", "/T", "/PID", pid],
+                         capture_output=True, timeout=5)
                 killed += 1
             except Exception:
                 pass
@@ -394,9 +396,9 @@ def _driver_version(exe: str) -> "str | None":
             # errors="replace": msedgedriver 的 --version 输出里混有 GBK 字节,
             # 按 UTF-8 严格解码会抛 UnicodeDecodeError → 版本读成 None →
             # 误判「版本不明」而跳过捆绑 (2026-11 实测)
-            out = subprocess.run([exe, "--version"], capture_output=True,
-                                 text=True, encoding="utf-8",
-                                 errors="replace", timeout=8)
+            out = proc.run([exe, "--version"], capture_output=True,
+                           text=True, encoding="utf-8",
+                           errors="replace", timeout=8)
             combined = (out.stdout or "") + " " + (out.stderr or "")
             ver = None
             for tok in combined.split():

@@ -3038,6 +3038,7 @@ def run_suite() -> SuiteResult:
     suite.add("T135", "🖼 查询页「按页下载」之一(支持只下选中页 / 双击开大图 / 原图与下载按钮 / 缩略图多选区): 迁移 020 给队列加 pages TEXT(NULL=整部, 向后兼容, 且不塞 strategy——那列被当 DownloadStrategy 枚举解析) + queue_add(pages) 落排序去重 JSON 串 + GET /api/artwork/<id>/pages(未登录 200+need_login 不是401 / low=regular high=original / 合并库内页状态 / 超远端页数的标 is_extra / 不存在404) + POST /api/cart 带 pages 入队且 page_count 仍写远端总页数 (离线)", t135_artwork_pages_api_and_queue_pages)
     suite.add("T136", "🖼 查询页「按页下载」之二 + 🔍 大图 1:1 放大 + ↔ 图库遮挡修复(调整页序时「上个作品/下个作品」挡住「完成」; 低清与原图看不出区别 / 是否一打开就取原图): _only_pages_of 纯函数(脏数据退回整部) + 引擎页级绕过「整部已下完就跳过」(否则点补某页被静默跳过) + 爬虫只下选中页且页级拒绝回落浏览器通道(它会按URL规律把未选页补齐) + init_pages 仍按远端总页数 + 前端 openRemoteLightbox(默认低清/显示原图/下载该页/🔗原网页, 没有上个下个作品) + 点图 1:1 放大(元素自身撑到自然尺寸 + 拖拽平移, 换页收缩放/同页切原图保留) + 原图只在点按钮后才加载 + 缩略图多选条(全选/已入库灰掉) + 卡片点击不再开原站 + 进调整页序收起那两颗按钮 + 拖拽夹取改用容器实际渲染尺寸(修「并不能拖动」: curNw 存的是自然尺寸, 拿它当视口上限恒为 0) + 放大态图片元素自身撑到自然尺寸(修「只是把这个块拖动 / 不是查看其他区域」: 只给 object-fit:none 时裁剪窗口锚在元素盒子上) + 缩略图多选条可折叠且跨打开记忆(折叠后大图高度 0.56→0.72, 修「✕ 只露一半 / 缩略图吃掉半屏」+ 放大态视口横向 97vw/竖向按实测行高吃满, 并用 capNorm 兜住「放大反而变小」+ 「点击查看大图」下沉本地图库查看器(同装 setupZoom, ✕ 一起改锚视口, is-remote 死代码已删) + 缩略图条 loading=lazy / 去掉相邻页原图预取 / /api/img 改流式转发带 Cache-Control) (离线静态)", t136_page_download_engine_and_frontend)
     suite.add("T137", "🖼 壁纸管理(先建归属再查重): 迁移 021 wallpaper_files 索引 + 快扫(文件名ID/MD5)与 ORB 慢扫(手动裁剪版)建立归属 + 没变的已归属文件第二次直接复用 + 列表统计/重复组(同作品两张=一组) + 设壁纸查重改读索引(不再现场跑ORB) + 删除只收壁纸夹内相对名并清索引 + 前端壁纸管理紧挨作者管理 + 大图「设为壁纸」圆形按钮且点击先关查看器 (离线)", t137_wallpaper_index_and_admin_page)
+    suite.add("T138", "🧹 子进程不许闪命令窗口(2026-11-16 用户报「偶尔快速闪出黑框」): 运行时代码禁用 shell=True + subprocess.run/Popen 必须带 creationflags/startupinfo + 统一走 utils.proc (离线静态)", t138_subprocess_no_console_flash)
     suite.write_report()
     return suite
 
@@ -10589,15 +10590,17 @@ def t127_wallpaper_current_trace() -> None:
     from web.server import create_app
 
     tmp = Path(tempfile.mkdtemp(prefix="t127wall_"))
-    img_root = tmp / "img"
-    wall_dir = tmp / "wall"
+    # resolve: TEMP 可能是 8.3 短名 (ADMINI~1), 而服务端会把根目录 resolve 成长名;
+    # 两边不一致会让"文件在图库内"的判断失效 (测试环境差异, 不是功能问题)
+    img_root = (tmp / "img").resolve()
+    wall_dir = (tmp / "wall").resolve()
     img_root.mkdir(parents=True, exist_ok=True)
     wall_dir.mkdir(parents=True, exist_ok=True)
     orig_ud, orig_dr = upaths.user_data, upaths.data_root
     orig_wf = wsrv._wallpaper_file
     orig_recycle = wsrv._recycle_files
     orig_orb = wsrv._wall_orb_candidates
-    orig_popen = wsrv.subprocess.Popen
+    orig_popen = wsrv.proc.popen
     upaths.user_data = lambda rel: (tmp / str(rel))
     upaths.data_root = lambda: tmp
 
@@ -10774,13 +10777,15 @@ def t127_wallpaper_current_trace() -> None:
 
         # ---------- ⑪ 打开所在文件夹: 路径全由服务端读注册表, 客户端不传 ----------
         popped = []
-        wsrv.subprocess.Popen = lambda *a, **kw: popped.append(a)
+        # 2026-11-16: 子进程统一走 utils.proc (隐藏黑框), 打桩点跟着换
+        wsrv.proc.popen = lambda *a, **kw: popped.append(a)
         try:
             r = client.post("/api/wallpaper/open-folder")
         finally:
-            wsrv.subprocess.Popen = orig_popen
+            wsrv.proc.popen = orig_popen
         assert r.status_code == 200 and r.get_json().get("path") == str(wa), r.get_json()
-        assert popped and str(wa) in str(popped[0][0]), popped
+        # 参数列表形式: ["explorer", "/select,<路径>"], 逐个参数里找路径
+        assert popped and any(str(wa) in str(arg) for arg in popped[0][0]), popped
 
         # ---------- ⑫ 前端接线静态护栏 (离线) ----------
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
@@ -10810,7 +10815,7 @@ def t127_wallpaper_current_trace() -> None:
         wsrv._wallpaper_file = orig_wf
         wsrv._recycle_files = orig_recycle
         wsrv._wall_orb_candidates = orig_orb
-        wsrv.subprocess.Popen = orig_popen
+        wsrv.proc.popen = orig_popen
         wsrv._WALL_DEEP_CACHE.clear()
         _wt127.wallpaper_dir = _orig_wdir127
         shutil.rmtree(str(tmp), ignore_errors=True)
@@ -13296,6 +13301,41 @@ def t137_wallpaper_index_and_admin_page() -> None:
             wsrv._WALL_FILES.clear()
             wsrv._WALL_FILES.update(orig_scan_state)
         shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t138_subprocess_no_console_flash() -> None:
+    """🧹 子进程不许闪命令窗口 (2026-11-16 用户报「偶尔快速闪出命令窗口然后消失」)。
+
+    打包版是 runw.exe —— 没有控制台。从这里起任何控制台程序
+    (wmic / taskkill / netstat / icacls / powershell / cmd …) 都会先弹黑框再消失。
+    典型触发点: 浏览器进程守护每 0.8s 补扫一次 wmic, 启动一次浏览器就闪一串。
+
+    三条护栏:
+      ① 不许 shell=True —— 它会多起一个 cmd.exe, 是闪窗主因;
+      ② subprocess.run/Popen 必须带 creationflags 或 startupinfo;
+      ③ 统一入口是 utils.proc.run / utils.proc.popen。
+    只扫运行时代码 (autotest 是开发工具, 不进打包产物)。
+    """
+    import re as _re
+    targets = [PROJECT_ROOT / "main.py"]
+    for d in ("web", "core", "db", "utils"):
+        p = PROJECT_ROOT / d
+        if p.is_dir():
+            targets.extend(p.rglob("*.py"))
+    bad = []
+    for p in sorted(set(targets)):
+        rel = str(p.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        if rel == "utils/proc.py":      # 唯一允许直接调 subprocess 的封装层
+            continue
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        for i, line in enumerate(lines, 1):
+            if "shell=True" in line:
+                bad.append(f"{rel}:{i} 用了 shell=True")
+            if _re.search(r"subprocess\.(run|Popen|call|check_output|check_call)\(", line):
+                block = "\n".join(lines[i - 1:i + 6])
+                if "creationflags" not in block and "startupinfo" not in block:
+                    bad.append(f"{rel}:{i} 裸调用 subprocess")
+    assert not bad, "这些地方会闪命令窗口: " + "；".join(bad[:6])
 
 
 def main() -> int:

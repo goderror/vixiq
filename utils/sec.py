@@ -17,11 +17,12 @@ import ctypes
 import json
 import os
 import secrets
-import subprocess
 import sys
 from ctypes import wintypes
 from pathlib import Path
 from typing import Iterable
+
+from utils import proc
 
 
 # ================================================================
@@ -276,13 +277,13 @@ def _lock_acl_current_user(path: str | os.PathLike) -> bool:
         #
         # 顺序: 先显式给当前用户 FULL(确保 Temp/沙箱这类特殊 ACL 目录也可读)
         base = ["icacls", str(path), "/grant:r", f"{user}:(F)", "/C", "/Q"]
-        r1 = subprocess.run(base, capture_output=True, text=True, timeout=15)
+        r1 = proc.run(base, capture_output=True, text=True, timeout=15)
         # 再对"陌生人"SID deny 读/写/删。SID 列表参考:
         #   GU       = Guests 组
         #   S-1-5-7  = ANONYMOUS LOGON (匿名登录)
         for deny_target in ("GU", "*S-1-5-7"):
             try:
-                subprocess.run(
+                proc.run(
                     ["icacls", str(path), "/deny",
                      f"{deny_target}:(RX,WDAC,WO,DE)", "/C", "/Q"],
                     capture_output=True, text=True, timeout=10)
