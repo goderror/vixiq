@@ -9,6 +9,7 @@ venv/
 
 # 运行时数据(程序自动生成,不入库)
 data/
+_dev_runtime/
 config/user.json
 config/user.json.local
 

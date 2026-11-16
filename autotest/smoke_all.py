@@ -3037,8 +3037,13 @@ def run_suite() -> SuiteResult:
     suite.add("T134", "🚀📁 启动与托盘「立即生效」+ 📁 路径设置(开关存盘即生效 / 所有路径均可配置 / 双击托盘开图库 / 数据目录不占系统盘): 除「启动自动开浏览器」外全部存盘即生效(热应用钩子 set_launcher_apply→main._apply_launcher 就地起停托盘/小控件, 心跳守护按代次门控——关了不许再自杀) + auto_open_browser 如实回报 startup_only + /api/paths 三处可改目录(图片目录可填单段相对名或绝对路径, 数据根/临时目录只收绝对路径; 空=回默认, 相对名拒绝400) + 落盘后当场回新落点(不靠带缓存的 paths.data_root) + 占用检测(数据库/图片/缩略图/特征库/临时各回 MB, 目录有上限地数) + /api/paths/temp/clean 一键清临时目录 + /api/paths/pick 复用系统目录对话框(取消不改/失败必回 JSON 不能当取消) + 位置一览含壁纸夹 + 文案只留一句「重启 Vixiq 后生效」不摆理由 (离线)", t134_launcher_hotapply_and_paths)
     suite.add("T135", "🖼 查询页「按页下载」之一(支持只下选中页 / 双击开大图 / 原图与下载按钮 / 缩略图多选区): 迁移 020 给队列加 pages TEXT(NULL=整部, 向后兼容, 且不塞 strategy——那列被当 DownloadStrategy 枚举解析) + queue_add(pages) 落排序去重 JSON 串 + GET /api/artwork/<id>/pages(未登录 200+need_login 不是401 / low=regular high=original / 合并库内页状态 / 超远端页数的标 is_extra / 不存在404) + POST /api/cart 带 pages 入队且 page_count 仍写远端总页数 (离线)", t135_artwork_pages_api_and_queue_pages)
     suite.add("T136", "🖼 查询页「按页下载」之二 + 🔍 大图 1:1 放大 + ↔ 图库遮挡修复(调整页序时「上个作品/下个作品」挡住「完成」; 低清与原图看不出区别 / 是否一打开就取原图): _only_pages_of 纯函数(脏数据退回整部) + 引擎页级绕过「整部已下完就跳过」(否则点补某页被静默跳过) + 爬虫只下选中页且页级拒绝回落浏览器通道(它会按URL规律把未选页补齐) + init_pages 仍按远端总页数 + 前端 openRemoteLightbox(默认低清/显示原图/下载该页/🔗原网页, 没有上个下个作品) + 点图 1:1 放大(元素自身撑到自然尺寸 + 拖拽平移, 换页收缩放/同页切原图保留) + 原图只在点按钮后才加载 + 缩略图多选条(全选/已入库灰掉) + 卡片点击不再开原站 + 进调整页序收起那两颗按钮 + 拖拽夹取改用容器实际渲染尺寸(修「并不能拖动」: curNw 存的是自然尺寸, 拿它当视口上限恒为 0) + 放大态图片元素自身撑到自然尺寸(修「只是把这个块拖动 / 不是查看其他区域」: 只给 object-fit:none 时裁剪窗口锚在元素盒子上) + 缩略图多选条可折叠且跨打开记忆(折叠后大图高度 0.56→0.72, 修「✕ 只露一半 / 缩略图吃掉半屏」+ 放大态视口横向 97vw/竖向按实测行高吃满, 并用 capNorm 兜住「放大反而变小」+ 「点击查看大图」下沉本地图库查看器(同装 setupZoom, ✕ 一起改锚视口, is-remote 死代码已删) + 缩略图条 loading=lazy / 去掉相邻页原图预取 / /api/img 改流式转发带 Cache-Control) (离线静态)", t136_page_download_engine_and_frontend)
-    suite.add("T137", "🖼 壁纸管理(先建归属再查重): 迁移 021 wallpaper_files 索引 + 快扫(文件名ID/MD5)与 ORB 慢扫(手动裁剪版)建立归属 + 没变的已归属文件第二次直接复用 + 列表统计/重复组(同作品两张=一组) + 设壁纸查重改读索引(不再现场跑ORB) + 删除只收壁纸夹内相对名并清索引 + 前端壁纸管理紧挨作者管理 + 大图「设为壁纸」圆形按钮且点击先关查看器 (离线)", t137_wallpaper_index_and_admin_page)
+    suite.add("T137", "🖼 壁纸管理(先建归属再查重): 迁移 021 wallpaper_files 索引 + 快扫(文件名ID/MD5)与 ORB 慢扫(手动裁剪版)建立归属 + 没变的已归属文件第二次直接复用 + 列表统计/重复组(同图版本一组、不同图片分开) + 设壁纸查重改读索引(不再现场跑ORB) + 删除只收壁纸夹内相对名并清索引 + 前端壁纸管理紧挨作者管理 + 大图「设为壁纸」圆形按钮且点击先关查看器 (离线)", t137_wallpaper_index_and_admin_page)
     suite.add("T138", "🧹 子进程不许闪命令窗口(2026-11-16 用户报「偶尔快速闪出黑框」): 运行时代码禁用 shell=True + subprocess.run/Popen 必须带 creationflags/startupinfo + 统一走 utils.proc (离线静态)", t138_subprocess_no_console_flash)
+    suite.add("T139", "同图判重：不同图片不合并、原图/裁剪版归组、旧归属补图片页号、真实 ORB 与接口回归（12项，合成图片）", t139_wallpaper_image_duplicates)
+    suite.add("T140", "已有壁纸选择：预览/当前版本/确认设置/失败重试/路径与安全模式（9项，合成图片）", t140_wallpaper_existing)
+    suite.add("T141", "壁纸管理：归属、分组、整理、回收恢复、失败回滚与路径保护（18项，合成图片）", t141_wallpaper_admin)
+    suite.add("T142", "图库操作与统计：筛选/跨页/去重/占位页/双下载入口及选择统计（隔离数据）", t142_gallery_controls)
+    suite.add("T143", "三管理页共享吸顶抽屉：结构/控件唯一性、状态与控制器集成、防回跳/手动展开与焦点保护", t143_management_drawer)
     suite.write_report()
     return suite
 
@@ -9271,7 +9276,9 @@ def t115_queue_clear_scope_and_writeback_guard() -> None:
         "旧的「清空已完成」实现应已被跟随筛选的 clearTasks 取代"
     assert 'id="dl-clear"' in idx_html, "index.html 缺少新的清空按钮"
     assert "🧹 清空当前栏" in idx_html, "清空按钮文案应说明「清当前栏」"
-    assert "🗑️ 已失效" in idx_html, "图库筛选按钮应叫「已失效」(「已删除」有歧义)"
+    # 异常筛选合并成下拉后, 「已失效」的文案仍在 option 里
+    assert '<option value="deleted">已失效</option>' in idx_html, \
+        "异常筛选下拉要包含「已失效」(「已删除」有歧义)"
     assert "🗑️ 已删除" not in idx_html, "不该再残留「已删除」这个有歧义的按钮文案"
 
 
@@ -9922,22 +9929,44 @@ def t120_keyword_paging_and_lib_layout() -> None:
     # DOM 兜底也得认页码, 否则 ajax 挂掉时「换一批」一直给同一页
     assert "&word={encoded}&p={p}" in sc_src, "DOM 兜底要带上页码"
 
-    # ---------- D 布局: 三个状态筛选挪到「全选」左边 ----------
+    # ---------- D 布局: 异常筛选是独立下拉, 全选在顶部主行 ----------
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    i_filters = html.index('<div class="field-row lib-filters">')
-    i_ops = html.index('<div class="lib-ops-row">')
-    i_batch = html.index('<div class="lib-batch-group">')
-    i_miss = html.index('id="lib-f-missing"')
+    i_filters = html.index('class="field-row lib-filters" id="lib-filters"')
+    i_ops = html.index('<div class="lib-selection-row">')
+    i_batch = html.index('class="lib-batch-group lib-action-toolbar"')
+    i_anomaly = html.index('id="lib-f-anomaly"')
     i_selall = html.index('id="lib-sel-all"')
-    assert i_filters < i_ops < i_batch < i_miss < i_selall, (
-        "「缺元数据」必须已从筛选行搬进操作行, 且排在「全选」左边"
-        f"(filters={i_filters} ops={i_ops} batch={i_batch} miss={i_miss} selall={i_selall})")
-    for bid in ('id="lib-f-missing-file"', 'id="lib-f-deleted"'):
-        assert i_miss < html.index(bid) < i_selall, f"{bid} 也要在「全选」左边且相邻"
+    assert i_filters < i_anomaly < i_ops < i_batch, (
+        "「异常筛选」要在筛选行内, 且排在操作行之前"
+        f"(filters={i_filters} anomaly={i_anomaly} ops={i_ops} batch={i_batch})")
+    assert i_selall < i_ops, "「全选」在顶部主行, 未选中时也能直接点"
+    assert i_selall < i_anomaly
+    for old in ('id="lib-f-missing"', 'id="lib-f-missing-file"', 'id="lib-f-deleted"'):
+        assert old not in html, f"三个异常按钮已合并成下拉, 不该再有 {old}"
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     grp = css.split(".lib-batch-group {")[1].split("}")[0]
     assert "flex-wrap: wrap" in grp, "批量组按钮变多了, 窄窗口要允许内部换行不溢出"
-    assert "justify-content: flex-end" in grp, "换行后仍要保持右对齐"
+    assert "justify-content:flex-start" in css.split(".lib-action-toolbar {")[1].split("}")[0], "动作分组从左向右排列"
+
+    # ---------- D3 顶部菜单: 滚轮统一滚主列表 + 展开区不再自己滚 ----------
+    mt = (PROJECT_ROOT / "web" / "static" / "management-toolbar.js").read_text(encoding="utf-8")
+    assert "extra.contains(e.target)" not in mt, \
+        "鼠标停在筛选/按钮上滚轮不能被跳过, 否则列表滚不动"
+    assert "inScrollableOverlay" in mt, "只允许候选浮层/下拉菜单拦滚轮"
+    mcss = (PROJECT_ROOT / "web" / "static" / "management-toolbar.css").read_text(encoding="utf-8")
+    _extra_css = mcss.split(".management-extra {")[1].split("}")[0]
+    assert "overflow-y" not in _extra_css and "max-height" not in _extra_css, \
+        "展开区取消独立滚动条 (滚轮直接滚主列表)"
+    # 统计卡/当前壁纸卡片随列表滚走, 不吸顶占高度
+    assert html.index('id="lib-stats"') > html.index('class="management-selection"'), \
+        "图库统计卡要移出吸顶工具栏"
+    assert html.index('id="wf-stats"') > html.index('class="management-selection"'), \
+        "壁纸统计卡要移出吸顶工具栏"
+    # 未选中时操作行整行收起
+    _appjs3 = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    _wjs3 = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
+    assert "selBox.hidden = n === 0" in _appjs3 and "selBox.hidden = n === 0" in _wjs3, \
+        "未选中时图库/壁纸的操作行要收起"
 
     # ---------- D2 前端翻批接线 ----------
     appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
@@ -10311,7 +10340,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261116c" and _mss.group(1) == "20261116c", \
+    assert _mjs and _mss and _mjs.group(1) == "20261117a" and _mss.group(1) == "20261117a", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10406,7 +10435,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261116c', html) and _re.search(r'app\.js\?v=20261116c', html), \
+    assert _re.search(r'style\.css\?v=20261117a', html) and _re.search(r'app\.js\?v=20261117a', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10793,7 +10822,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261116c" in html and "app.js?v=20261116c" in html, \
+        assert "style.css?v=20261117a" in html and "app.js?v=20261117a" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -12839,6 +12868,7 @@ def t134_launcher_hotapply_and_paths() -> None:
         assert set(j["sizes"]) == {"db", "thumbs", "temp", "feature_db", "img"}, j["sizes"]
 
         # ---------- ⑥ 前端接线 ----------
+        wall_js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
         js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
         for _need in ("loadPaths()", "function paintPaths(", "function pickPathDir(",
@@ -13131,7 +13161,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261116c" in _h and "style.css?v=20261116c" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261117a" in _h and "style.css?v=20261117a" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13147,7 +13177,7 @@ def t137_wallpaper_index_and_admin_page() -> None:
     ① 迁移 021 建 wallpaper_files 索引表;
     ② 快扫: 文件名作品ID / MD5 与库内页一致 → 归属; 慢扫: ORB 视觉命中手动裁剪版;
        没变且已归属的文件第二次扫描直接复用 (不重算 MD5 / 不重跑 ORB);
-    ③ GET /api/wallpaper/files 返回统计 + 重复组 (同作品两张 = 一组);
+    ③ GET /api/wallpaper/files 返回统计 + 重复组 (同图的原图/裁剪版为一组);
     ④ 设壁纸查重改读索引 (_wall_dupes_for): 能查到不带 ID 的裁剪版, 不再现场跑 ORB;
     ⑤ 删除只收壁纸夹内的相对名 (夹外/图库路径一律拒绝), 并清掉索引记录;
     ⑥ 前端: 壁纸管理紧挨作者管理; 大图「设为壁纸」与 ‹ › 同款圆形按钮, 点击先关查看器。
@@ -13236,7 +13266,7 @@ def t137_wallpaper_index_and_admin_page() -> None:
         assert j["stats"]["owned"] == 2 and j["stats"]["orphan"] == 1, j["stats"]
         assert j["stats"]["dupes"] == 1 and j["stats"]["dupe_files"] == 2, j["stats"]
         g = j["groups"][0]
-        assert g["kind"] == "artwork" and g["artwork_id"] == "700001", g
+        assert g["kind"] == "page" and g["artwork_id"] == "700001" and g["page_num"] == 0, g
         assert sorted(g["files"]) == ["700001_p0.png", "crop_manual.jpg"], g
         kinds = {x["name"]: x["match_kind"] for x in j["items"]}
         assert kinds["700001_p0.png"] == "md5" and kinds["crop_manual.jpg"] == "visual", kinds
@@ -13244,7 +13274,7 @@ def t137_wallpaper_index_and_admin_page() -> None:
         assert client.get(j["items"][0]["thumb"]).status_code == 200, j["items"][0]
 
         # ---------- ④ 设壁纸查重改读索引 (能查到不带 ID 的裁剪版) ----------
-        dupes = wsrv._wall_dupes_for("700001")
+        dupes = wsrv._wall_dupes_for("700001", page_num=0)
         assert len(dupes) == 2 and {d["kind"] for d in dupes} == {"md5", "visual"}, dupes
         assert wsrv._wall_dupes_for("800000") == []
 
@@ -13265,6 +13295,7 @@ def t137_wallpaper_index_and_admin_page() -> None:
         assert "crop_manual.jpg" not in [x["name"] for x in j["items"]], j["items"]
 
         # ---------- ⑥ 前端接线 ----------
+        wall_js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
         js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
@@ -13272,7 +13303,7 @@ def t137_wallpaper_index_and_admin_page() -> None:
         _i_auth = html.index('data-tab="authors"')
         _i_wall = html.index('data-tab="wallpapers"')
         _i_trash = html.index('data-tab="trash"')
-        assert _i_lib < _i_auth < _i_wall, "图片/作者/壁纸三页要连着"
+        assert _i_lib < _i_wall < _i_auth, "图片/作者/壁纸三页要连着"
         assert not (_i_lib < _i_trash < _i_wall), "回收站不许插在图片/作者/壁纸中间"
         assert _i_trash > html.index('data-tab="stats"'), \
             "回收站要挪到导航右端 (低频操作, 不抢主功能的位置)"
@@ -13280,11 +13311,11 @@ def t137_wallpaper_index_and_admin_page() -> None:
         assert 'aria-label="回收站"' in html and 'data-tab="trash">回收站' not in html, \
             "回收站页签只留图标 (文案在 title/aria-label 里)"
         assert 'id="tab-wallpapers"' in html and 'onclick="wallFilesScan(false)"' in html
-        assert "function wallFilesEnter()" in js and "function wallFilesCard(f)" in js
+        assert "function wallFilesEnter()" in wall_js and "function wallFilesCard(f)" in wall_js
         assert "else if (name === 'wallpapers') wallFilesEnter();" in js
         assert "lightbox-wall" in js and ".lightbox-wall" in css, \
             "设为壁纸要跟 ‹ › 同款圆形按钮, 不许挤在信息行里"
-        assert "safeThumb(f.thumb, { is_r18: f.is_r18 })" in js, \
+        assert "safeThumb(f.thumb, f)" in wall_js, \
             "壁纸管理页缩略图也要走安全模式 (R18 / 未归属一律不加载真实像素)"
         assert "lb-wall-btn" not in js and "lb-wall-btn" not in css, "旧的信息行文字按钮要删干净"
         _wc = js.split("wallBtn.addEventListener('click'")[1].split("// 把 url 放到")[0]
@@ -13385,6 +13416,57 @@ def main() -> int:
     print(f"== SMOKE SUMMARY: {total} 用例 / PASS={p} / FAIL={f} / {ms / 1000:.2f}s ==")
     print(f"报告: {REPORT_PATH}")
     return 0 if f == 0 else 1
+
+
+def t139_wallpaper_image_duplicates() -> None:
+    """把独立的图片级判重回归纳入日常全量检查，避免只测到作品级正例。"""
+    import io
+    import unittest
+    from autotest.test_wallpaper_duplicates import WallpaperDuplicateTests
+    stream = io.StringIO()
+    result = unittest.TextTestRunner(stream=stream).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(WallpaperDuplicateTests))
+    assert result.wasSuccessful(), stream.getvalue()
+
+
+def t140_wallpaper_existing() -> None:
+    import io
+    import unittest
+    from autotest.test_wallpaper_existing import ExistingWallpaperTests
+    stream = io.StringIO()
+    result = unittest.TextTestRunner(stream=stream).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ExistingWallpaperTests))
+    assert result.wasSuccessful(), stream.getvalue()
+
+
+def t141_wallpaper_admin() -> None:
+    import io
+    import unittest
+    from autotest.test_wallpaper_admin import WallpaperAdminTests
+    stream = io.StringIO()
+    result = unittest.TextTestRunner(stream=stream).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(WallpaperAdminTests))
+    assert result.wasSuccessful(), stream.getvalue()
+
+
+def t142_gallery_controls() -> None:
+    import io
+    import unittest
+    from autotest.test_gallery_controls import GalleryControlsTests
+    stream = io.StringIO()
+    result = unittest.TextTestRunner(stream=stream).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(GalleryControlsTests))
+    assert result.wasSuccessful(), stream.getvalue()
+
+
+def t143_management_drawer() -> None:
+    import io
+    import unittest
+    from autotest.test_management_toolbar import ManagementToolbarTests
+    stream = io.StringIO()
+    result = unittest.TextTestRunner(stream=stream).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ManagementToolbarTests))
+    assert result.wasSuccessful(), stream.getvalue()
 
 
 if __name__ == "__main__":

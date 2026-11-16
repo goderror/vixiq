@@ -70,7 +70,7 @@ def scan_wall_dir(db_factory, wall_dir, img_root: "Path | None" = None,
     - ``progress_cb(stage, done, total, name)``: stage = ``fast`` / ``visual``。
     - ``deep=False``: 跳过 ORB 慢扫 (只处理快扫口径)。
 
-    归属优先级: MD5 (字节一致) > 文件名作品 ID > ORB 视觉相似 > 保留上次「手动指定」。
+    手动归属（包括解除归属）优先；文件内容改变后才重新自动识别。
     """
     wall_dir = Path(wall_dir)
     files = wallpaper_folder_images(wall_dir)
@@ -119,11 +119,19 @@ def scan_wall_dir(db_factory, wall_dir, img_root: "Path | None" = None,
                 continue
             old = prev.get(f.name)
             unchanged = bool(
-                old and int(old.get("size") or 0) == st.st_size
+                old and Path(old.get("dir") or "").resolve() == wall_dir.resolve()
+                and int(old.get("size") or 0) == st.st_size
                 and abs(float(old.get("mtime") or 0) - st.st_mtime) < 1.0)
             has_owner = bool(old and str(old.get("artwork_id") or "").strip())
+            manual = bool(old and old.get("match_kind") == "manual")
+            if unchanged and manual:
+                keep.append(dict(old))
+                stats["reused"] += 1
+                continue
             # 没变 + 已有归属 → 直接复用, 连 MD5 都不重算 (整夹重扫也是秒级)
-            if unchanged and has_owner:
+            needs_page = bool(has_owner and old.get("page_num") is None
+                              and deep and orb_fn is not None)
+            if unchanged and has_owner and not needs_page:
                 keep.append(dict(old))
                 stats["reused"] += 1
                 continue
@@ -135,16 +143,14 @@ def scan_wall_dir(db_factory, wall_dir, img_root: "Path | None" = None,
             h = md5_cached(f)
             aid, pn, kind, conf = "", None, "", 0.0
             hit = md5_index.get(h) if h else None
-            if hit:
+            if manual and old.get("md5") and old["md5"] == h:
+                aid, pn, kind, conf = old.get("artwork_id"), old.get("page_num"), "manual", 1.0
+            elif hit:
                 aid, pn, kind, conf = hit["artwork_id"], hit["page_num"], "md5", 1.0
             else:
                 m = _ID_RE.search(f.name)
                 if m and m.group(1) in aid_set:
                     aid, pn, kind, conf = m.group(1), page_from_name(f.name), "name", 0.9
-                elif str((old or {}).get("match_kind") or "") == "manual":
-                    # 用户手动指定过的归属: 文件没换内容就继续沿用, 不被空结果冲掉
-                    aid, pn = old.get("artwork_id"), old.get("page_num")
-                    kind, conf = "manual", 1.0
             try:
                 wh = wallpaper_size(f)
             except Exception:
@@ -154,7 +160,7 @@ def scan_wall_dir(db_factory, wall_dir, img_root: "Path | None" = None,
                    "artwork_id": aid or None, "page_num": pn,
                    "match_kind": kind, "confidence": conf, "scanned_at": now_txt}
             keep.append(rec)
-            if not aid and deep and orb_fn is not None:
+            if pn is None and kind != "manual" and deep and orb_fn is not None:
                 pending.append((f, len(keep) - 1))
 
         # 慢扫: 新文件优先 (用户刚裁剪出来的最可能是要找的那张)
@@ -183,6 +189,8 @@ def scan_wall_dir(db_factory, wall_dir, img_root: "Path | None" = None,
                 if not hp:
                     continue
                 rec = keep[pos]
+                if rec.get("artwork_id") and str(rec["artwork_id"]) != hp[0]:
+                    continue  # 已知作品但未知图片时，不用别的作品的相似图补页号。
                 rec["artwork_id"] = hp[0]
                 rec["page_num"] = hp[1]
                 rec["match_kind"] = "visual"
@@ -229,9 +237,11 @@ def list_wall_files(db_factory) -> "list[dict]":
         rows = db.conn.execute(
             "SELECT wf.file_name, wf.dir, wf.mtime, wf.size, wf.md5, wf.width, wf.height, "
             "       wf.artwork_id, wf.page_num, wf.match_kind, wf.confidence, wf.scanned_at, "
+            "       wf.favorite, wf.labels_json, wf.group_id, g.name AS group_name, a.source, a.source_url, "
             "       a.title AS title, a.is_r18 AS is_r18, "
             "       COALESCE(au.name, a.author_id, '') AS author_name "
             "FROM wallpaper_files wf "
+            "LEFT JOIN wallpaper_groups g ON g.id=wf.group_id "
             "LEFT JOIN artworks a  ON a.artwork_id = wf.artwork_id "
             "LEFT JOIN authors  au ON au.author_id = a.author_id "
             "ORDER BY wf.file_name").fetchall()
@@ -243,42 +253,73 @@ def _row_name(r: dict) -> str:
     return str(r.get("file_name") or r.get("name") or "")
 
 
+def _image_keys(row: dict) -> list:
+    """只有具体图片归属或非空 MD5 才能证明同图；作品归属本身不能。"""
+    keys = []
+    aid = str(row.get("artwork_id") or "").strip()
+    pn = row.get("page_num")
+    try:
+        if aid and pn is not None and int(pn) >= 0:
+            keys.append(("page", aid, int(pn)))
+    except (TypeError, ValueError):
+        pass
+    md5 = str(row.get("md5") or "").strip().lower()
+    if md5:
+        keys.append(("md5", md5))
+    return keys
+
+
+def _image_components(rows: "list[dict]") -> list:
+    """同图关系取并集，避免原图/裁剪版与跨作品的字节副本分组相互遗漏。"""
+    unique = {_row_name(r): r for r in rows if _row_name(r)}
+    items = list(unique.values())
+    parents = list(range(len(items)))
+
+    def root(i):
+        while parents[i] != i:
+            parents[i] = parents[parents[i]]
+            i = parents[i]
+        return i
+
+    seen = {}
+    for i, row in enumerate(items):
+        for key in _image_keys(row):
+            if key in seen:
+                parents[root(i)] = root(seen[key])
+            else:
+                seen[key] = i
+    grouped = {}
+    for i, row in enumerate(items):
+        grouped.setdefault(root(i), []).append(row)
+    return list(grouped.values())
+
+
+def matching_wall_files(rows: "list[dict]", artwork_id: str,
+                        page_num: "int | None", md5: str = "") -> "list[dict]":
+    """返回对应某张原图的全部已有版本，与管理页分组使用完全相同的口径。"""
+    keys = set(_image_keys({"artwork_id": artwork_id, "page_num": page_num, "md5": md5}))
+    if not keys:
+        return []
+    return [row for group in _image_components(rows)
+            if any(keys.intersection(_image_keys(r)) for r in group) for row in group]
+
+
 def group_dupes(rows: "list[dict]") -> "list[dict]":
-    """把「同一个作品多张」与「字节完全相同」归成重复组 —— 只报告, 不决定删哪张。
-
-    返回 [{key, kind, artwork_id, title, author_name, files: [file_name, ...]}]。
-    作品组优先; 字节组只收还没被作品组覆盖的 (否则同一批文件会重复出现两次)。
-    """
-    by_aid: "dict[str, list]" = {}
-    by_md5: "dict[str, list]" = {}
-    for r in rows:
-        aid = str(r.get("artwork_id") or "").strip()
-        m = str(r.get("md5") or "").strip()
-        if aid:
-            by_aid.setdefault(aid, []).append(r)
-        if m:
-            by_md5.setdefault(m, []).append(r)
-
-    groups: "list[dict]" = []
-    covered: "set[str]" = set()
-    for aid, items in by_aid.items():
+    """同一张图（含裁剪/缩放版本）归组，只报告，不删除或决定保留哪张。"""
+    groups = []
+    for items in _image_components(rows):
         if len(items) < 2:
             continue
         first = items[0]
+        page_keys = {k for r in items for k in _image_keys(r) if k[0] == "page"}
+        page_key = next(iter(page_keys)) if len(page_keys) == 1 else None
         groups.append({
-            "key": "a:" + aid, "kind": "artwork", "artwork_id": aid,
+            "key": ("p:%s:%s" % page_key[1:]) if page_key else "image:" + min(_row_name(r) for r in items),
+            "kind": "page" if page_key else "image",
+            "artwork_id": page_key[1] if page_key else "",
+            "page_num": page_key[2] if page_key else None,
             "title": first.get("title") or "", "author_name": first.get("author_name") or "",
-            "files": [_row_name(r) for r in items],
-        })
-        covered.update(_row_name(r) for r in items)
-    for m, items in by_md5.items():
-        rest = [r for r in items if _row_name(r) not in covered]
-        if len(rest) < 2:
-            continue
-        groups.append({
-            "key": "m:" + m[:12], "kind": "md5", "artwork_id": "",
-            "title": "", "author_name": "",
-            "files": [_row_name(r) for r in rest],
+            "files": sorted(_row_name(r) for r in items),
         })
     groups.sort(key=lambda g: (-len(g["files"]), g["key"]))
     return groups

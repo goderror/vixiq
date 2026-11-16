@@ -14,6 +14,7 @@ const isTabActive = (name) => {
 window.switchTab = function (name) {
   $$('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
   $$('.tabpage').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  document.dispatchEvent(new CustomEvent('vixiq:tab-change', { detail: { name } }));
   actPush('NAV', '切换页面 → ' + name, {});   // 活动日志: 记下用户去哪一页了
   if (name === 'library') { libSync(); loadStats(); loadLibrary(); loadLibFacets(); loadTrashBadge(); wallWatch(); }
   else if (name === 'trash') loadTrash();
@@ -282,6 +283,7 @@ function wallCropUp(e) {
 function openWallCrop(aid, page, src) {
   if (!src) { toast('图片地址无效', 'err'); return; }
   wallCropEnsure();
+  WALL_DUPE_HIT = null;
   WC.aid = String(aid);
   WC.page = Number(page) || 0;
   WC.ratio = 0;             // 默认自由比例: 裁剪框撑满整图
@@ -306,10 +308,14 @@ function openWallCrop(aid, page, src) {
 }
 window.openWallCrop = openWallCrop;
 
-// 只读检测壁纸夹里是否已有同作品的图 (文件名/内容/视觉相似), 结果挂在裁剪界面顶部
-const WALL_DUPE_KIND = { name: '文件名', md5: '内容一致', visual: '视觉相似' };
+// 只读检测同一张图的已有版本（含裁剪版），作品归属本身不构成重复。
+const WALL_DUPE_KIND = { name: '文件名', md5: '内容一致', visual: '视觉相似', manual: '同图版本' };
+let wallDupeCheckSeq = 0;
+let WALL_DUPE_HIT = null;
+const WEC = { items: [], selected: '', busy: false, seq: 0, opener: null };
 
 async function wallCheckDupes(aid, page, deep) {
+  const seq = ++wallDupeCheckSeq;
   const tip = $('#crop-dupe');
   if (!aid) return;
   if (!deep && tip) { tip.textContent = ''; tip.classList.add('hidden'); }
@@ -317,18 +323,165 @@ async function wallCheckDupes(aid, page, deep) {
     const r = await api('/api/wallpaper/dupes/check?artwork_id='
       + encodeURIComponent(aid) + '&page_num=' + (Number(page) || 0)
       + (deep ? '&deep=1' : ''));
-    if (!r || !r.ok || !r.count) return;
+    if (seq !== wallDupeCheckSeq || String(aid) !== WC.aid || (Number(page) || 0) !== WC.page) return;
+    if (!r || !r.ok) return;
+    if (!r.count) {
+      WALL_DUPE_HIT = null;
+      if (tip) { tip.textContent = ''; tip.classList.add('hidden'); }
+      return;
+    }
+    WALL_DUPE_HIT = { aid: String(aid), page: Number(page) || 0, deep: !!deep, items: r.items || [] };
     const names = (r.items || []).slice(0, 3).map(x =>
-      x.name + '（' + (WALL_DUPE_KIND[x.kind] || '同作品') + '）').join('、');
+      x.name + '（' + (WALL_DUPE_KIND[x.kind] || '同一张图') + '）').join('、');
     if (tip) {
-      tip.textContent = '壁纸夹已有该作品的 ' + r.count + ' 张图：' + names
-        + (r.count > 3 ? ' 等' : '') + '，继续会再生成一份';
+      tip.innerHTML = '<span>壁纸夹已有这张图片的 ' + r.count + ' 个版本：' + esc(names)
+        + (r.count > 3 ? ' 等' : '') + '。</span>'
+        + '<button class="btn" type="button" onclick="wallDupeChoose()">用已有版本设为当前壁纸</button>';
       tip.classList.remove('hidden');
     }
   } catch (e) { /* 检测失败不影响设置 */ }
 }
 
+function wallExistingEnsure() {
+  let mask = $('#wall-existing');
+  if (mask) return mask;
+  mask = document.createElement('div');
+  mask.id = 'wall-existing';
+  mask.className = 'wall-existing-mask hidden';
+  mask.innerHTML = `<section class="wall-existing-dialog" role="dialog" aria-modal="true" aria-labelledby="wall-existing-title">
+    <header class="wall-existing-head"><h2 id="wall-existing-title">选择已有壁纸</h2>
+      <button type="button" class="btn ghost" data-close aria-label="关闭已有壁纸选择器">✕</button></header>
+    <p class="wall-existing-hint">先选择缩略图查看大图，再确认设为当前壁纸。</p>
+    <div id="wall-existing-error" role="alert"></div>
+    <div class="wall-existing-content">
+      <div id="wall-existing-grid" class="wall-existing-grid" aria-label="已有壁纸版本"></div>
+      <div class="wall-existing-preview"><img id="wall-existing-image" alt="已有壁纸大图预览" hidden>
+        <p id="wall-existing-name">尚未选择版本</p><span id="wall-existing-current" hidden>当前正在使用</span></div>
+    </div>
+    <footer class="wall-existing-footer"><button type="button" class="btn ghost" data-close>返回裁剪</button>
+      <button type="button" id="wall-existing-confirm" class="btn accent" disabled>确认设为当前壁纸</button></footer>
+  </section>`;
+  document.body.appendChild(mask);
+  mask.addEventListener('click', e => {
+    if (e.target === mask || e.target.closest('[data-close]')) closeWallExisting();
+    const b = e.target.closest('button[data-name]');
+    if (b && !WEC.busy) wallExistingSelect(b.dataset.name);
+  });
+  $('#wall-existing-confirm').addEventListener('click', wallExistingConfirm);
+  document.addEventListener('keydown', e => {
+    if (mask.classList.contains('hidden')) return;
+    if (e.key === 'Escape') {
+      e.preventDefault(); e.stopImmediatePropagation(); closeWallExisting();
+    } else if (e.key === 'Tab') {
+      const controls = Array.from(mask.querySelectorAll('button:not(:disabled)')).filter(b => b.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }, true);
+  return mask;
+}
+
+async function wallDupeChoose() {
+  const hit = WALL_DUPE_HIT;
+  if (!hit || hit.aid !== WC.aid || hit.page !== WC.page) return;
+  const mask = wallExistingEnsure();
+  const seq = ++WEC.seq;
+  WEC.items = []; WEC.selected = ''; WEC.busy = false; WEC.opener = document.activeElement;
+  $('#wall-existing-confirm').disabled = true;
+  $('#wall-existing-error').textContent = '';
+  $('#wall-existing-grid').textContent = '正在读取已有版本…';
+  $('#wall-existing-image').hidden = true;
+  $('#wall-existing-image').removeAttribute('src');
+  $('#wall-existing-name').textContent = '尚未选择版本';
+  $('#wall-existing-current').hidden = true;
+  mask.classList.remove('hidden');
+  mask.querySelector('[data-close]').focus();
+  try {
+    const r = await api('/api/wallpaper/dupes/check?artwork_id=' + encodeURIComponent(hit.aid)
+      + '&page_num=' + hit.page + (hit.deep ? '&deep=1' : ''));
+    if (seq !== WEC.seq || mask.classList.contains('hidden')) return;
+    if (!r || !r.ok) throw new Error((r && r.error) || '读取已有壁纸失败');
+    WEC.items = r.items || [];
+    $('#wall-existing-grid').innerHTML = WEC.items.map(it =>
+      '<button class="wall-existing-item" type="button" data-name="' + esc(it.name) + '" aria-pressed="false">'
+      + '<img src="' + esc(safeThumb(it.thumb, { is_r18: it.is_r18 })) + '" alt="" loading="lazy">'
+      + (it.current ? '<span class="wall-existing-badge">当前使用</span>' : '')
+      + '<span class="wall-existing-filename">' + esc(it.name) + '</span></button>'
+    ).join('') || '<p class="hint">已有版本已不存在，可返回裁剪继续设置。</p>';
+  } catch (e) {
+    if (seq !== WEC.seq) return;
+    $('#wall-existing-grid').textContent = '';
+    $('#wall-existing-error').textContent = e.message || '读取失败，请返回后重试';
+  }
+}
+window.wallDupeChoose = wallDupeChoose;
+
+function wallExistingSelect(name) {
+  const it = WEC.items.find(x => x.name === name);
+  if (!it) return;
+  WEC.selected = name;
+  $$('#wall-existing-grid button[data-name]').forEach(b => {
+    const selected = b.dataset.name === name;
+    b.classList.toggle('selected', selected); b.setAttribute('aria-pressed', String(selected));
+  });
+  const img = $('#wall-existing-image');
+  img.hidden = false;
+  $('#wall-existing-name').textContent = name;
+  $('#wall-existing-current').hidden = !it.current;
+  $('#wall-existing-error').textContent = '';
+  $('#wall-existing-confirm').disabled = true;
+  const seq = WEC.seq;
+  img.onload = () => {
+    if (seq === WEC.seq && name === WEC.selected && !WEC.busy) $('#wall-existing-confirm').disabled = false;
+  };
+  img.onerror = () => {
+    if (seq !== WEC.seq || name !== WEC.selected) return;
+    $('#wall-existing-error').textContent = '预览加载失败，请选择其他版本或返回后重试';
+    $('#wall-existing-confirm').disabled = true;
+  };
+  img.src = safeThumb(it.url, { is_r18: it.is_r18 });
+}
+
+function closeWallExisting() {
+  if (WEC.busy) return;
+  ++WEC.seq;
+  const mask = $('#wall-existing');
+  if (mask) mask.classList.add('hidden');
+  const img = $('#wall-existing-image');
+  if (img) { img.onload = null; img.onerror = null; img.removeAttribute('src'); }
+  if (WEC.opener && WEC.opener.isConnected) WEC.opener.focus();
+}
+
+async function wallExistingConfirm() {
+  if (WEC.busy || !WEC.selected || $('#wall-existing-confirm').disabled) return;
+  const selected = WEC.selected;
+  WEC.busy = true;
+  const buttons = $$('#wall-existing button');
+  buttons.forEach(b => { b.disabled = true; });
+  $('#wall-existing-error').textContent = '';
+  let applied = false;
+  try {
+    const r = await api('/api/wallpaper/use', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: selected }) });
+    if (!r || r.status !== 'ok') throw new Error((r && (r.msg || r.error)) || '设置失败，请重试');
+    applied = true;
+    WEC.busy = false;
+    closeWallExisting(); closeWallCrop(); closeWallPicker();
+    toast('已将已有版本设为当前壁纸', 'ok');
+    if (isTabActive('library')) wallRefresh({ deep: true });
+  } catch (e) {
+    $('#wall-existing-error').textContent = e.message || '设置失败，请重试';
+  } finally {
+    WEC.busy = false;
+    buttons.forEach(b => { b.disabled = false; });
+    $('#wall-existing-confirm').disabled = applied || !WEC.selected;
+  }
+}
+
 function closeWallCrop() {
+  closeWallExisting();
+  ++wallDupeCheckSeq;
   const m = $('#wall-crop');
   if (m) m.classList.add('hidden');
   const { img } = wallCropEls();
@@ -379,169 +532,6 @@ let WFD = null;                 // /api/wallpaper/files 的最近结果
 let WF_FILTER = 'all';
 const WF_SEL = new Set();        // 勾选的文件名
 let wfTimer = null;
-
-function wallFilesEnter() {
-  const fbox = $('#wf-filters');
-  if (fbox && !fbox._bound) {
-    fbox._bound = true;
-    fbox.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-f]');
-      if (!b) return;
-      WF_FILTER = b.dataset.f;
-      fbox.querySelectorAll('[data-f]').forEach(x => x.classList.toggle('active', x === b));
-      wallFilesPaint();
-    });
-  }
-  const box = $('#wf-result');
-  if (box && !box._bound) {
-    box._bound = true;
-    box.addEventListener('click', (e) => {
-      const th = e.target.closest('[data-preview]');
-      if (th) wallFilesPreview(th.dataset.preview);
-    });
-    box.addEventListener('change', (e) => {
-      const cb = e.target.closest('input[data-name]');
-      if (cb) wallFilesToggle(cb);
-    });
-  }
-  wallFilesLoad();
-  // 上一次扫描可能还在跑 (切走再切回来) → 续上进度
-  api('/api/wallpaper/files/scan/status').then(s => {
-    if (!s) return;
-    if (s.status === 'scanning') wallFilesPoll();
-    // 上次扫描已结束就不弹提示了 (结果已经落库, 列表里看得到), 免得每次切页都弹一次
-  }).catch(() => {});
-}
-window.wallFilesEnter = wallFilesEnter;
-
-async function wallFilesLoad() {
-  const box = $('#wf-result');
-  try {
-    const d = await api('/api/wallpaper/files');
-    if (!d || !d.ok) {
-      if (box) box.innerHTML = '<div class="hint">读取失败：' + esc((d && d.error) || '未知原因') + '</div>';
-      return;
-    }
-    WFD = d;
-    // 磁盘上已经不在的勾选项自动摘掉, 免得删除时一直报"文件已不在"
-    const alive = new Set((d.items || []).map(x => x.name));
-    Array.from(WF_SEL).forEach(n => { if (!alive.has(n)) WF_SEL.delete(n); });
-    wallFilesPaint();
-  } catch (e) {
-    if (box) box.innerHTML = '<div class="hint">读取失败：' + esc(e.message || e) + '</div>';
-  }
-}
-window.wallFilesLoad = wallFilesLoad;
-
-function wallFilesCard(f) {
-  const owned = !!f.artwork_id;
-  const tag = owned
-    ? '<span class="wf-tag ' + esc(f.match_kind || '') + '">' + esc(f.match_label || '已归属')
-      + (f.match_kind === 'visual' && f.confidence
-        ? ' ' + Math.round(f.confidence * 100) + '%' : '') + '</span>'
-    : '<span class="wf-tag orphan">未归属</span>';
-  const who = owned ? ('#' + f.artwork_id + (f.page_num != null ? ' p' + f.page_num : '')) : '';
-  const line = [owned ? (f.title || '（无标题）') : '文件名无作品 ID，内容也没匹配上',
-                f.author_name || '', who,
-                (f.width && f.height) ? f.width + '×' + f.height : '',
-                fmtSize(f.size || 0)].filter(Boolean).join(' · ');
-  return '<div class="wf-card' + (f.current ? ' is-current' : '') + '">'
-    + '<label class="wf-pick"><input type="checkbox" data-name="' + esc(f.name) + '"'
-    + (WF_SEL.has(f.name) ? ' checked' : '') + '></label>'
-    + '<div class="wf-thumb" data-preview="' + esc(f.name) + '" title="点开看大图">'
-    + '<img src="' + esc(safeThumb(f.thumb, { is_r18: f.is_r18 })) + '" alt="" loading="lazy"'
-    + ' onerror="this.style.opacity=.15">'
-    + (f.current ? '<span class="wf-cur">桌面</span>' : '')
-    + '</div>'
-    + '<div class="wf-meta">' + tag
-    + '<div class="wf-name" title="' + esc(f.name) + '">' + esc(f.name) + '</div>'
-    + '<div class="wf-line" title="' + esc(line) + '">' + esc(line) + '</div>'
-    + '</div></div>';
-}
-
-function wallFilesPaint() {
-  const d = WFD;
-  const box = $('#wf-result');
-  if (!box || !d) return;
-  const stats = d.stats || {};
-  const dirEl = $('#wf-dir');
-  if (dirEl) dirEl.textContent = d.dir ? ('壁纸夹 ' + d.dir) : '还没指定壁纸文件夹';
-  const tip = $('#wf-scan-tip');
-  if (tip) {
-    tip.textContent = d.scanned
-      ? ('共 ' + stats.total + ' 张 · 占用 ' + fmtSize(stats.bytes || 0)
-         + ' · 上次扫描 ' + (stats.scanned_at || '未知'))
-      : '还没扫描过，先点右上角「扫描归属」建立壁纸与作品的对应关系。';
-  }
-  const cards = [
-    ['壁纸总数', stats.total || 0],
-    ['已归属', stats.owned || 0],
-    ['未归属', stats.orphan || 0],
-    ['重复', (stats.dupes || 0) + ' 组 / ' + (stats.dupe_files || 0) + ' 张'],
-    ['占用空间', fmtSize(stats.bytes || 0)],
-  ];
-  const st = $('#wf-stats');
-  if (st) st.innerHTML = cards.map(c =>
-    '<div class="stat-card"><div class="num">' + c[1] + '</div><div class="lbl">' + c[0] + '</div></div>'
-  ).join('');
-
-  const items = d.items || [];
-  const groups = d.groups || [];
-  if (!items.length) {
-    box.innerHTML = '<div class="hint">' + (d.scanned
-      ? '壁纸夹里没有图片。'
-      : '还没有归属数据：点右上角「扫描归属」扫一次（深度扫描会连手动裁剪的图一起识别）。') + '</div>';
-    wallFilesSyncSel();
-    return;
-  }
-  if (WF_FILTER === 'dupe') {
-    box.innerHTML = groups.length ? groups.map(g => {
-      const names = new Set(g.files || []);
-      const files = items.filter(x => names.has(x.name));
-      const head = g.kind === 'artwork'
-        ? ('作品 #' + esc(g.artwork_id) + ' · ' + esc(g.title || '（无标题）')
-           + (g.author_name ? ' · ' + esc(g.author_name) : '') + ' · ' + files.length + ' 张')
-        : ('内容完全相同 · ' + files.length + ' 张');
-      return '<div class="wf-group"><div class="wf-group-head">' + head
-        + '<span class="muted">勾掉多余的副本再删除，保留一张即可</span></div>'
-        + '<div class="wf-grid">' + files.map(wallFilesCard).join('') + '</div></div>';
-    }).join('') : '<div class="hint">没有发现重复：同一作品在壁纸夹里都只有一张。</div>';
-  } else {
-    const list = items.filter(x => WF_FILTER === 'owned' ? !!x.artwork_id
-      : WF_FILTER === 'orphan' ? !x.artwork_id : true);
-    box.innerHTML = list.length
-      ? '<div class="wf-grid">' + list.map(wallFilesCard).join('') + '</div>'
-      : '<div class="hint">这一栏是空的。</div>';
-  }
-  wallFilesSyncSel();
-}
-
-function wallFilesToggle(cb) {
-  const n = cb.dataset.name;
-  if (!n) return;
-  if (cb.checked) WF_SEL.add(n); else WF_SEL.delete(n);
-  wallFilesSyncSel();
-}
-window.wallFilesToggle = wallFilesToggle;
-
-function wallFilesSyncSel() {
-  const n = WF_SEL.size;
-  const c = $('#wf-sel-count');
-  if (c) c.textContent = '已选 ' + n + ' 张';
-  const b = $('#wf-recycle');
-  if (b) b.disabled = n === 0;
-}
-
-// 点缩略图看大图: 复用图库 Lightbox; 壁纸文件不一定有作品 ID, 不传就不显示「设为壁纸」
-function wallFilesPreview(name) {
-  const f = ((WFD && WFD.items) || []).find(x => x.name === name);
-  if (!f) return;
-  // 未归属的历史文件不知道是不是 R18 → 按 R18 处理 (安全模式下连原图都不请求)
-  openLightbox({ page_num: 0, url: f.thumb, width: f.width, height: f.height,
-                 file_size: f.size, title: f.name, author_name: f.author_name || '',
-                 is_r18: (f.is_r18 == null ? 1 : f.is_r18), artwork_id: '' }, null, null);
-}
-window.wallFilesPreview = wallFilesPreview;
 
 async function wallFilesScan(deep) {
   try {
@@ -613,30 +603,7 @@ function wallFilesPoll() {
   wfTimer = setInterval(tick, 800);
 }
 
-async function wallFilesRecycle() {
-  const names = Array.from(WF_SEL);
-  if (!names.length) return;
-  if (!confirm('把勾选的 ' + names.length + ' 个壁纸文件送进 Windows 回收站？\n'
-      + '（可还原；图库里的原图不受影响）')) return;
-  try {
-    const r = await api('/api/wallpaper/files/recycle', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ names }),
-    });
-    if (!r || r.status !== 'ok') {
-      toast((r && (r.msg || r.error)) || '删除失败', 'err');
-      return;
-    }
-    toast('已送进回收站 ' + r.recycled + ' 个'
-      + (r.refused && r.refused.length ? '，跳过 ' + r.refused.length + ' 个' : ''), 'ok');
-    names.forEach(n => WF_SEL.delete(n));
-    wallFilesSyncSel();
-    wallFilesLoad();
-  } catch (e) {
-    toast('删除失败: ' + (e.message || e), 'err');
-  }
-}
-window.wallFilesRecycle = wallFilesRecycle;
+
 
 // 溯源结论 → 一句话 + 徽章 (用户只关心: 这是谁画的 / 库里有没有 / 是不是重复的一份)
 function wallState(d) {
@@ -1023,7 +990,6 @@ async function loadAuthors(opts = {}) {
     authorsPages = Math.max(1, Math.ceil(authorsTotal / AUTHORS_PAGE_SIZE));
     if (authorsPage > authorsPages) authorsPage = authorsPages;
     const pos = authorsTotal > AUTHORS_PAGE_SIZE ? ` · 第 ${authorsPage}/${authorsPages} 页` : '';
-    $('#authors-total').textContent = `共 ${authorsTotal} 位`;
     $('#authors-total-inline').textContent = `共 ${authorsTotal} 位${pos}`;
     renderAuthorsPagers();
     renderAuthors(items);
@@ -2979,9 +2945,10 @@ window.libFilterByAuthor = function (authorId, elOrName) {
   switchTab('library');
   libFilters.author = aid;
   libFilters.missing = false;
+  libFilters.missingMode = '';
   libFilters.source = ''; libFilters.type = ''; libFilters.tag = ''; libFilters.ai = '';
-  ['#lib-f-missing', '#lib-f-missing-file', '#lib-f-deleted']
-    .forEach(id => { const el2 = $(id); if (el2) el2.classList.remove('active'); });
+  const anomalySel = $('#lib-f-anomaly');
+  if (anomalySel) anomalySel.value = '';
   ['#lib-f-source', '#lib-f-type', '#lib-f-ai']
     .forEach(id => { const el2 = $(id); if (el2) el2.value = ''; });
   // 清空搜索框 + 标签框, 并把作者框回填成这位作者 —— 全部走 combo 自己的方法,
@@ -3409,9 +3376,11 @@ let libDataView = 'artwork';     // 图库数据粒度: artwork 作品视图(一
 let libSelected = new Set();     // 批量选中项的主键: 作品视图=作品ID; 图片视图=「作品ID|页码」(一张图一项)
 // 图库默认只显示非 R18 (r18='0'), 需看全部/仅 R18 时可手动切换下拉 (安全模式无关, 始终生效)
 // 默认排序 sort='updated' (按修改时间): 刚入库(pages 变动会 bump updated_at)或刚改动的作品都排最前
-let libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, sort: 'updated', order: 'desc' };
+let libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
 let libPage = 1;                 // 图库当前页码 (从 1 起)
 const LIB_PAGE_SIZE = 60;        // 每页固定张数 (网格/列表)
+let libCounts = { artworks: 0, images: 0 };
+const libSelectionData = new Map();
 let libTotal = 0, libPages = 0;  // 当前筛选下的总条数/总页数 (供分页栏)
 // 「仅查看该作品」特殊筛选  精确 ID 过滤 + 图片视图平铺, 可整体撤销
 let libOnlyAid = null;           // 当前正在单独查看的作品 ID (null=未启用)
@@ -4517,13 +4486,14 @@ async function dedupDups() {
   } catch (e) { toast('清理失败: ' + e.message, 'err'); }
 }
 
-// 缺元数据/缺失文件/已删除 三选一互斥切换: mode = 'metadata' / 'file' / 'deleted' / ''(全部)
-// 点已激活的按钮 = 取消回全部; 同一作品极少同时处于多种状态, 不需要交集视图
+// 异常筛选 (缺元数据 / 缺失文件 / 已失效) 是互斥单选: 用一个下拉承载,
+// 与类型/状态/来源等条件叠加。点「全部」= 取消异常筛选。
 function setLibMissingMode(mode) {
+  mode = mode || '';
+  libFilters.missingMode = mode;
   libFilters.missing = mode === 'metadata';
-  $('#lib-f-missing').classList.toggle('active', mode === 'metadata');
-  $('#lib-f-missing-file').classList.toggle('active', mode === 'file');
-  $('#lib-f-deleted').classList.toggle('active', mode === 'deleted');
+  const sel = $('#lib-f-anomaly');
+  if (sel && sel.value !== mode) sel.value = mode;
   loadLibrary();
 }
 
@@ -4535,12 +4505,10 @@ window.libFocusArtwork = async function (aid) {
   if (!aid) return;
   switchTab('library');
   libFilters.missing = false;
+  libFilters.missingMode = '';
   libFilters.source = ''; libFilters.type = ''; libFilters.author = ''; libFilters.tag = '';
-  ['#lib-f-source', '#lib-f-type'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  ['#lib-f-source', '#lib-f-type', '#lib-f-anomaly'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   ['#lib-f-author-input', '#lib-f-tag-input'].forEach(id => { const el = $(id); if (el) el.value = ''; });
-  ['#lib-f-missing', '#lib-f-missing-file', '#lib-f-deleted'].forEach(id => {
-    const el = $(id); if (el) el.classList.remove('active');
-  });
   const q = $('#lib-search-input');
   if (q) q.value = aid;
   libDataView = 'artwork';
@@ -4582,10 +4550,8 @@ async function loadLibrary(opts = {}) {
   p.set('author_id', libFilters.author);
   p.set('tag', libFilters.tag);
   p.set('missing', libFilters.missing ? '1' : '');
-  const onlyMissFile = $('#lib-f-missing-file') ? $('#lib-f-missing-file').classList.contains('active') : false;
-  p.set('file_missing', onlyMissFile ? '1' : '');
-  const onlyDeleted = $('#lib-f-deleted') ? $('#lib-f-deleted').classList.contains('active') : false;
-  p.set('deleted', onlyDeleted ? '1' : '');
+  p.set('file_missing', libFilters.missingMode === 'file' ? '1' : '');
+  p.set('deleted', libFilters.missingMode === 'deleted' ? '1' : '');
   p.set('sort', libFilters.sort);
   p.set('order', libFilters.order);
   p.set('view', libDataView);
@@ -4599,9 +4565,7 @@ async function loadLibrary(opts = {}) {
     libTotal = r.total ?? 0;
     libPages = Math.max(1, Math.ceil(libTotal / LIB_PAGE_SIZE));
     if (libPage > libPages) { libPage = libPages; }  // 删除到最后几条后页码越界, 自动回落到末页
-    $('#lib-total').textContent = libOnlyAid
-      ? `👁️ 仅查看作品 #${libOnlyAid} · 共 ${libTotal} 张图片`
-      : `共 ${libTotal} 条${libTotal > LIB_PAGE_SIZE ? ` · 第 ${libPage}/${libPages} 页` : ''}`;
+    libCounts = r.counts || { artworks: libDataView === 'artwork' ? libTotal : 0, images: libDataView === 'image' ? libTotal : 0 };
     renderLibPagers();
     // 重画判据 = **渲染指纹**(数据载荷 + 打码态 + 视图模式), 只要影响"画出来长什么样"的
     // 输入有一个变了就必须重画。
@@ -4729,7 +4693,7 @@ function flashLibCard(aid) {
 
 // ---- 图库分页栏 (顶部/底部同步渲染): 首页/上一页/页码输入/下一页/尾页 ----
 function renderLibPagers() {
-  const html = libTotal > LIB_PAGE_SIZE ? `
+  const html = `<span class="lib-result-count">共 ${libCounts.artworks} 个作品 · ${libCounts.images} 张图片</span>
     <div class="pager-inner">
       <button class="btn ghost" onclick="goLibPage(1)" ${libPage <= 1 ? 'disabled' : ''} title="首页">«</button>
       <button class="btn ghost" onclick="goLibPage(${libPage - 1})" ${libPage <= 1 ? 'disabled' : ''} title="上一页">‹</button>
@@ -4739,7 +4703,7 @@ function renderLibPagers() {
       </span>
       <button class="btn ghost" onclick="goLibPage(${libPage + 1})" ${libPage >= libPages ? 'disabled' : ''} title="下一页">›</button>
       <button class="btn ghost" onclick="goLibPage(${libPages})" ${libPage >= libPages ? 'disabled' : ''} title="尾页">»</button>
-    </div>` : '';
+    </div>`;
   $('#lib-pager-top').innerHTML = html;
   $('#lib-pager-bottom').innerHTML = html;
 }
@@ -5018,52 +4982,66 @@ function rebuildSourceFilters(dbSources) {
   });
 }
 
+function libSelectionContext() {
+  const records = new Map(libSelectionData);
+  ($('#lib-result')._lastItems || []).forEach(w => records.set(w._key, w));
+  return [...records.values()];
+}
+function libSelectedRecords() {
+  return libSelectionContext().filter(w => libSelected.has(w._key));
+}
+function libSelectedDownloads() {
+  const works = new Map();
+  libSelectedRecords().forEach(w => {
+    const id = String(w.artwork_id || '');
+    if (/^\d+$/.test(id) && canRedownload(w)) works.set(id, w);
+  });
+  return [...works.values()];
+}
+function closeLibRedownload(restoreFocus = false) {
+  const menu = $('#lib-redownload-menu');
+  if (!menu) return;
+  menu.hidden = true; $('#lib-redownload-btn').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) $('#lib-redownload-btn').focus();
+}
+function libSelectionInfo() {
+  const records = libSelectedRecords();
+  if (!records.length) return;
+  openLibModal('作品/图片信息', '<div class="lib-selection-info">' + records.map(w => {
+    const image = libDataView === 'image';
+    const source = w.source_url || w.pixiv_url || '';
+    const files = image ? [w] : (w.pages || []);
+    return `<article><strong>${esc(w.title || w.artwork_id)}</strong><p>作品 #${esc(w.artwork_id)}${image ? ' · 第 ' + (Number(w.page_num) + 1) + ' 张图片' : ' · 库内 ' + files.length + ' 张图片'}</p>
+      <p>作者：${esc(w.author_name || w.author_id || '未知')} · 来源：${esc(sourceLabel(w.source || 'pixiv'))}</p>
+      ${files.map(p => `<p>${esc(p.local_path || '本地文件缺失')} · ${p.width && p.height ? Number(p.width) + '×' + Number(p.height) : '尺寸未记录'} · ${p.file_size_bytes || p.file_size ? fmtSize(p.file_size_bytes || p.file_size) : '大小未记录'}</p>`).join('')}
+      ${/^https?:\/\//i.test(source) ? `<a class="btn" href="${esc(source)}" target="_blank" rel="noopener noreferrer">查看来源链接 ↗</a>` : ''}
+      <button class="btn" data-info-work="${esc(w.artwork_id)}">查看所属作品</button></article>`;
+  }).join('') + '</div>', { lg: true });
+  $('#lib-modal-body').querySelectorAll('[data-info-work]').forEach(b => b.onclick = () => { closeLibModal(); libOnlyThisWork(b.dataset.infoWork); });
+}
 function syncLibSelUI() {
   const n = libSelected.size;
-  $('#lib-sel-count').textContent = n;
-  $('#lib-sel-count2').textContent = n;
-  $('#lib-sel-count3').textContent = n;
-  const cnt4 = $('#lib-sel-count4');
-  if (cnt4) cnt4.textContent = n;
-  $('#lib-batch-del').disabled = n === 0;
-  $('#lib-batch-edit').disabled = n === 0;
-  $('#lib-batch-addcart').disabled = n === 0;
-  const repairBtn = $('#lib-batch-repair');
-  if (repairBtn) repairBtn.disabled = n === 0;
-  $('#lib-batch-srcsearch').disabled = n === 0;
-  // 作品视图: 选中项里若有「已入库但缺页」的作品, 这个按钮实质是"补缺失页",
-  // 文案跟着改, 免得误以为会重下一遍 (2026-09-16 需求: 补页也要能批量)
-  const addBtn = $('#lib-batch-addcart');
-  if (addBtn && libDataView === 'artwork') {
-    const selW = ($('#lib-result')._lastItems || []).filter(w => libSelected.has(w._key));
-    const missN = selW.filter(w => {
-      const total = (w.page_count != null && w.page_count !== '') ? w.page_count : w.total_pages;
-      return total != null && (w.pages || []).length < total;
-    }).length;
-    addBtn.innerHTML = missN
-      ? `⬇ 批量补缺失页(<span id="lib-sel-count3">${n}</span>)`
-      : `➕ 批量加入下载(<span id="lib-sel-count3">${n}</span>)`;
-    addBtn.title = missN
-      ? `选中的作品里有 ${missN} 个缺页：只补下载缺失的页，已下好的会自动跳过（永不覆盖本地文件）`
-      : '加入下载：已完整的不再重复下、缺页的只补缺失页、没有的才整部下 —— 这个按钮永远不会覆盖本地文件';
-  }
-  // 🔗 合并图片: 仅图片视图可用 (作品粒度无"归为同一作品"语义), 需 ≥2 张
-  const mergeBtn = $('#lib-batch-merge');
-  if (mergeBtn) {
-    mergeBtn.classList.toggle('hidden', libDataView !== 'image');
-    mergeBtn.disabled = n < 2;
-  }
-  // ✂️ 拆分: 同样仅图片视图 (按「张」选中才有拆的意义), 单张也能拆
-  const splitBtn = $('#lib-batch-split');
-  if (splitBtn) {
-    splitBtn.classList.toggle('hidden', libDataView !== 'image');
-    splitBtn.disabled = n === 0;
-  }
+  ($('#lib-result')._lastItems || []).forEach(w => { if (libSelected.has(w._key)) libSelectionData.set(w._key, w); });
+  [...libSelectionData.keys()].forEach(k => { if (!libSelected.has(k)) libSelectionData.delete(k); });
+  const selected = libSelectedRecords();
+  const works = new Set(selected.map(w => String(w.artwork_id)));
+  const images = libDataView === 'image' ? n : selected.reduce((sum, w) => sum + (w.pages || []).length, 0);
+  $('#lib-total').textContent = `已选 ${works.size} 个作品 · ${images} 张图片`;
+  ['lib-batch-del', 'lib-batch-edit', 'lib-batch-srcsearch', 'lib-selection-info'].forEach(id => { $('#' + id).disabled = n === 0; });
+  const downloads = libSelectedDownloads();
+  ['lib-redownload-btn', 'lib-batch-addcart', 'lib-batch-repair'].forEach(id => { $('#' + id).disabled = !downloads.length; });
+  if (!downloads.length) closeLibRedownload();
+  $('#lib-redownload-btn').title = downloads.length ? `重新下载所选的 ${downloads.length} 个 Pixiv 作品` : '选择可下载的 Pixiv 作品后可补齐缺图或修复原图';
+  $('#lib-batch-merge').disabled = libDataView !== 'image' || n < 2;
+  $('#lib-batch-split').disabled = libDataView !== 'image' || n === 0;
   const clearBtn = $('#lib-sel-clear');
   if (clearBtn) clearBtn.disabled = n === 0;
   const all = $$('#lib-result input[data-key]');
   const selAllBtn = $('#lib-sel-all');
   if (selAllBtn) selAllBtn.classList.toggle('active', all.length > 0 && all.every(cb => cb.checked));
+  // 未选中时整行操作栏收起, 顶部只留搜索/视图/展开 (2026-11-17)
+  const selBox = document.querySelector('#tab-library .management-selection');
+  if (selBox) selBox.hidden = n === 0;
 }
 
 let _libAnchor = null;   // Shift 范围选择的锚点 (上一次点击项的主键: 作品视图=作品ID, 图片视图=作品|页码)
@@ -5346,7 +5324,7 @@ async function libBatchDelete() {
 let trashKind = 'artwork';
 
 window.trashSwitchKind = function (kind) {
-  trashKind = (kind === 'page') ? 'page' : 'artwork';
+  trashKind = ['page', 'wallpaper'].includes(kind) ? kind : 'artwork';
   $$('#tab-trash .trash-kind').forEach(b => b.classList.toggle('active', b.dataset.kind === trashKind));
   loadTrash();
 };
@@ -5358,7 +5336,7 @@ function _trashReasonLabel(x) {
 async function loadTrashBadge() {
   try {
     const r = await api('/api/library/trash/count');
-    const n = Number((r && r.artworks) || 0) + Number((r && r.pages) || 0);
+    const n = Number((r && r.artworks) || 0) + Number((r && r.pages) || 0) + Number((r && r.wallpapers) || 0);
     const b = $('#trash-badge');
     if (!b) return;
     b.textContent = String(n);
@@ -5367,6 +5345,7 @@ async function loadTrashBadge() {
 }
 
 async function loadTrash() {
+  if (trashKind === 'wallpaper') return wallTrashLoad();
   const cont = $('#trash-result');
   if (!cont) return;
   cont.innerHTML = '<div class="hint">加载中…</div>';
@@ -5485,6 +5464,7 @@ window.trashPurgePage = async function (aid, pn) {
 };
 
 window.trashRestoreAll = async function () {
+  if (trashKind === 'wallpaper') return wallTrashAll('restore');
   let r0;
   try { r0 = await api('/api/library/trash/list?kind=' + trashKind); } catch (e) { r0 = null; }
   const items = (r0 && r0.items) || [];
@@ -5499,6 +5479,7 @@ window.trashRestoreAll = async function () {
 };
 
 window.trashPurgeAll = async function () {
+  if (trashKind === 'wallpaper') return wallTrashAll('purge');
   if (!confirm('清空回收站？\n\n所有记录会被卸载；图片文件全部送进 **Windows 电脑回收站**（仍可还原），并记入操作日志。\n\n这是最深的一层删除，确定继续？')) return;
   if (!confirm('再次确认：真的要清空回收站吗？')) return;
   await _trashPurge({ all: true });
@@ -5509,7 +5490,7 @@ async function openMergeImages() {
   if (libDataView !== 'image' || libSelected.size < 2) return;
   const keys = [...libSelected];
   const items = keys.map(parsePageKey);
-  const loaded = ($('#lib-result')._lastItems || []);
+  const loaded = libSelectionContext();
   const byAid = {};
   const byKey = {};
   loaded.forEach(w => {
@@ -5562,14 +5543,16 @@ async function openMergeImages() {
 window.libBatchAddCart = async function () {
   const keys = [...libSelected];
   if (!keys.length) return;
-  const loaded = ($('#lib-result')._lastItems || []);
+  const loaded = libSelectionContext();
   const byKey = {};
   loaded.forEach(w => { byKey[w._key] = w; });
-  const artMap = new Map();   // aid -> {artwork_id,title,author_id,author_name,page_count}
+  const artMap = new Map(); // 按作品去重，图片视图选择同作品多张图也只下载一次。
+  let skipForeign = 0;
   keys.forEach(k => {
     const w = byKey[k] || {};
     const aid = w.artwork_id || (k.indexOf('|') >= 0 ? k.split('|')[0] : k);
     if (!aid || artMap.has(aid)) return;
+    if (!/^\d+$/.test(String(aid)) || !canRedownload(w)) { skipForeign++; return; }
     artMap.set(aid, {
       artwork_id: aid,
       title: w.title || '',
@@ -5579,6 +5562,7 @@ window.libBatchAddCart = async function () {
     });
   });
   const items = [...artMap.values()];
+  if (!items.length) { toast('补完作品仅支持有效的 Pixiv 作品', 'info'); return; }
   try {
     const r = await api('/api/cart/batch-add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) });
@@ -5597,7 +5581,7 @@ window.libBatchAddCart = async function () {
     }
     libSelected.clear(); _libAnchor = null; syncLibSelUI();
     setLastAction('library', [], '刚加入的下载任务');
-  } catch (e) { toast('批量加入清单失败: ' + e.message, 'err'); }
+  } catch (e) { toast('补完作品失败: ' + e.message, 'err'); }
 };
 
 // ♻ 重下修复: 用官方源【覆盖】重下选定作品 (旧文件自动备份为 .bak)。
@@ -5653,24 +5637,16 @@ window.chkRepairGroup = function (type) {
 
 // 从图库选中项触发 (批量操作行的「♻ 重下修复」)
 window.libBatchRepair = async function () {
-  const keys = [...libSelected];
-  if (!keys.length) return;
-  const loaded = ($('#lib-result')._lastItems || []);
-  const byKey = {};
-  loaded.forEach(w => { byKey[w._key] = w; });
-  const aids = [...new Set(keys.map(k => {
-    const w = byKey[k] || {};
-    return String(w.artwork_id || (k.indexOf('|') >= 0 ? k.split('|')[0] : k) || '');
-  }))].filter(Boolean);
-  if (!aids.length) return;
-  const ok = await repairWorks(aids, `图库选中 ${aids.length} 项`);
+  const works = libSelectedDownloads();
+  if (!works.length) return;
+  const ok = await repairWorks(works.map(w => String(w.artwork_id)), `图库选中 ${works.length} 个 Pixiv 作品`);
   if (ok) { libSelected.clear(); _libAnchor = null; syncLibSelUI(); }
 };
 
 // 🔎 批量搜索来源: 已记录 URL 的直接归类(瞬间), 其余逐个 SauceNAO 反搜(慢, 后台串行)。
 // 反搜命中只作参考, 不自动改库 —— 由用户在「搜索来源/批量编辑」里确认。
 window.batchSourceSearch = async function () {
-  const loaded = ($('#lib-result')._lastItems || []);
+  const loaded = libSelectionContext();
   const byKey = {};
   loaded.forEach(w => { byKey[w._key] = w; });
   const aids = [...new Set([...libSelected].map(k => {
@@ -6142,7 +6118,7 @@ async function openSplitImages() {
   // 与「合并」完全相同的硬闸门: pixiv 作品(数字ID)的原网页页 (origin!== 'merged')
   // 不能拆 —— 后端 split_pages/merge_pages 都会拦, 这里提前硬阻断, 不让用户白填弹窗。
   // 2026-09-16 旧版只在弹窗里写了行警告, 点了才报错, 应像合并一样直接拦下。
-  const loaded = ($('#lib-result')._lastItems || []);
+  const loaded = libSelectionContext();
   const byKey = {};
   loaded.forEach(w => { byKey[w._key] = w; });
   const blocked = keys.filter(k => {
@@ -6220,7 +6196,7 @@ async function openBatchEdit() {
   const isImg = libDataView === 'image';
   const artIds = isImg ? [...new Set([...libSelected].map(k => parsePageKey(k).artwork_id))] : [...libSelected];
   const nSel = libSelected.size, nArt = artIds.length;
-  openLibModal(`✏️ 批量编辑 · ${isImg ? `${nSel} 张图片（${nArt} 个作品）` : `${nSel} 个作品`}`, `
+  openLibModal(`✏️ 编辑 · ${isImg ? `${nSel} 张图片（${nArt} 个作品）` : `${nSel} 个作品`}`, `
     ${isImg ? `<div class="hint" style="margin-bottom:8px">⚠ 作者/类型/R18/来源/标签均为作品级属性，将应用到所选图片所属的 <b>${nArt}</b> 个作品（同一作品的其他页也会一并生效）。</div>` : ''}
     <div class="hint" style="margin-bottom:8px">勾选要修改的字段并填写内容；未勾选的字段保持不变。</div>
     <div class="be-row"><label><input type="checkbox" class="be-chk" data-k="author"> 修改作者</label>
@@ -6290,7 +6266,10 @@ function openLibModal(title, bodyHtml, opts) {
   $('#lib-modal-body').innerHTML = bodyHtml;
   $('#lib-modal').style.display = 'flex';
 }
-function closeLibModal() { $('#lib-modal').style.display = 'none'; }
+function closeLibModal() {
+  if ($('#lib-modal').dataset.wallBusy === '1') return;
+  $('#lib-modal').style.display = 'none';
+}
 
 // ============ 💾 备份中心 (2026-09-16 合并原「一键备份」+「备份管理」) ============
 //   只留一个入口, 「一键备份」搬进里面 —— 上半是数据库备份(zip), 下半是
@@ -6696,7 +6675,7 @@ async function searchLibrary() { loadLibrary(); }
 async function loadLibraryRecent() {
   // 重置同时退出「仅查看该作品」特殊筛选 (否则列表仍被 only 过滤住)
   if (libOnlyAid) { libOnlyAid = null; libOnlyPrev = null; renderOnlyBanner(); _paintLibViewToggles(); }
-  libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, sort: 'updated', order: 'desc' };
+  libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
   $('#lib-search-input').value = '';
   ['#lib-f-type', '#lib-f-status', '#lib-f-source'].forEach(sel => { $(sel).value = ''; });
   $('#lib-f-sort').value = 'updated';   // 默认排序: 按修改时间 (2026-09-16 默认)
@@ -6704,9 +6683,7 @@ async function loadLibraryRecent() {
   $('#lib-f-ai').value = '';     // 默认 AI: 全部 (不隐藏任何作品)
   if (comboAuthor) comboAuthor.clear();
   if (comboTag) comboTag.clear();
-  $('#lib-f-missing').classList.remove('active');
-  $('#lib-f-missing-file').classList.remove('active');
-  $('#lib-f-deleted').classList.remove('active');
+  $('#lib-f-anomaly').value = '';
   $('#lib-f-order').textContent = '↓ 降序';
   loadLibrary();
 }
@@ -7909,9 +7886,9 @@ function bind() {
     $('#lib-f-order').textContent = libFilters.order === 'desc' ? '↓ 降序' : '↑ 升序';
     loadLibrary();
   });
-  // toggle 图标按钮: 「缺元数据」「缺失文件」互斥切换 (再点一次取消)
-  $('#lib-f-missing').addEventListener('click', () => {
-    setLibMissingMode($('#lib-f-missing').classList.contains('active') ? '' : 'metadata');
+  // 异常筛选: 下拉单选 (缺元数据 / 缺失文件 / 已失效), 可与其它条件叠加
+  $('#lib-f-anomaly').addEventListener('change', (e) => {
+    setLibMissingMode(e.target.value);
   });
   $('#lib-sel-all').addEventListener('click', () => {
     const on = $('#lib-sel-all').classList.toggle('active');
@@ -7934,7 +7911,24 @@ function bind() {
   $('#lib-batch-split').addEventListener('click', openSplitImages);
   $('#lib-batch-srcsearch').addEventListener('click', batchSourceSearch);
   $('#lib-batch-addcart').addEventListener('click', libBatchAddCart);
-  $('#lib-batch-repair').addEventListener('click', libBatchRepair);
+  $('#lib-batch-repair').addEventListener('click', () => { closeLibRedownload(); libBatchRepair(); });
+  $('#lib-batch-addcart').addEventListener('click', () => closeLibRedownload());
+  $('#lib-selection-info').addEventListener('click', libSelectionInfo);
+  $('#lib-redownload-btn').addEventListener('click', () => {
+    const menu = $('#lib-redownload-menu'); menu.hidden = !menu.hidden;
+    $('#lib-redownload-btn').setAttribute('aria-expanded', String(!menu.hidden));
+    if (!menu.hidden) $('#lib-batch-addcart').focus();
+  });
+  document.addEventListener('click', e => { if (!e.target.closest('.lib-redownload')) closeLibRedownload(); });
+  $('#lib-redownload-menu').addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); closeLibRedownload(true); }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault();
+      const choices = [...$('#lib-redownload-menu').querySelectorAll('button:not(:disabled)')];
+      const i = choices.indexOf(document.activeElement);
+      choices[e.key === 'Home' ? 0 : e.key === 'End' ? choices.length - 1 : (i + (e.key === 'ArrowUp' ? -1 : 1) + choices.length) % choices.length]?.focus();
+    }
+  });
 
   // 作者管理页
   $('#authors-search-btn').addEventListener('click', () => loadAuthors());
@@ -8049,16 +8043,32 @@ function bind() {
     }
     this.value = '';
   });
-  // 📁 从本地文件夹导入 (移动文件)
-  $('#lib-import-btn').addEventListener('click', () => importLocalImages('folder'));
-  const importFilesBtn = $('#lib-import-files-btn');
-  if (importFilesBtn) importFilesBtn.addEventListener('click', () => importLocalImages('files'));
-  $('#lib-f-missing-file').addEventListener('click', () => {
-    setLibMissingMode($('#lib-f-missing-file').classList.contains('active') ? '' : 'file');
-  });
-  $('#lib-f-deleted').addEventListener('click', () => {
-    setLibMissingMode($('#lib-f-deleted').classList.contains('active') ? '' : 'deleted');
-  });
+  // 📁 导入 ▾: 一个入口, 展开后选「导入文件夹 / 导入图片」
+  (function initLibImportMenu() {
+    const btn = $('#lib-import-btn');
+    const menu = $('#lib-import-menu');
+    if (!btn || !menu) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = menu.hidden;
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    menu.addEventListener('click', (e) => {
+      const item = e.target.closest('button');
+      if (!item) return;
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+      if (item.id === 'lib-import-folder-item') importLocalImages('folder');
+      else if (item.id === 'lib-import-files-item') importLocalImages('files');
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.lib-menu-wrap')) {
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
 
   // 拖拽框选 (网格视图): 按住左键在卡片上拖出一个矩形, 框住即选中
   // 支持与已选中集合并集 (不配合 Ctrl 时从空集开始, 配合 Ctrl 追加到现有选择)

@@ -68,9 +68,17 @@ def _acquire_single_instance(name: str = "vixiq_web") -> "object | None":
     global _instance_mutex
     if os.name != "nt":
         return True
+    if name == "vixiq_web" and not getattr(sys, "frozen", False):
+        # 开发工作区各自持锁，不与用户正在运行的安装版互斥。
+        import hashlib
+        workspace = str(Path(__file__).resolve().parent).casefold()
+        name += "_source_" + hashlib.sha256(workspace.encode("utf-8")).hexdigest()[:16]
     try:
         import ctypes
         from ctypes import wintypes  # type: ignore
+        ctypes.windll.kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+        ctypes.windll.kernel32.CreateMutexW.restype = wintypes.HANDLE
+        ctypes.windll.kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         _instance_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, name)
         leaked = bool(_instance_mutex and ctypes.windll.kernel32.GetLastError() == 183)
         if leaked:
@@ -608,6 +616,17 @@ def main():
     # 必须放在单实例锁**之前** —— 否则会被当成「重复启动」走进二实例分支。
     if "--quit" in sys.argv[1:]:
         _close_native_splash()
+        if not getattr(sys, "frozen", False) and load_config().get("launcher", {}).get("isolated"):
+            # 测试实例退出只通知自己的端口，不查找安装版的全局托盘窗口。
+            import http.client
+            cfg = load_config()
+            conn = http.client.HTTPConnection("127.0.0.1", int(cfg["web"]["port"]), timeout=2)
+            try:
+                conn.request("POST", "/api/app/quit")
+                conn.getresponse().read()
+            finally:
+                conn.close()
+            return
         try:
             import ctypes
             from utils.tray import WM_CLOSE, find_tray_window
@@ -686,7 +705,8 @@ def main():
 
     # 启动前先清孤儿 driver/Edge: 强杀/崩溃后它们常让 7810 变幻影占用
     # (锁住 driver 与 profile 文件, 导致整个程序目录删不掉)
-    _kill_orphan_drivers()
+    if not config.get("launcher", {}).get("isolated"):
+        _kill_orphan_drivers()
     try:
         from utils.browser import clean_stale_browser_profiles
         n = clean_stale_browser_profiles()

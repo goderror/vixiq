@@ -1,0 +1,237 @@
+/* 独立共享吸顶工具栏样式：仅本文件生效，不改其他文件 */
+
+/* main 作为真实滚动容器 */
+main {
+  scroll-padding-top: var(--management-scroll-margin, 0px);
+  min-height: 0;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+
+/* 吸顶工具栏：宽度固定，颜色随状态过渡 */
+.management-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--panel);
+  border-bottom: 1px solid transparent;
+  padding: 6px 0;
+  margin-bottom: 12px;
+  transition: background-color .2s, border-color .2s, box-shadow .2s;
+}
+
+/* 紧凑态：只变背景/边框/阴影与少量 padding，不做高度动画 */
+main.management-compact .management-toolbar {
+  background: var(--panel, #fff);
+  border-bottom-color: var(--border, #ddd);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .08);
+  padding: 4px 0;
+}
+main.management-compact .management-heading,
+main.management-compact .management-extra {
+  display: none;
+}
+
+/* 标题与页面工具同一行: 省掉一整行高度, 窄窗口允许换行 */
+.management-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.management-heading h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.management-heading .panel-actions {
+  margin: 0 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.management-heading .panel-actions .btn {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* 主搜索条：可换行，搜索框自适应 */
+.management-primary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.management-primary .search-box,
+.management-primary input[type="search"] {
+  flex: 1 1 240px;
+  min-width: 120px;
+}
+.management-primary .search-box input,
+.management-primary input[type="search"] {
+  width: 100%;
+}
+.management-primary .toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.management-primary .status {
+  margin: 0;
+}
+
+/* 附加筛选区: 展开时按内容自然排布, 不再自己滚 (滚轮统一滚主列表) */
+.management-extra {
+  padding-right: 0;
+}
+.management-extra-inner {
+  padding: 1px 0 4px;
+  min-width: 0;
+}
+.management-extra .field-row,
+.management-extra .lib-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 候选下拉用浮层: 不参与高度计算, 也不会把工具栏撑高 */
+.management-extra .combo {
+  display: inline-block;
+  position: relative;
+}
+.management-extra .combo-list {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 2px);
+  z-index: 40;
+  min-width: 100%;
+  max-height: 180px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .12);
+}
+.management-extra .input-clear {
+  position: absolute;
+}
+
+/* 视图按钮可换行，fieldset 不固定大最小宽 */
+.management-primary .view-toggle,
+.management-primary fieldset {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* 操作行: 未选中时整行收起; 选中后左侧计数、右侧动作 */
+.management-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.management-selection[hidden] {
+  display: none;
+}
+.management-selection:empty {
+  display: none;
+}
+main.management-compact .management-selection {
+  margin: 4px 0 0;
+  gap: 6px;
+}
+.management-selection .lib-selection-row,
+.management-selection .wf-selection-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.management-selection .lib-batch-group,
+.management-selection .lib-action-toolbar,
+.management-selection .wf-batch {
+  margin: 0;
+  margin-left: auto;
+}
+
+/* 分页行 */
+.management-pager:empty {
+  display: none;
+}
+.management-pager {
+  margin: 8px 0;
+  padding: 6px 0;
+}
+main.management-compact .management-pager {
+  margin: 6px 0;
+  padding: 4px 0;
+}
+
+/* 滚动定位预留吸顶高度 */
+#lib-result,
+#authors-result,
+#wf-result {
+  scroll-margin-top: var(--management-scroll-margin, 180px);
+}
+
+/* 下载菜单不被剪裁：selection 不设 overflow */
+.management-selection .lib-redownload-menu {
+  overflow: visible;
+}
+
+/* 焦点可见但不改变几何 */
+.management-toolbar :focus-visible {
+  outline: 2px solid var(--focus, #4c9ffe);
+  outline-offset: 2px;
+}
+
+/* 窄屏：搜索占一行，其余按钮换行，toggle 始终可见 */
+@media (max-width: 500px) {
+  .management-primary .search-box,
+  .management-primary input[type="search"] {
+    flex: 1 1 100%;
+  }
+  .management-primary {
+    gap: 6px;
+  }
+  .management-primary > * {
+    min-width: 0;
+  }
+}
+
+/* 作者总数可换行不溢出 */
+.management-primary .total,
+#authors-result .management-primary .total {
+  flex-wrap: wrap;
+  min-width: 0;
+  white-space: normal;
+}
+
+/* 紧凑态追加覆盖：更紧凑但所有选中动作仍可用 */
+main.management-compact .management-toolbar { padding: 4px 0; }
+main.management-compact .management-primary { margin: 0 0 5px; }
+main.management-compact .management-selection { gap: 4px; }
+main.management-compact .management-selection .lib-selection-row,
+main.management-compact .management-selection .wf-selection-row,
+main.management-compact .management-selection .lib-action-toolbar,
+main.management-compact .management-selection .wf-batch { margin: 0; }
+main.management-compact .lib-action-toolbar,
+main.management-compact .wf-batch { padding: 6px; gap: 6px; }
+main.management-compact .management-selection .btn { padding: 6px 10px; font-size: 13px; }
+main.management-compact .lib-action-group + .lib-action-group { padding-left: 10px; }
+main.management-compact .management-pager { padding: 4px 0; margin-top: 4px; }
+
+/* 减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .management-toolbar {
+    transition: none;
+  }
+}

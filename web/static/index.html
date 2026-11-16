@@ -8,7 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261116c">
+<link rel="stylesheet" href="/static/style.css?v=20261117a">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117a">
 </head>
 <body>
 
@@ -48,14 +49,14 @@
   <button class="tab" data-tab="tasks">📥 下载任务<span id="cart-badge" class="badge hidden">0</span></button>
   <button class="tab" data-tab="reverse">🔎 反搜来源</button>
   <button class="tab" data-tab="library">📚 图库管理</button>
-  <button class="tab" data-tab="authors">👤 作者管理</button>
   <button class="tab" data-tab="wallpapers">🖼️ 壁纸管理</button>
+  <button class="tab" data-tab="authors">👤 作者管理</button>
   <button class="tab" data-tab="stats">📊 统计</button>
   <button class="tab" data-tab="settings">⚙ 设置</button>
   <button class="tab tab-subtle" data-tab="trash" title="回收站" aria-label="回收站">🗑️<span id="trash-badge" class="badge hidden">0</span></button>
 </nav>
 
-<main>
+<main tabindex="0">
   <!-- ===== 查询: 作品 / 作者 双子页 ===== -->
   <section id="tab-search" class="tabpage active">
     <div class="panel">
@@ -207,44 +208,33 @@
   <!-- ===== 图库管理 ===== -->
   <section id="tab-library" class="tabpage">
     <div class="panel">
-      <div class="panel-head">
+      <div class="management-toolbar" data-management="library">
+      <div class="panel-head management-heading">
         <h2>📚 图库管理</h2>
         <div class="panel-actions">
           <button id="lib-tidy-btn" class="btn accent" title="错位作品归位、作者夹规范命名、散落文件归类（先预览后执行）">🧹 一键整理</button>
           <button id="lib-selfcheck-btn" class="btn accent" title="对账 / 离线清理 / 作者名同步 / 补元数据 / 文件整理 / 汇总报告，可单独跑">🩺 体检</button>
           <button id="lib-backup" class="btn accent" title="数据库备份（zip）与「重下修复」留下的 .bak 管理">💾 备份</button>
+          <button id="lib-similar-btn" class="btn ghost" title="上传一张图，在图库里找最像的">🔍 以图搜图</button>
+          <input id="lib-similar-file" type="file" accept="image/*" style="display:none">
+          <span class="lib-menu-wrap">
+            <button id="lib-import-btn" class="btn ghost" aria-haspopup="menu" aria-expanded="false"
+                    title="从本机导入图片：文件名含作品ID的直接入库，无ID的转反搜收件箱；源文件进回收站（可还原）">📁 导入 ▾</button>
+            <span id="lib-import-menu" class="lib-menu" role="menu" aria-label="导入" hidden>
+              <button id="lib-import-folder-item" type="button" role="menuitem">导入文件夹</button>
+              <button id="lib-import-files-item" type="button" role="menuitem">导入图片</button>
+            </span>
+          </span>
+          <button id="lib-sync-btn" class="btn ghost"
+                  title="立即核对图库记录与磁盘文件，登记新图片并更新缺失提示">🔄 同步磁盘</button>
         </div>
       </div>
-      <!-- 🖼 当前壁纸 (2026-09-24): 桌面幻灯片播到哪一张, Windows 会把路径写进注册表,
-           后端读得到 → 这张卡片当场告诉你是谁画的、库内哪一页、有没有更高清的一版。
-           只读展示; 删壁纸要用户亲手点, 且只进 Windows 电脑回收站。 -->
-      <div id="wall-card" class="wall-card hidden">
-        <div class="wall-head">
-          <span class="wall-title">🖼️ 当前壁纸</span>
-          <span id="wall-name" class="wall-name"></span>
-          <span id="wall-badges"></span>
-          <span class="lib-spacer"></span>
-          <button class="btn ghost" onclick="wallDupesOpen()" title="与图库字节一致的壁纸副本，勾选后移进电脑回收站">🧹 清理副本</button>
-          <button id="wall-refresh" class="btn ghost" onclick="wallRefresh()" title="立即刷新">↻</button>
-          <button id="wall-fold" class="btn ghost" onclick="wallFold()" title="收起 / 展开">收起</button>
-        </div>
-        <div id="wall-body" class="wall-body"></div>
-      </div>
-      <div id="lib-stats" class="stats-grid"><div class="stat-card">读取统计中…</div></div>
-      <div id="lib-missing-hint" class="hint" style="display:none"></div>
-      <div id="lib-health-hint" class="health-row" style="display:none"></div>
-      <div class="field-row">
+      <div class="management-primary field-row">
         <div class="search-box">
           <input id="lib-search-input" type="text" placeholder="在图库中搜索作品/作者/标签/本地文件名…" spellcheck="false">
           <button id="lib-search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
         </div>
         <button id="lib-search-btn" class="btn accent">搜索</button>
-        <button id="lib-recent-btn" class="btn">📋 全部作品</button>
-        <button id="lib-sync-btn" class="btn ghost">🔄 同步</button>
-        <button id="lib-similar-btn" class="btn ghost" title="上传一张图，在图库里找最像的">🔍 以图搜图</button>
-        <input id="lib-similar-file" type="file" accept="image/*" style="display:none">
-        <button id="lib-import-btn" class="btn ghost" title="文件名含作品ID的直接入库，无ID的转反搜收件箱；源文件进回收站（可还原）">📁 导入文件夹</button>
-        <button id="lib-import-files-btn" class="btn ghost" title="同上，按多张图片导入">🖼️ 导入图片</button>
         <span class="view-toggle" id="lib-data-toggle" title="按作品看 / 按单张图片看">
           <button class="btn view-btn active" data-view="artwork" title="每个作品一张卡片">🖼️ 作品</button>
           <button class="btn view-btn" data-view="image" title="逐张列出库内图片">🖼️ 图片</button>
@@ -253,14 +243,24 @@
           <button class="btn view-btn active" data-view="grid" title="网格视图">🟦 网格</button>
           <button class="btn view-btn" data-view="list" title="列表视图">☰ 列表</button>
         </span>
+        <button id="lib-sel-all" type="button" class="btn icon-toggle" title="全选本页 / 取消选择">☑ 全选</button>
+        <button type="button" class="btn ghost management-toggle" aria-expanded="true" aria-controls="lib-filters">收起菜单</button>
       </div>
-      <div class="field-row lib-filters">
+      <div class="management-extra">
+        <div class="management-extra-inner">
+      <div class="field-row lib-filters" id="lib-filters">
         <select id="lib-f-type" title="按类型筛选"><option value="">类型: 全部</option><option value="0">插画</option><option value="1">漫画</option><option value="2">动图</option></select>
         <select id="lib-f-status" title="按作者存续状态筛选"><option value="">状态: 全部</option><option value="alive">作者活跃中</option><option value="gone">作者已注销</option><option value="unknown">未知作者</option></select>
         <select id="lib-f-source" title="按来源筛选"><option value="">来源: 全部</option><option value="pixiv">pixiv</option><option value="danbooru">danbooru</option><option value="twitter">X（推特）</option><option value="bilibili">bilibili</option><option value="ggac">GGAC</option><option value="artstation">ArtStation</option><option value="deviantart">DeviantArt</option><option value="niconico">Nico静画</option><option value="skeb">Skeb</option><option value="yandere">yande.re</option><option value="konachan">Konachan</option><option value="gelbooru">Gelbooru</option><option value="sankaku">Sankaku</option><option value="other">未知来源</option></select>
         <button id="lib-src-manage" class="btn ghost" title="管理来源分类">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg>
         </button>
+        <select id="lib-f-anomaly" title="按异常状态筛选">
+          <option value="">异常: 全部</option>
+          <option value="metadata">缺元数据</option>
+          <option value="file">缺失文件</option>
+          <option value="deleted">已失效</option>
+        </select>
         <select id="lib-f-r18" title="按 R18 筛选"><option value="0" selected>R18: 非 R18</option><option value="1">仅 R18</option><option value="">全部（含 R18）</option></select>
         <select id="lib-f-ai" title="按 AI 生成筛选（按 pixiv 官方 aiType 标记）"><option value="" selected>AI: 全部</option><option value="0">AI: 非 AI</option><option value="2">AI: 仅 AI</option></select>
         <div class="combo" id="combo-author">
@@ -283,27 +283,61 @@
           <option value="bookmark">排序: 按收藏</option>
         </select>
         <button id="lib-f-order" class="btn ghost" title="切换升降序">↓ 降序</button>
+        <button id="lib-recent-btn" class="btn ghost" title="清除全部筛选，按默认条件重新列出作品">📋 全部作品</button>
       </div>
-      <!-- 操作行: 条数靠左 + 状态筛选/批量按钮靠右, 与筛选控件分行 -->
-      <div class="lib-ops-row">
-        <span id="lib-total" class="status-line"></span>
-        <div class="lib-batch-group">
-          <button id="lib-f-missing" type="button" class="btn icon-toggle" title="缺标题/标签/封面等信息的作品">🏷️ 缺元数据</button>
-          <button id="lib-f-missing-file" type="button" class="btn icon-toggle" title="数据库有记录但磁盘文件已丢失的作品">⚠ 缺失文件</button>
-          <button id="lib-f-deleted" type="button" class="btn icon-toggle" title="pixiv 作品页已确认不存在（404）的作品，本地文件仍可查看">🗑️ 已失效</button>
-          <button id="lib-sel-all" type="button" class="btn icon-toggle" title="全选 / 取消全选">☑ 全选</button>
-          <button id="lib-sel-clear" class="btn ghost" disabled title="取消全部选中">✕ 取消选择</button>
-          <button id="lib-batch-addcart" class="btn" disabled title="加进下载队列并开始；库里已完整的不重下，缺页的只补缺失页，永不覆盖本地文件">➕ 批量加入下载(<span id="lib-sel-count3">0</span>)</button>
-          <button id="lib-batch-repair" class="btn danger" disabled title="用 pixiv 官方源覆盖重下，旧文件自动备份为 .bak（可在「💾 备份」里恢复）。只对 pixiv 作品有效">♻ 重下修复(<span id="lib-sel-count4">0</span>)</button>
-          <button id="lib-batch-edit" class="btn" disabled title="批量改选中项的作者/标签/类型/R18/来源，只改勾选的字段">✏️ 批量编辑(<span id="lib-sel-count2">0</span>)</button>
-          <button id="lib-batch-merge" class="btn" disabled title="把选中的图片并为同一作品的多页，可并入已有作品或新建作品">🔗 合并图片</button>
-          <button id="lib-batch-split" class="btn" disabled title="把选中的图片从原作品拆出（每张独立或组成新作品）；只改数据库归属，图片文件不动">✂️ 拆分</button>
-          <button id="lib-batch-srcsearch" class="btn" disabled title="已记录来源URL的直接归类；其余用 SauceNAO 反搜（较慢）。反搜结果只作参考">🔎 批量搜索来源</button>
-          <button id="lib-batch-del" class="btn danger" disabled>🗑️ 批量删除(<span id="lib-sel-count">0</span>)</button>
         </div>
       </div>
+      <div class="management-selection" hidden>
+      <div class="lib-selection-row">
+        <span id="lib-total" class="status-line" role="status">已选 0 个作品 · 0 张图片</span>
+        <div class="lib-selection-controls">
+          <button id="lib-sel-clear" class="btn ghost" disabled title="取消全部选中">取消选择</button>
+        </div>
+      </div>
+      <div class="lib-batch-group lib-action-toolbar" role="toolbar" aria-label="所选项操作">
+        <div class="lib-action-group"><span class="lib-action-label">下载</span>
+          <div class="lib-redownload">
+            <button id="lib-redownload-btn" type="button" class="btn" disabled aria-haspopup="menu" aria-expanded="false" aria-controls="lib-redownload-menu" title="对选中的 Pixiv 作品补齐缺图或重新获取原图">重新下载 ▾</button>
+            <div id="lib-redownload-menu" class="lib-redownload-menu" role="menu" aria-label="重新下载" hidden>
+              <button id="lib-batch-addcart" type="button" role="menuitem" disabled title="仅限 Pixiv 作品：从 Pixiv 补齐作品中缺少的图片，已有文件保留">补完作品</button>
+              <button id="lib-batch-repair" type="button" role="menuitem" disabled title="仅限 Pixiv 作品：重新获取原图，替换损坏或低清文件；替换前自动备份为 .bak，可从备份中恢复">修复原图</button>
+            </div>
+          </div>
+        </div>
+        <div class="lib-action-group"><span class="lib-action-label">编辑</span>
+          <button id="lib-batch-edit" class="btn" disabled title="修改所选作品的作者、标签、类型与来源等信息">编辑</button>
+        </div>
+        <div class="lib-action-group"><span class="lib-action-label">整理</span>
+          <button id="lib-batch-merge" class="btn" disabled title="在图片视图选择至少两张图片，合并到已有作品或新作品">合并</button>
+          <button id="lib-batch-split" class="btn" disabled title="在图片视图选择图片，从所属作品拆出">拆分</button>
+        </div>
+        <div class="lib-action-group"><span class="lib-action-label">信息</span>
+          <button id="lib-batch-srcsearch" class="btn" disabled title="按已有链接识别来源；无链接时搜索图片出处，结果确认后再应用">搜索来源</button>
+          <button id="lib-selection-info" class="btn" disabled>作品/图片信息</button>
+        </div>
+        <button id="lib-batch-del" class="btn danger lib-delete" disabled title="删除所选项（移入应用回收站）" aria-label="删除">🗑️</button>
+      </div>
+      </div>
+      </div>
+      <!-- 以下内容随列表滚走，不吸顶 (统计/当前壁纸/提示/分页) -->
+      <div id="wall-card" class="wall-card hidden">
+        <div class="wall-head">
+          <span class="wall-title">🖼️ 当前壁纸</span>
+          <span id="wall-name" class="wall-name"></span>
+          <span id="wall-badges"></span>
+          <span class="lib-spacer"></span>
+          <button class="btn ghost" onclick="wallDupesOpen()" title="与图库字节一致的壁纸副本，勾选后移进电脑回收站">🧹 清理副本</button>
+          <button id="wall-refresh" class="btn ghost" onclick="wallRefresh()" title="立即刷新">↻</button>
+          <button id="wall-fold" class="btn ghost" onclick="wallFold()" title="收起 / 展开">收起</button>
+        </div>
+        <div id="wall-body" class="wall-body"></div>
+      </div>
+      <div id="lib-stats" class="stats-grid"><div class="stat-card">读取统计中…</div></div>
+      <div id="lib-missing-hint" class="hint" style="display:none"></div>
+      <div id="lib-health-hint" class="health-row" style="display:none"></div>
       <div id="lib-only-banner" class="lib-only-banner" hidden></div>
       <div id="lib-pager-top" class="lib-pager"></div>
+      </div>
       <div id="lib-result"></div>
       <div id="lib-pager-bottom" class="lib-pager"></div>
     </div>
@@ -326,6 +360,7 @@
       <div class="btn-row" style="margin-bottom:8px">
         <button class="btn ghost trash-kind active" data-kind="artwork" onclick="trashSwitchKind('artwork')">📦 作品</button>
         <button class="btn ghost trash-kind" data-kind="page" onclick="trashSwitchKind('page')">🖼️ 单张图片</button>
+        <button class="btn ghost trash-kind" data-kind="wallpaper" onclick="trashSwitchKind('wallpaper')">🖼️ 壁纸</button>
       </div>
       <div id="trash-result"></div>
     </div>
@@ -334,22 +369,28 @@
   <!-- ===== 作者管理 (作者维度数据库: 筛选/排序/搜索/编辑) ===== -->
   <section id="tab-authors" class="tabpage">
     <div class="panel">
-      <div class="panel-head">
+      <div class="management-toolbar" data-management="authors">
+      <div class="panel-head management-heading">
         <h2>👤 作者管理</h2>
-        <div class="panel-actions">
-          <span id="authors-total" class="status-line"></span>
-        </div>
       </div>
-      <div class="field-row lib-filters">
+      <div class="management-primary field-row">
         <div class="search-box">
           <input id="authors-search-input" type="text" placeholder="搜索作者名 / 曾用名 / ID…" spellcheck="false">
           <button id="authors-search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
         </div>
         <button id="authors-search-btn" class="btn accent">搜索</button>
+        <span id="authors-total-inline" class="status-line"></span>
+        <button type="button" class="btn ghost management-toggle" aria-expanded="true" aria-controls="authors-filters">收起菜单</button>
+      </div>
+      <div class="management-extra">
+        <div class="management-extra-inner">
+        <div class="field-row lib-filters" id="authors-filters">
         <select id="authors-f-status" title="按作者存续状态筛选"><option value="">状态: 全部</option><option value="alive">活跃中</option><option value="gone">已注销</option><option value="unknown">未知</option></select>
         <select id="authors-f-source" title="按作品来源筛选"><option value="">来源: 全部</option><option value="pixiv">pixiv</option><option value="danbooru">danbooru</option><option value="twitter">X（推特）</option><option value="bilibili">bilibili</option><option value="ggac">GGAC</option><option value="other">未知来源</option></select>
-        <span class="lib-spacer"></span>
-        <span id="authors-total-inline" class="status-line"></span>
+        </div>
+        </div>
+      </div>
+      <div class="management-selection"></div>
       </div>
       <div id="authors-pager-top" class="lib-pager"></div>
       <div id="authors-result" class="table-wrap">
@@ -362,37 +403,61 @@
   <!-- ===== 壁纸管理 (归属索引 + 查重; 只读扫描, 删副本必须手动勾选并进回收站) ===== -->
   <section id="tab-wallpapers" class="tabpage">
     <div class="panel">
-      <div class="panel-head">
+      <div class="management-toolbar" data-management="wallpapers">
+      <div class="panel-head management-heading">
         <h2>🖼️ 壁纸管理</h2>
-        <div class="panel-actions">
-          <span id="wf-dir" class="status-line"></span>
-          <button id="wf-scan-btn" class="btn accent" onclick="wallFilesScan(false)">🔍 扫描归属</button>
-          <button id="wf-scan-deep-btn" class="btn" onclick="wallFilesScan(true)"
-                  title="用图像特征识别手动裁剪/另存出来的壁纸（首次较慢，之后只扫新增和改动的文件）">✨ 深度扫描</button>
-        </div>
       </div>
-      <div class="hint" style="margin:6px 0 10px">
-        壁纸夹里每个文件属于图库的哪一页，扫一次记在本地。已归属的壁纸再次设为壁纸时会先提示，不会重复堆同一作品的多份。
-        扫描只读，不会删文件；删除副本一律勾选后送进 Windows 电脑回收站（可还原）。
+      <div class="management-primary field-row">
+        <input id="wf-search" type="search" placeholder="搜索文件名、作品、作者或标记" aria-label="搜索壁纸">
+        <button type="button" class="btn ghost" onclick="wallSelectVisible()">全选本页</button>
+        <button type="button" class="btn ghost management-toggle" aria-expanded="true" aria-controls="wf-extra-tools">收起菜单</button>
       </div>
+      <div class="management-extra">
+        <div class="management-extra-inner">
       <div id="wf-scan-bar" class="progress-wrap hidden">
         <div id="wf-scan-fill" class="progress-bar"></div>
         <span id="wf-scan-text">0%</span>
       </div>
-      <div id="wf-scan-tip" class="status-line" style="margin:0 0 8px"></div>
-      <div id="wf-stats" class="stats-grid"></div>
-      <div class="field-row lib-filters">
-        <div class="btn-row" id="wf-filters">
-          <button class="btn filter-btn active" data-f="all">全部</button>
-          <button class="btn filter-btn" data-f="owned">已归属</button>
-          <button class="btn filter-btn" data-f="orphan">未归属</button>
-          <button class="btn filter-btn" data-f="dupe">重复</button>
-        </div>
-        <span class="lib-spacer"></span>
-        <span id="wf-sel-count" class="status-line">已选 0 张</span>
-        <button id="wf-recycle" class="btn danger" disabled onclick="wallFilesRecycle()">🗑️ 删除副本（进回收站）</button>
+      <div class="wf-tools" id="wf-extra-tools">
+        <button id="wf-scan-btn" class="btn" onclick="wallFilesScan(false)">🔍 扫描归属</button>
+        <button id="wf-scan-deep-btn" class="btn" onclick="wallFilesScan(true)"
+                title="用图像特征识别手动裁剪/另存出来的壁纸（首次较慢，之后只扫新增和改动的文件）">✨ 深度扫描</button>
+        <select id="wf-work-filter" aria-label="按作品筛选"><option value="">所有作品</option></select>
+        <select id="wf-group-filter" aria-label="按自定义分组筛选"><option value="">所有分组</option></select>
+        <select id="wf-sort" aria-label="壁纸排序"><option value="name">文件名</option><option value="new">最近修改</option><option value="size">文件大小</option></select>
+        <button class="btn" onclick="wallGroupsManage()">管理分组</button>
       </div>
+      <div class="btn-row" id="wf-filters">
+        <button class="btn filter-btn active" data-f="all">全部</button>
+        <button class="btn filter-btn" data-f="owned">已归属</button>
+        <button class="btn filter-btn" data-f="orphan">未归属</button>
+        <button class="btn filter-btn" data-f="dupe">重复</button>
+        <button class="btn filter-btn" data-f="favorite">收藏</button>
+      </div>
+        </div>
+      </div>
+      <div class="management-selection" hidden>
+      <div class="wf-selection-row">
+        <span id="wf-sel-count" class="status-line">未选择</span>
+        <div class="btn-row">
+          <button class="btn ghost" onclick="wallSelectResults()">全选结果</button>
+          <button class="btn ghost" onclick="wallClearSelection()">取消选择</button>
+        </div>
+      </div>
+      <div id="wf-batch" class="wf-batch">
+        <div class="wf-action-group"><span>设置</span><button class="btn" onclick="wallAction('desktop')">桌面壁纸</button></div>
+        <div class="wf-action-group"><span>归属</span><button class="btn" onclick="wallAction('owner')">改归属</button><button class="btn" onclick="wallAction('group')">移动分组</button></div>
+        <div class="wf-action-group"><span>信息</span><button class="btn" onclick="wallSelectionInfo()">详情</button></div>
+        <div class="wf-action-group"><span>整理</span><button id="wf-rename" class="btn" onclick="wallAction('rename')" title="选择单张壁纸时可重命名">重命名</button><button class="btn" onclick="wallAction('favorite')">收藏</button><button class="btn" onclick="wallAction('unfavorite')">取消收藏</button><button class="btn" onclick="wallAction('labels')">标记</button><button class="btn" onclick="wallAction('trash')">移出壁纸库</button></div>
+        <button id="wf-recycle" class="btn danger" onclick="wallAction('delete')">删除…</button>
+      </div>
+      </div>
+      </div>
+      <!-- 以下随列表滚走 -->
+      <div class="wf-location-row"><span id="wf-dir" class="status-line"></span><span id="wf-scan-tip" class="status-line"></span></div>
+      <div id="wf-stats" class="stats-grid"></div>
       <div id="wf-result"><div class="hint">加载中…</div></div>
+      <div id="wf-pager" class="lib-pager"></div>
     </div>
   </section>
 
@@ -717,7 +782,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261116c"></script>
+<script src="/static/app.js?v=20261117a"></script>
+<script src="/static/wallpaper-admin.js?v=20261117a"></script>
+<script src="/static/management-drawer-state.js?v=20261117a"></script>
+<script src="/static/management-toolbar.js?v=20261117a"></script>
 </body>
 </html>
 

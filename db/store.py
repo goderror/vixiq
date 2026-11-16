@@ -2148,7 +2148,8 @@ class PixivDatabase:
                                 trashed: bool = False,
                                 author_status: "str | None" = None,
                                 source: "str | None" = None,
-                                only_aid: "str | None" = None) -> int:
+                                only_aid: "str | None" = None,
+                                summary: bool = False) -> "int | dict":
         """list_artworks 同条件的结果总数 (分页/统计用)。"""
         where, params = [], []
         # 与 list_artworks 同一条回收站过滤 (两处必须一致, 否则页码/总数对不上)
@@ -2213,17 +2214,19 @@ class PixivDatabase:
             # 「非 AI」把还没补过 aiType 的 (NULL) 也算进来 —— 藏起来会让人以为图丢了
             where.append("COALESCE(a.ai_type, 0) <> 2")
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-        return self.conn.execute(
-            f"""
-            SELECT COUNT(DISTINCT a.artwork_id)
+        matched = f"""SELECT DISTINCT a.artwork_id
               FROM artworks a
          LEFT JOIN authors au ON a.author_id = au.author_id
          LEFT JOIN artwork_tags atg ON atg.artwork_id = a.artwork_id
-         LEFT JOIN tags tg          ON tg.tag_id = atg.tag_id
-             {where_sql}
-            """,
-            params,
-        ).fetchone()[0]
+         LEFT JOIN tags tg ON tg.tag_id = atg.tag_id
+             {where_sql}"""
+        if summary:
+            row = self.conn.execute(f"""SELECT COUNT(*), COALESCE(SUM((
+                SELECT COUNT(*) FROM pages p WHERE p.artwork_id=m.artwork_id
+                  AND p.trashed_at IS NULL AND p.local_path IS NOT NULL AND p.local_path!=''
+            )),0) FROM ({matched}) m""", params).fetchone()
+            return {"artworks": row[0], "images": row[1]}
+        return self.conn.execute(f"SELECT COUNT(*) FROM ({matched})", params).fetchone()[0]
 
     def get_artwork_page_list(self, artwork_ids: "list[str]") -> "dict[str, list[dict]]":
         """每作品的库内页清单: {artwork_id: [{page_num, local_path, file_size_bytes, width, height}]}。
@@ -2254,7 +2257,8 @@ class PixivDatabase:
                     limit: int = 200, offset: int = 0,
                     deleted: bool = False, author_status: "str | None" = None,
                     source: "str | None" = None,
-                    only_aid: "str | None" = None) -> list[dict]:
+                    only_aid: "str | None" = None,
+                    file_missing_ids: "set | list | None" = None) -> list[dict]:
         """图片视图: 以「页」为单位列出图库里所有图片 (pages 有 local_path 的页)。
 
         每行 = 一张图片, 附带所属作品/作者信息; 筛选条件与作品视图 list_artworks 一致
@@ -2263,7 +2267,15 @@ class PixivDatabase:
         where, params = [], []
         # 图片视图同样必须排除回收站: ① 已软删的页 (单图软删) 不能还显示在图库;
         # ② 整个作品被软删时它的页也不能显示。两条缺一条, 删掉的图就会"复活"。
-        where.append("p.trashed_at IS NULL AND a.trashed_at IS NULL")
+        where.append("p.trashed_at IS NULL AND a.trashed_at IS NULL "
+                     "AND p.local_path IS NOT NULL AND p.local_path != ''")
+        if file_missing_ids is not None:
+            ids = [str(x) for x in file_missing_ids]
+            if ids:
+                where.append(f"a.artwork_id IN ({','.join('?' * len(ids))})")
+                params += ids
+            else:
+                where.append("1=0")
         if only_aid:
             # 「仅查看该作品」: 精确 ID 硬过滤 
             where.append("a.artwork_id = ?")
@@ -2352,12 +2364,22 @@ class PixivDatabase:
                               missing: bool = False, deleted: bool = False,
                               author_status: "str | None" = None,
                               source: "str | None" = None,
-                              only_aid: "str | None" = None) -> int:
+                              only_aid: "str | None" = None,
+                              summary: bool = False,
+                              file_missing_ids: "set | list | None" = None) -> "int | dict":
         """list_images 同条件的图片总数 (分页用, 按页去重计数)。"""
         where, params = [], []
         # 图片视图同样必须排除回收站: ① 已软删的页 (单图软删) 不能还显示在图库;
         # ② 整个作品被软删时它的页也不能显示。两条缺一条, 删掉的图就会"复活"。
-        where.append("p.trashed_at IS NULL AND a.trashed_at IS NULL")
+        where.append("p.trashed_at IS NULL AND a.trashed_at IS NULL "
+                     "AND p.local_path IS NOT NULL AND p.local_path != ''")
+        if file_missing_ids is not None:
+            ids = [str(x) for x in file_missing_ids]
+            if ids:
+                where.append(f"a.artwork_id IN ({','.join('?' * len(ids))})")
+                params += ids
+            else:
+                where.append("1=0")
         if only_aid:
             # 「仅查看该作品」: 精确 ID 硬过滤 
             where.append("a.artwork_id = ?")
@@ -2407,9 +2429,9 @@ class PixivDatabase:
             # 「非 AI」把还没补过 aiType 的 (NULL) 也算进来 —— 藏起来会让人以为图丢了
             where.append("COALESCE(a.ai_type, 0) <> 2")
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-        return self.conn.execute(
+        row = self.conn.execute(
             f"""
-            SELECT COUNT(*) FROM (
+            SELECT COUNT(*), COUNT(DISTINCT artwork_id) FROM (
               SELECT DISTINCT p.artwork_id, p.page_num
                 FROM pages p
                 JOIN artworks a ON a.artwork_id = p.artwork_id
@@ -2420,7 +2442,8 @@ class PixivDatabase:
             )
             """,
             params,
-        ).fetchone()[0]
+        ).fetchone()
+        return {"artworks": row[1], "images": row[0]} if summary else row[0]
 
     def get_artwork_local_paths(self, artwork_ids: "list[str]") -> "list[str]":
         """返回这些作品在 pages 表记录的所有本地文件相对路径(去空去重)。
