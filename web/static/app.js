@@ -91,19 +91,34 @@ function cardPeekShow(card) {
 (function initCardsDensity() {
   if (!$('#cards-density-btn')) return;
   try { cardsSetCollapsed(localStorage.getItem(CARDS_COLLAPSED_KEY) === '1'); } catch (e) {}
-  document.addEventListener('mouseover', e => {
-    const card = e.target.closest('#tab-library .work-card, #tab-wallpapers .wf-card');
-    if (card) cardPeekShow(card);
-  });
-  document.addEventListener('mouseout', e => {
-    if (!cardPeekSrc) return;
-    if (e.target !== cardPeekSrc && !cardPeekSrc.contains(e.target)) return;
-    if (e.relatedTarget && cardPeekSrc.contains(e.relatedTarget)) return;
-    cardPeekHide();
-  });
+  // 用 mousemove + elementFromPoint 判断鼠标下的卡片, 不用 mouseover/mouseout:
+  // 浮层插入/移走会让浏览器的命中目标在卡片和 body 之间反复跳, 那两个事件会形成
+  // 「浮层出现 → 判定离开 → 移走浮层 → 再次出现」的闪烁循环 (2026-11-17 实际踩到)。
+  var peekX = 0, peekY = 0, peekRaf = 0;
+  function cardAtPoint(x, y) {
+    const cards = document.querySelectorAll('#tab-library .work-card, #tab-wallpapers .wf-card');
+    for (let i = 0; i < cards.length; i++) {
+      const r = cards[i].getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return cards[i];
+    }
+    return null;
+  }
+  document.addEventListener('mousemove', e => {
+    if (!cardsCollapsed()) return;
+    peekX = e.clientX;
+    peekY = e.clientY;
+    if (peekRaf) return;
+    peekRaf = requestAnimationFrame(() => {
+      peekRaf = 0;
+      const card = cardAtPoint(peekX, peekY);
+      if (card) cardPeekShow(card);
+      else cardPeekHide();
+    });
+  }, { passive: true });
   const main = document.querySelector('main');
   if (main) main.addEventListener('scroll', cardPeekHide, { passive: true });
   document.addEventListener('vixiq:tab-change', cardPeekHide);
+  document.addEventListener('mouseleave', cardPeekHide);
 })();
 
 // ============ 🖼 当前壁纸 (桌面幻灯片) 信息窗 —— 2026-09-24 ============
