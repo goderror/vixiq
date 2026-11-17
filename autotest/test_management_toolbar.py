@@ -421,15 +421,15 @@ class ManagementToolbarTests(unittest.TestCase):
     def test_drawer_pull_trigger_and_pager_order(self):
         """2026-11-17: 到顶不再自动展开 (要下拉过阈值); 总计/页码排在菜单主体之前。"""
         state_js = (PROJECT_ROOT / "web" / "static" / _MANAGEMENT_DRAWER_STATE).read_text(encoding="utf-8")
-        self.assertIn("pull(distance)", state_js)
+        self.assertIn("pull(distance, threshold)", state_js)
         self.assertIn("pullThreshold", state_js)
         self.assertIn("resetPull()", state_js)
         # 老的「上滑到底部边界就展开」分支必须删掉, 否则滚回顶部又会自动弹开
         self.assertNotIn("this.intent < 0 && top <= this.low", state_js)
 
         toolbar_js = (PROJECT_ROOT / "web" / "static" / _MANAGEMENT_TOOLBAR).read_text(encoding="utf-8")
-        for token in ("consumePull(-dy)", "main.scrollTop <= 2", "consumePull(dy)",
-                      "schedulePullIdle", "translateY(", "mgmt-pull-hint",
+        for token in ("consumePull(-px", "main.scrollTop <= 2", "consumePull(dy",
+                      "PULL_WHEEL_NEED", "schedulePullIdle", "translateY(", "mgmt-pull-hint",
                       "{ passive: false }"):
             self.assertIn(token, toolbar_js, token)
 

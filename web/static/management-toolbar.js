@@ -214,8 +214,10 @@
   // 只累计距离还不够「像下拉刷新」—— 必须让列表跟着手指/滚轮往下走一段,
   // 到阈值才展开, 没到就弹回去 (2026-11-17 用户反馈"没有阻力")。
   var RESULT_IDS = { library: 'lib-result', authors: 'authors-result', wallpapers: 'wf-result' };
-  var PULL_DAMP = 0.5;        // 阻尼: 累计 90px 只位移 45px
-  var PULL_MAX_OFF = 64;      // 视觉位移上限
+  var PULL_DAMP = 0.5;        // 阻尼: 累计 100px 只位移 50px
+  var PULL_MAX_OFF = 72;      // 视觉位移上限
+  var PULL_WHEEL_NEED = 260;  // 滚轮: 约 3 格才展开 (一格 100px, 一格就开等于没有拖拽)
+  var PULL_TOUCH_NEED = 120;  // 触屏: 手指拉这么远即可
   var pullIdleTimer = 0;
 
   function pullResultEl() {
@@ -266,13 +268,14 @@
 
   function schedulePullIdle() {
     clearTimeout(pullIdleTimer);
-    // 滚轮没有"松手"事件: 停手一小会儿就回弹, 手感接近下拉刷新
-    pullIdleTimer = setTimeout(settlePull, 240);
+    // 滚轮没有"松手"事件: 停手一小会儿就回弹。给 520ms, 覆盖正常连续滚动的间隔
+    // (240ms 会在两格之间误回弹, 用户看到的还是"一格就展开")。
+    pullIdleTimer = setTimeout(settlePull, 520);
   }
 
-  function consumePull(distance) {
+  function consumePull(distance, threshold) {
     var expanded = false;
-    try { expanded = state.pull(distance); } catch (e) {}
+    try { expanded = state.pull(distance, threshold); } catch (e) {}
     if (expanded) {
       settlePull();     // 先还原列表位移, 再让菜单高度过渡展开, 不叠两段动画
       paint(false);
@@ -351,14 +354,16 @@
     if (inScrollableOverlay(e.target)) return;
     var dy = e.deltaY;
     if (!dy) return;
+    // deltaMode: 0=像素 / 1=行 / 2=页。统一换算成像素, 否则不同鼠标/触控板一格差几十倍
+    var px = dy * (e.deltaMode === 1 ? 40 : (e.deltaMode === 2 ? 800 : 1));
     decayIntent();
     // 收起态且已经在顶部: 继续向上滚 = 「下拉」，列表跟手位移, 累计超过阈值才展开。
-    // 停手 240ms 没到阈值就回弹 (滚轮没有 mouseup 可用)。
-    if (state.compact && dy < 0 && main.scrollTop <= 2) {
-      if (!consumePull(-dy)) schedulePullIdle();
+    // 滚轮一格通常 100px, 所以这里要求约 3 格 (260px) —— 一格就开等于没有拖拽感。
+    if (state.compact && px < 0 && main.scrollTop <= 2) {
+      if (!consumePull(-px, PULL_WHEEL_NEED)) schedulePullIdle();
       return;
     }
-    if (dy > 0) settlePull();
+    if (px > 0) settlePull();
     setIntent(dy > 0 ? 1 : -1);
     var top = main.scrollTop;
     var fe = focusedExtra();
@@ -415,7 +420,7 @@
     decayIntent();
     if (state.compact && dy > 0 && main.scrollTop <= 2) {
       if (e.cancelable) e.preventDefault();    // 别让浏览器触发自己的下拉刷新
-      consumePull(dy);
+      consumePull(dy, PULL_TOUCH_NEED);
       touchStartY = e.touches[0].clientY;
       return;
     }

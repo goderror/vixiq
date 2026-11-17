@@ -34,13 +34,16 @@
     }
 
     // 到顶后继续「下拉」的距离累积。distance 用正数表示下拉量。
+    // threshold 可覆盖默认值: 滚轮一格常是 100px, 用默认 90 会「一格就展开」看不出拖动;
+    // 控制器因此给滚轮单独一个更大的阈值 (触屏保持短距离)。
     // 返回是否发生状态改变。
-    pull(distance) {
+    pull(distance, threshold) {
       if (!this.compact || this.layout) return false;
       const d = Number(distance) || 0;
       if (d <= 0) return false;
+      const need = Number(threshold) > 0 ? Number(threshold) : this.pullThreshold;
       this.pullAccum += d;
-      if (this.pullAccum >= this.pullThreshold) {
+      if (this.pullAccum >= need) {
         this.pullAccum = 0;
         this._expand();
         return true;
