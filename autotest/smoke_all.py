@@ -10388,7 +10388,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261118i" and _mss.group(1) == "20261118i", \
+    assert _mjs and _mss and _mjs.group(1) == "20261118j" and _mss.group(1) == "20261118j", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10483,7 +10483,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261118i', html) and _re.search(r'app\.js\?v=20261118i', html), \
+    assert _re.search(r'style\.css\?v=20261118j', html) and _re.search(r'app\.js\?v=20261118j', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10877,7 +10877,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261118i" in html and "app.js?v=20261118i" in html, \
+        assert "style.css?v=20261118j" in html and "app.js?v=20261118j" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13247,7 +13247,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261118i" in _h and "style.css?v=20261118i" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261118j" in _h and "style.css?v=20261118j" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14182,6 +14182,35 @@ def t153_wallpaper_usage() -> None:
             j = r.get_json()
             assert r.status_code == 200 and j.get("ok") and len(j["items"]) == 2, j
 
+            # 壁纸库统计口径：壁纸夹文件 + 使用记录里仍存在、且不在壁纸夹的原图
+            wall = tmp / "wall"
+            lib = tmp / "lib"
+            wall.mkdir(parents=True, exist_ok=True)
+            lib.mkdir(parents=True, exist_ok=True)
+            (wall / "a.jpg").write_bytes(b"wall")
+            (lib / "b.png").write_bytes(b"lib")
+            db2 = PixivDatabase(str(tmp / "pixiv.db"))
+            db2.record_wallpaper_usage("222", 0, str(wall / "a.jpg"), "wall")
+            db2.record_wallpaper_usage("333", 0, str(lib / "b.png"), "library")
+            db2.record_wallpaper_usage("444", 0, str(tmp / "gone.png"), "library")
+            db2.close()
+            orig_files = wsrv._wall_list_files
+            orig_dir = wsrv.candidates_dir
+            wsrv._wall_list_files = lambda _db: [{
+                "dir": str(wall), "file_name": "a.jpg", "size": 4, "md5": "",
+                "artwork_id": "222", "page_num": 0, "match_kind": "manual",
+                "scanned_at": "2026-11-18 00:00:00"}]
+            wsrv.candidates_dir = lambda: wall
+            try:
+                j2 = client.get("/api/wallpaper/files").get_json()
+            finally:
+                wsrv._wall_list_files = orig_files
+                wsrv.candidates_dir = orig_dir
+            st = j2.get("stats") or {}
+            assert st.get("total") == 1, st
+            assert st.get("library_refs") == 1, st      # 只剩图库原图 b.png
+            assert st.get("library_total") == 2, st      # 壁纸夹 1 + 原图引用 1
+
             html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
             js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(
                 encoding="utf-8")
@@ -14189,6 +14218,8 @@ def t153_wallpaper_usage() -> None:
             assert 'id="wf-usage"' in html, "壁纸管理页缺少最近设置区块"
             assert "wallUsageHtml" in js and "/api/wallpaper/usage" in js, "前端缺少使用记录接线"
             assert "record_wallpaper_usage" in src, "设置壁纸没有登记使用记录"
+            assert "library_total" in src and "library_refs" in src, "后端缺少壁纸库统计"
+            assert "壁纸库" in js and "stats.library_total" in js, "前端统计卡未显示壁纸库"
             assert "deep=False, page_num=page_used" in src, "设置壁纸不应再跑 ORB 深查"
             appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
             assert "const full = Math.abs(b.x)" in appjs and "crop = full ? null" in appjs, \

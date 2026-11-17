@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118i`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118j`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 136 用例，必须全过，2026-11-17 已 136/136 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 146 用例，必须全过，2026-11-18 已 146/146 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，136 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，146 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 136 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 146 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261118i`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261118j`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -530,6 +530,19 @@
   `/api/cart/repair` 重下并校验 MD5；全库缺失文件已清零。
 - **验收**：T154（move 目标不得列 rmdir + 执行前二次检查），全量 **146/146**；
   安装版已替换并重启（`built_at 2026-11-18 05:40:28`，前端仍 `20261118i`）。
+
+### 4.24 壁纸管理统计改为「壁纸库」口径（2026-11-18，版本 `20261118j`）
+
+- **现象**：壁纸管理页只显示壁纸夹里的实际文件数，用户认为应该是「壁纸库」登记数。
+- **口径**：壁纸库 = 壁纸夹文件（`wallpaper_files` 索引且文件仍存在）+ `wallpaper_usage`
+  里仍存在、且不在壁纸夹的图库原图（按绝对路径去重）。原图设壁纸不复制文件，
+  但仍属于壁纸库，必须计入。
+- `/api/wallpaper/files` 的 `stats` 新增 `library_refs`（原图引用数）与
+  `library_total`（壁纸夹 + 原图引用）；`wallpaper-admin.js` 的 `#wf-stats` 改为四张卡：
+  壁纸库（`library_total`）/ 壁纸夹（`total`）/ 已归属 / 重复图片。
+- **验收**：T153 增加真实接口断言（壁纸夹 1 张 + 图库原图 1 张 → `total=1`、
+  `library_refs=1`、`library_total=2`；已删除的记录不计），全量 **146/146**。
+- 真实库：`wallpaper_files` 390、`wallpaper_usage` 有效原图 2 → 壁纸库 392。
 
 
 

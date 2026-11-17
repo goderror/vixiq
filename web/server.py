@@ -6786,6 +6786,26 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             "dupe_files": sum(len(g["files"]) for g in groups),
             "scanned_at": max((str(r.get("scanned_at") or "") for r in rows), default=""),
         }
+        # 壁纸库 ≠ 壁纸夹：直接引用图库原图的设置记录不复制文件，但也要算进壁纸库。
+        # library_total = 壁纸夹文件 + 使用记录里仍存在、且不在壁纸夹的原图（去重）。
+        library_refs = 0
+        try:
+            wall_dir = d.resolve()
+            seen_refs = set()
+            with _db() as _db2:
+                for u in _db2.list_wallpaper_usage(limit=5000):
+                    fp = Path(str(u.get("file_path") or ""))
+                    try:
+                        if not fp.is_file() or fp.resolve().parent == wall_dir:
+                            continue
+                        seen_refs.add(str(fp.resolve()))
+                    except OSError:
+                        continue
+            library_refs = len(seen_refs)
+        except Exception:
+            library_refs = 0
+        stats["library_refs"] = library_refs
+        stats["library_total"] = len(items) + library_refs
         return jsonify({"ok": True, "dir": str(d), "scanned": bool(items),
                         "stats": stats, "items": items, "groups": groups})
 

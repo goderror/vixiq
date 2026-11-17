@@ -113,8 +113,13 @@ function wallFilesPaint() {
   const d = WFD, stats = d.stats || {}, q = $('#wf-search').value.trim().toLocaleLowerCase();
   $('#wf-dir').textContent = d.dir ? '壁纸夹 ' + d.dir : '尚未指定壁纸夹';
   $('#wf-scan-tip').textContent = d.scanned ? `共 ${stats.total} 张 · ${fmtSize(stats.bytes)} · 上次扫描 ${stats.scanned_at || '未知'}` : '扫描归属后可管理壁纸文件。';
-  $('#wf-stats').innerHTML = [['壁纸', stats.total || 0], ['已归属', stats.owned || 0], ['未归属', stats.orphan || 0], ['重复图片', `${stats.dupes || 0} 组`]].map(([label, n]) =>
-    `<div class="stat-card"><div class="num">${n}</div><div class="lbl">${label}</div></div>`).join('');
+  $('#wf-stats').innerHTML = [
+    ['壁纸库', stats.library_total ?? stats.total, '壁纸夹文件 + 已登记但未复制到壁纸夹的图库原图'],
+    ['壁纸夹', stats.total, '壁纸夹里的实际文件数'],
+    ['已归属', stats.owned, '能对应到图库作品/页的壁纸'],
+    ['重复图片', `${stats.dupes || 0} 组`, '同作品同页或内容一致的重复组'],
+  ].map(([label, n, tip]) =>
+    `<div class="stat-card" title="${esc(tip)}"><div class="num">${n}</div><div class="lbl">${label}</div></div>`).join('');
   const ubox = $('#wf-usage');
   if (ubox) ubox.innerHTML = wallUsageHtml(WFA.usage);
   const duplicateNames = new Set((d.groups || []).flatMap(g => g.files));
