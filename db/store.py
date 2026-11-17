@@ -4475,6 +4475,59 @@ class PixivDatabase:
                 (*params, now_stamp(), artwork_id),
             )
 
+    def list_sections(self) -> list[dict]:
+        """图库分类列表（section_id / 显示名 / 磁盘目录名 / 规则 / 默认）。"""
+        rows = self.conn.execute(
+            "SELECT section_id, name, dir_name, match_json, is_default, sort_order "
+            "  FROM library_sections ORDER BY sort_order, section_id").fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["match"] = json.loads(d.pop("match_json") or "{}")
+            except Exception:
+                d["match"] = {}
+            out.append(d)
+        return out
+
+    def section_dir_for_r18(self, is_r18) -> str:
+        """按分类规则返回作品该落的顶层目录名；认不出时用默认分类。"""
+        secs = self.list_sections()
+        for s in secs:
+            rule = s.get("match") or {}
+            if "is_r18" not in rule or is_r18 is None:
+                continue
+            try:
+                if int(rule["is_r18"]) == (1 if is_r18 else 0):
+                    return str(s.get("dir_name") or "")
+            except (TypeError, ValueError):
+                continue
+        for s in secs:
+            if s.get("is_default"):
+                return str(s.get("dir_name") or "")
+        return ""
+
+    def backfill_sections(self) -> int:
+        """按 pages.local_path 顶层目录回填 section_id（幂等，迁移后/同步时用）。"""
+        n = 0
+        with self.conn:
+            # 历史路径可能用反斜杠；统一成正斜杠，否则 LIKE '目录/%' 匹配不到
+            self.conn.execute(
+                "UPDATE pages SET local_path=REPLACE(local_path, '\\', '/') "
+                "WHERE local_path LIKE '%\\%'")
+            for s in self.list_sections():
+                dir_name = str(s.get("dir_name") or "")
+                if not dir_name:
+                    continue
+                cur = self.conn.execute(
+                    "UPDATE artworks SET section_id=? WHERE COALESCE(section_id,'')='' "
+                    "AND EXISTS (SELECT 1 FROM pages p "
+                    "             WHERE p.artwork_id=artworks.artwork_id "
+                    "               AND p.trashed_at IS NULL AND p.local_path LIKE ?)",
+                    (str(s["section_id"]), f"{dir_name}/%"))
+                n += int(cur.rowcount or 0)
+        return n
+
     def list_all_tags(self) -> list[dict]:
         """全部标签 + 各标签作品数 (分类浏览/标签下拉用)。"""
         rows = self.conn.execute(

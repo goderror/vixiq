@@ -549,7 +549,16 @@ class PixivDownloader:
             return "" if str(rel) == p.name else rel.parent.as_posix()
 
         def _default_section() -> "str | None":
-            """图库顶层已有的分类目录 (X图/涩图…), 新作者按 R18 落进去。"""
+            """优先用图库分类配置（R18 规则 → 分类目录），再退回磁盘关键词识别。"""
+            db = getattr(self, "db", None)
+            if db is not None and hasattr(db, "section_dir_for_r18"):
+                try:
+                    sec = db.section_dir_for_r18(is_r18)
+                    # 分类目录已存在才跟随；空图库/还没建分类时保持旧行为（根目录）
+                    if sec and (Path(self.save_folder) / sec).is_dir():
+                        return sec
+                except Exception:
+                    pass
             if getattr(self, "_section_dirs", None) is None:
                 try:
                     ids = {str(r[0]) for r in self.db.conn.execute(
@@ -562,11 +571,11 @@ class PixivDownloader:
         if with_work:
             d = str(max(with_work, key=lambda x: len(list(x.glob(f"{artwork_id}_p*")))))
         elif cands:
-            # 分类夹优先: 作者已经在 X图/涩图 下建过夹, 新作品跟过去,
-            # 不再在根目录另建一个 (2026-11-18 实测同一作者两个夹并存)。
+            # 分类夹优先: 作者已经在 X图/涩图 下建过夹, 新作品跟过去;
+            # 只有根目录夹时也直接复用 (不能因为默认分类另建一个)。
             picked = pick_section_parent({_parent_of(p) for p in cands}, is_r18)
-            if picked:
-                pool = [p for p in cands if _parent_of(p) == picked]
+            pool = [p for p in cands if _parent_of(p) == picked] if picked is not None else []
+            if pool:
                 d = str(sorted(pool, key=lambda x: str(x))[0])
             else:
                 sec = _default_section()

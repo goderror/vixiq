@@ -2082,15 +2082,29 @@ def _tidy_build_plans(db, img_root: Path) -> list:
     _author_ids = {str(r[0]) for r in db.conn.execute("SELECT author_id FROM authors")}
     _author_parents = _collect_author_dir_parents(img_root, _author_ids)
     _section_dirs = _collect_section_dirs(img_root, _author_ids)
+    _sections = {str(s["section_id"]): s for s in db.list_sections()}
 
     def _section_prefix(meta, fallback: str = "") -> str:
-        """作者已有分类夹 → 用它的父前缀; 新作者 → 按 R18 落已有分类; 再不行用 fallback。"""
+        """作品已有分类 → 用分类目录；否则跟随作者已有分类夹；再否则按规则/默认分类。"""
+        sid = str((meta or {}).get("section_id") or "")
+        if sid:
+            sec = _sections.get(sid)
+            if sec and sec.get("dir_name"):
+                return str(sec["dir_name"])
         aid = str((meta or {}).get("author_id") or "")
         r18 = (meta or {}).get("is_r18")
         picked = _pick_section_parent(_author_parents.get(aid, ()), r18) if aid else None
         if picked:
             return picked
-        default = _pick_default_section(_section_dirs, r18)
+        default = ""
+        try:
+            _d = db.section_dir_for_r18(r18)
+            # 分类目录已存在才按默认分类搬；临时/空图库没有 X图/涩图 时保持根目录旧行为
+            if _d and (img_root / _d).is_dir():
+                default = _d
+        except Exception:
+            default = ""
+        default = default or _pick_default_section(_section_dirs, r18)
         return default or fallback
 
     def _add(ptype, frm, to, reason, files, auto, **extra):

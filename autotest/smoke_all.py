@@ -3052,6 +3052,7 @@ def run_suite() -> SuiteResult:
     suite.add("T149", "🛡 作者源头查重: 规范化名字（大小写/全半角/空白/零宽/宣传后缀）+ 同名 pixiv 存在时保存返回 409 让用户选复用/同名新建 + 同名自定义自动复用不重复建 (隔离数据)", t149_author_conflict_guard)
     suite.add("T150", "🔍 作者管理「重复作者」: 按规范化名字/别名分组 + 跨 pixiv/自定义识别 + 逐组合并（作品/作者行/文件）+ 不存在/相同 ID 报错 + 页面按钮接线 (隔离数据)", t150_author_duplicate_view)
     suite.add("T151", "🏷️ 标题源头修复: 外部登记只写文件名（不再「文件夹 / 文件名」）+ 历史路径标题识别与一次性清理 + 正常标题不误伤 + 不保留常驻按钮/接口 (隔离数据)", t151_title_path_cleanup)
+    suite.add("T152", "🗂 图库分类基础(A1): 分类表/作品 section_id + 按现有 X图/涩图 回填 + 整理按分类目录走 + 下载按 R18 落分类 (隔离数据)", t152_library_sections_base)
     suite.write_report()
     return suite
 
@@ -14063,6 +14064,90 @@ def t151_title_path_cleanup() -> None:
                 "标题清理不应保留常驻接口"
         finally:
             upaths.user_data = orig_ud
+
+
+def t152_library_sections_base() -> None:
+    """T152: A1 分类基础（2026-11-18）。
+
+    分类从磁盘目录升级为数据库配置：library_sections 表 + artworks.section_id。
+    现有 X图/涩图 回填成「普通 / R18」；整理和下载按分类目录走，目录名暂不改。
+    """
+    import tempfile
+    import utils.paths as upaths
+    from db.store import PixivDatabase, WSt, PSt
+    from types import SimpleNamespace
+    import web.server as wsrv
+    from core.crawler import PixivDownloader
+
+    db = None
+    with tempfile.TemporaryDirectory(prefix="t152section_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir(parents=True, exist_ok=True)
+        orig_ud = upaths.user_data
+        orig_img = wsrv._config["paths"].get("img_subdir")
+        upaths.user_data = lambda rel: tmp / str(rel)
+        wsrv._config["paths"]["img_subdir"] = "img"
+        try:
+            db = PixivDatabase(str(tmp / "pixiv.db"))
+            db.upsert_author("66", "作者甲")
+            secs = {s["section_id"]: s for s in db.list_sections()}
+            assert set(secs) >= {"general", "r18"}, secs
+            assert secs["general"]["dir_name"] == "X图", secs
+            assert secs["r18"]["dir_name"] == "涩图", secs
+            assert db.section_dir_for_r18(False) == "X图"
+            assert db.section_dir_for_r18(True) == "涩图"
+            assert db.section_dir_for_r18(None) == "X图", "未知 R18 用默认分类"
+
+            def _work(aid, rel, r18):
+                db.change_work_status(aid, WSt.DONE, title=aid, author_id="66",
+                                      total_pages=1)
+                db.update_artwork(aid, is_r18=1 if r18 else 0)
+                p = img / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(b"x" * 16)
+                db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
+
+            _work("970001", "X图/作者甲_66/970001_p0.jpg", False)
+            _work("970002", "涩图/作者甲_66/970002_p0.jpg", True)
+            _work("970003", "970003_p0.jpg", False)
+
+            # ① 按现有顶层目录回填 section_id
+            assert db.backfill_sections() == 2
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                got = {str(r["artwork_id"]): (r["section_id"] or "")
+                       for r in db2.conn.execute(
+                           "SELECT artwork_id, section_id FROM artworks")}
+                assert got["970001"] == "general", got
+                assert got["970002"] == "r18", got
+                assert got["970003"] == "", got
+
+            # ② 一键整理：根目录作品进默认分类「X图」；已在分类的不动
+            plans = wsrv._tidy_build_plans(db, img)
+            moved = {f: p["to"] for p in plans if p["type"] == "move" for f in p["files"]}
+            assert moved.get("970003_p0.jpg") == "X图/作者甲_66", moved
+            assert not any(f.endswith("970001_p0.jpg") for p in plans for f in p["files"]), \
+                "已在分类作者夹的作品不应再产生计划"
+
+            # ③ 下载器：新作者按 R18 落分类目录（读分类配置，不再猜关键词）
+            fake = SimpleNamespace(save_folder=img, _author_dir_cache={},
+                                   _section_dirs=None, db=db)
+            d_x = PixivDownloader._pick_author_dir(
+                fake, "88", "新作者", "970010", "新作者_88", is_r18=False)
+            d_r = PixivDownloader._pick_author_dir(
+                fake, "88", "新作者", "970011", "新作者_88", is_r18=True)
+            assert Path(d_x).as_posix().endswith("X图/新作者_88"), d_x
+            assert Path(d_r).as_posix().endswith("涩图/新作者_88"), d_r
+            db.close()
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+            upaths.user_data = orig_ud
+            if orig_img is not None:
+                wsrv._config["paths"]["img_subdir"] = orig_img
 
 
 def main() -> int:

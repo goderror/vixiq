@@ -472,6 +472,24 @@
   全量 **143/143**；安装版已替换并重启（前端 `20261118f`，`built_at 2026-11-18 03:22:07`）。
 - 图库搜索本来也匹配 `pages.local_path`，标题去掉路径后仍可用路径关键词定位。
 
+### 4.21 A1 图库分类字段化（2026-11-18，后端，前端仍 `20261118f`）
+
+- **迁移**：`023_library_sections.sql` 建 `library_sections` 表（`section_id/name/dir_name/
+  match_json/is_default/sort_order`）+ `artworks.section_id`；初始两条：
+  `general`（普通，目录 `X图`，规则 `is_r18=0`，默认）、`r18`（R18，目录 `涩图`，规则 `is_r18=1`）。
+- **回填**：按现有 `pages.local_path` 顶层目录把作品归到分类（`X图`→general、`涩图`→r18），
+  其余留空（整理时按默认分类处理）。`024_path_slashes_and_section_backfill.sql` 先把历史
+  `local_path` 里的反斜杠统一成正斜杠（否则 `LIKE 'X图/%'` 匹配不到，实测漏了 1100+ 条），再补回填。
+- **读取**：`db.list_sections / section_dir_for_r18 / backfill_sections`；
+  `_tidy_build_plans` 的 `_section_prefix` 优先用作品 `section_id` 对应目录，其次作者已有分类夹，
+  最后默认分类（只在分类目录已存在时生效，空图库保持根目录旧行为）；
+  `crawler._pick_author_dir` 新作者按 R18 落分类目录，已有作者夹（含根目录夹）仍优先复用。
+- **真实库结果**：general 1325、r18 265、未分类 12；`X图` 下仍有 82 张 R18（A1 只按路径回填，
+  **A2 才按 R18 规则重排**）。安装版已替换并重启（`built_at 2026-11-18 03:38:42`）。
+- **验收**：T152，全量 **144/144**。
+- A2 待做：`涩图`→`R18`、`X图`→`普通` 目录改名；按 R18 规则重排 82+37 张；
+  分类管理 UI（改名/规则编辑）与图库分类筛选。
+
 
 
 ---
