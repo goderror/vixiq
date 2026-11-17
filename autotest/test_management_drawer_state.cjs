@@ -209,6 +209,16 @@ function controllerFixture() {
     INTENT_TTL: 1800, document: { activeElement: { tagName: 'MAIN' } },
     Date, focusedExtra: () => false, activeToolbar: () => ({ extra: { contains: () => false } }),
     paint: () => { screen.compact = state.compact; screen.paints++; },
+    // 下拉跟手位移相关的 DOM 写入在纯逻辑测试里用空实现 (状态机才是被测对象)
+    consumePull: (d) => {
+      if (state.pull(d)) { screen.compact = state.compact; screen.paints++; return true; }
+      return false;
+    },
+    paintPull: () => {},
+    settlePull: () => { state.resetPull(); },
+    schedulePullIdle: () => {},
+    pullResultEl: () => null,
+    pullHintEl: () => null,
   });
   for (const [from, to] of [
     ['  function setIntent(', '  function decayIntent('],

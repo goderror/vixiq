@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117n`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117o`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117n`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117o`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -324,6 +324,10 @@
 2. **到顶自动展开改成下拉触发**：`ManagementDrawerState.input/scroll` 不再在上滑到低阈值时展开；
    新增 `pull(distance)`（默认累计 90px，`pullThreshold`）与 `resetPull()`。
    控制器在 `scrollTop<=2` 时把滚轮上滚 / 手指下拉换算成 pull，够距离才展开；向下滚清零。
+   **必须跟手位移**（2026-11-17 二次反馈「只是更难触发、没有拖拽感」）：列表按
+   `累计 × 0.5`（上限 64px）做 `translateY`，工具栏下方浮出「继续下拉展开菜单 / 松开展开菜单」提示；
+   滚轮停手 240ms 或未到阈值松手 → 回弹；到阈值先还原位移再展开菜单。相关函数：
+   `consumePull / paintPull / settlePull / schedulePullIdle`。
    「回到顶部」按钮是明确动作，仍直接 `state.expand()`。
 3. **共计/页码易位**：三个管理页的 `#lib-pager-top` / `#authors-pager-top` / `#wf-pager`
    移到 `.management-main` **之前**，展开菜单只把列表往下推，页码始终紧贴标签栏。

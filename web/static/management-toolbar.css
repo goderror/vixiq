@@ -284,6 +284,27 @@ main.management-compact .management-toolbar .lib-pager.management-pager {
   padding: 4px 0;
 }
 
+/* 下拉展开: 跟手提示浮在工具栏下方, 不占布局高度 (列表本身由 JS translateY 跟随) */
+.mgmt-pull-hint {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translate(-50%, -4px);
+  margin-top: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #ddd);
+  color: var(--muted, #667);
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .10);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 25;
+  transition: opacity .15s ease;
+}
+
 /* 滚动定位预留吸顶高度 */
 #lib-result,
 #authors-result,

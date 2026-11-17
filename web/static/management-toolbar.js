@@ -43,6 +43,13 @@
       };
       var sec = bar.closest('#tab-' + name) || bar.parentElement;
       sections[name] = sec;
+      // 下拉提示: 跟手位移时浮在工具栏下方 (不占布局高度)
+      if (!bar.querySelector('.mgmt-pull-hint')) {
+        var hint = document.createElement('div');
+        hint.className = 'mgmt-pull-hint';
+        hint.textContent = '继续下拉展开菜单';
+        bar.appendChild(hint);
+      }
     });
     // 首次按 .tabpage.active 决定当前管理页
     var tab = $('.tabpage.active');
@@ -203,6 +210,80 @@
     });
   }
 
+  // ---- 下拉展开: 跟手位移 + 阻尼 + 松手回弹 ----
+  // 只累计距离还不够「像下拉刷新」—— 必须让列表跟着手指/滚轮往下走一段,
+  // 到阈值才展开, 没到就弹回去 (2026-11-17 用户反馈"没有阻力")。
+  var RESULT_IDS = { library: 'lib-result', authors: 'authors-result', wallpapers: 'wf-result' };
+  var PULL_DAMP = 0.5;        // 阻尼: 累计 90px 只位移 45px
+  var PULL_MAX_OFF = 64;      // 视觉位移上限
+  var pullIdleTimer = 0;
+
+  function pullResultEl() {
+    var id = active ? RESULT_IDS[active] : '';
+    return id ? document.getElementById(id) : null;
+  }
+
+  function pullHintEl() {
+    var t = activeToolbar();
+    return t && t.bar ? t.bar.querySelector('.mgmt-pull-hint') : null;
+  }
+
+  function pullOffset() {
+    var acc = state.pullAccum || 0;
+    return Math.min(PULL_MAX_OFF, acc * PULL_DAMP);
+  }
+
+  function paintPull() {
+    var off = pullOffset();
+    var el = pullResultEl();
+    if (el) {
+      el.style.transition = 'none';
+      el.style.transform = off > 0.5 ? 'translateY(' + off.toFixed(1) + 'px)' : '';
+    }
+    var hint = pullHintEl();
+    if (hint) {
+      hint.textContent = '继续下拉展开菜单';
+      hint.style.opacity = off > 4 ? '1' : '0';
+      hint.style.transform = 'translate(-50%, ' + (off * 0.6 - 4).toFixed(1) + 'px)';
+    }
+  }
+
+  function settlePull() {
+    clearTimeout(pullIdleTimer);
+    pullIdleTimer = 0;
+    try { state.resetPull(); } catch (e) {}
+    var el = pullResultEl();
+    if (el) {
+      el.style.transition = 'transform .2s ease';
+      el.style.transform = '';
+    }
+    var hint = pullHintEl();
+    if (hint) {
+      hint.style.opacity = '0';
+      hint.style.transform = 'translate(-50%, -4px)';
+    }
+  }
+
+  function schedulePullIdle() {
+    clearTimeout(pullIdleTimer);
+    // 滚轮没有"松手"事件: 停手一小会儿就回弹, 手感接近下拉刷新
+    pullIdleTimer = setTimeout(settlePull, 240);
+  }
+
+  function consumePull(distance) {
+    var expanded = false;
+    try { expanded = state.pull(distance); } catch (e) {}
+    if (expanded) {
+      settlePull();     // 先还原列表位移, 再让菜单高度过渡展开, 不叠两段动画
+      paint(false);
+      return true;
+    }
+    paintPull();
+    return false;
+  }
+
+
+
   // ---- 意图方向记录（带 TTL） ----
   var intentAt = 0;
 
@@ -238,6 +319,7 @@
       decayIntent();
 
       var top = main.scrollTop;
+      if (top > 2 && state.pullAccum) settlePull();   // 离开顶部 → 立即取消下拉位移
       // 滚动列表时收起滑出的简化菜单
       if (main.classList.contains('management-peek') && !peekFocused()) peekClose();
 
@@ -270,12 +352,13 @@
     var dy = e.deltaY;
     if (!dy) return;
     decayIntent();
-    // 收起态且已经在顶部: 继续向上滚 = 「下拉」，累计超过阈值才展开。
-    // 这样滚回顶部只是停在顶部，不会立刻把菜单弹开 (2026-11-17 用户要求)。
+    // 收起态且已经在顶部: 继续向上滚 = 「下拉」，列表跟手位移, 累计超过阈值才展开。
+    // 停手 240ms 没到阈值就回弹 (滚轮没有 mouseup 可用)。
     if (state.compact && dy < 0 && main.scrollTop <= 2) {
-      if (state.pull(-dy)) paint(false);
+      if (!consumePull(-dy)) schedulePullIdle();
       return;
     }
+    if (dy > 0) settlePull();
     setIntent(dy > 0 ? 1 : -1);
     var top = main.scrollTop;
     var fe = focusedExtra();
@@ -330,10 +413,9 @@
     var dy = e.touches[0].clientY - touchStartY;
     if (Math.abs(dy) <= 4) return;
     decayIntent();
-    // 收起态 + 已在顶部: 手指继续往下拉 = 展开手势 (和滚轮同一口径)。
     if (state.compact && dy > 0 && main.scrollTop <= 2) {
       if (e.cancelable) e.preventDefault();    // 别让浏览器触发自己的下拉刷新
-      if (state.pull(dy)) paint(false);
+      consumePull(dy);
       touchStartY = e.touches[0].clientY;
       return;
     }
@@ -347,7 +429,10 @@
     if (changed) paint(false);
   }
 
-  function onTouchEnd() { touchActive = false; }
+  function onTouchEnd() {
+    touchActive = false;
+    if (state.pullAccum) settlePull();   // 没拉到阈值 → 松手回弹
+  }
 
   // ---- pointer：清意图 + 滚动条拖动 ----
   var dragStartRegistered = false;
@@ -425,6 +510,7 @@
     if (!name) return;
     if (name === lastTabName) return;
     lastTabName = name;
+    settlePull();      // 切页先清掉可能残留的下拉位移
     var isMgmt = TABS.indexOf(name) !== -1;
     if (isMgmt) {
       ++settleGen;

@@ -428,7 +428,8 @@ class ManagementToolbarTests(unittest.TestCase):
         self.assertNotIn("this.intent < 0 && top <= this.low", state_js)
 
         toolbar_js = (PROJECT_ROOT / "web" / "static" / _MANAGEMENT_TOOLBAR).read_text(encoding="utf-8")
-        for token in ("state.pull(-dy)", "main.scrollTop <= 2", "state.pull(dy)",
+        for token in ("consumePull(-dy)", "main.scrollTop <= 2", "consumePull(dy)",
+                      "schedulePullIdle", "translateY(", "mgmt-pull-hint",
                       "{ passive: false }"):
             self.assertIn(token, toolbar_js, token)
 
