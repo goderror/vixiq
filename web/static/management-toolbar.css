@@ -358,6 +358,23 @@ main.management-compact .wf-batch { padding: 6px; gap: 6px; }
 main.management-compact .management-selection .btn { padding: 6px 10px; font-size: 13px; }
 main.management-compact .lib-action-group + .lib-action-group { padding-left: 10px; }
 
+/* 管理页顶部不留白: 分页行直接贴住标签栏 (收起/展开一致)。
+   2026-11-17 反馈「展开后和标签栏之间仍有缝」就是 main / .panel 的顶部 padding 造成的。 */
+main.management-page { padding-top: 0; }
+main.management-page .management-panel { padding-top: 0; }
+/* 用 padding-top 4px (而不是子元素 margin) 避免外边距塌陷造成收起/展开差一截 */
+.management-toolbar { padding-top: 4px; }
+main.management-compact .management-toolbar { padding-top: 4px; }
+.management-toolbar > .management-pager:first-child {
+  margin: 0;
+  padding: 0 0 6px;
+}
+/* 收起态继续收紧到底 */
+main.management-compact .management-toolbar > .management-pager:first-child {
+  margin: 0;
+  padding: 0 0 4px;
+}
+
 /* 减少动画偏好 */
 @media (prefers-reduced-motion: reduce) {
   .management-toolbar {

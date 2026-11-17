@@ -43,6 +43,10 @@
       };
       var sec = bar.closest('#tab-' + name) || bar.parentElement;
       sections[name] = sec;
+      // 面板与 main 的顶部留白归零: 分页行要贴紧标签栏 (2026-11-17 反馈展开后有缝)
+      if (bar.parentElement && bar.parentElement.classList) {
+        bar.parentElement.classList.add('management-panel');
+      }
       // 下拉提示: 跟手位移时浮在工具栏下方 (不占布局高度)
       if (!bar.querySelector('.mgmt-pull-hint')) {
         var hint = document.createElement('div');
@@ -517,6 +521,7 @@
     lastTabName = name;
     settlePull();      // 切页先清掉可能残留的下拉位移
     var isMgmt = TABS.indexOf(name) !== -1;
+    main.classList.toggle('management-page', isMgmt);
     if (isMgmt) {
       ++settleGen;
       active = name;
@@ -551,6 +556,7 @@
     main.tabIndex = 0; // 便于键盘滚动
 
     // 统一展开初始态（无活动管理页时不动）
+    main.classList.toggle('management-page', !!active);
     if (active) {
       try { state.reset(main.scrollTop); } catch (e) {}
       applyCompactClass(false);

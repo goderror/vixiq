@@ -448,6 +448,15 @@ class ManagementToolbarTests(unittest.TestCase):
             self.assertLess(kinds.index("pager"), kinds.index("main"),
                             "%s: 分页行要排在菜单主体之前" % name)
 
+        # main / 面板顶部留白归零: 展开态与收起态的分页行都贴住标签栏 (不留 20px 缝)
+        css = (PROJECT_ROOT / "web" / "static" / "management-toolbar.css").read_text(encoding="utf-8")
+        self.assertIn("main.management-page { padding-top: 0; }", css)
+        self.assertIn("main.management-page .management-panel { padding-top: 0; }", css)
+        self.assertIn(".management-toolbar > .management-pager:first-child", css)
+        for token in ("classList.add('management-panel')",
+                      "classList.toggle('management-page'", "padding-top: 4px"):
+            self.assertIn(token, toolbar_js if token.startswith("classList") else css, token)
+
     # ------------------------------------------------------------------ #
     def test_smart_refresh_is_visible(self):
         """刷新按钮要够显眼 (2026-11-17 反馈"不够显眼"): 加大 + 加粗描边 + 淡边框底。"""
