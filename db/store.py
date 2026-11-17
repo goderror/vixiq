@@ -4529,8 +4529,12 @@ class PixivDatabase:
         return n
 
     def record_wallpaper_usage(self, artwork_id: str, page_num, file_path: str,
-                               source: str = "library") -> None:
-        """登记一次「设为壁纸」：原图/裁剪版/壁纸夹已有都记，同一张只保留最新时间。"""
+                               source: str = "library", backfilled: bool = False) -> None:
+        """登记一条壁纸使用记录：原图/裁剪版/壁纸夹已有都记，同一张只保留最新时间。
+
+        ``backfilled=True`` 用于「清理副本 / 补历史」写入的壁纸库条目：只参与壁纸库统计，
+        不出现在「最近设置」里；已有真实设置记录时不再重复写。
+        """
         aid = str(artwork_id or "")
         try:
             pn = int(page_num) if page_num is not None else None
@@ -4539,19 +4543,37 @@ class PixivDatabase:
         fp = str(file_path or "")
         if not fp:
             return
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.conn:
+            if backfilled:
+                real = self.conn.execute(
+                    "SELECT 1 FROM wallpaper_usage WHERE artwork_id=? AND page_num IS ? "
+                    "AND file_path=? AND backfilled=0 LIMIT 1", (aid, pn, fp)).fetchone()
+                if real:
+                    return
+                self.conn.execute(
+                    "DELETE FROM wallpaper_usage WHERE artwork_id=? AND page_num IS ? "
+                    "AND file_path=? AND backfilled=1", (aid, pn, fp))
+            else:
+                self.conn.execute(
+                    "DELETE FROM wallpaper_usage WHERE artwork_id=? AND page_num IS ? "
+                    "AND file_path=?", (aid, pn, fp))
             self.conn.execute(
-                "DELETE FROM wallpaper_usage WHERE artwork_id=? AND page_num IS ? "
-                "AND file_path=?", (aid, pn, fp))
-            self.conn.execute(
-                "INSERT INTO wallpaper_usage(artwork_id, page_num, file_path, source) "
-                "VALUES(?,?,?,?)", (aid, pn, fp, str(source or "library")))
+                "INSERT INTO wallpaper_usage(artwork_id, page_num, file_path, source, "
+                "used_at, backfilled) VALUES(?,?,?,?,?,?)",
+                (aid, pn, fp, str(source or "library"), now, 1 if backfilled else 0))
 
-    def list_wallpaper_usage(self, limit: int = 50) -> list[dict]:
-        """最近的壁纸使用记录（按设置时间倒序）。"""
+    def list_wallpaper_usage(self, limit: int = 50,
+                             include_backfilled: bool = False) -> list[dict]:
+        """最近的壁纸使用记录（按设置时间倒序）。
+
+        默认不含 ``backfilled`` 的壁纸库条目；壁纸库统计传 ``include_backfilled=True``。
+        """
+        where = "" if include_backfilled else "WHERE backfilled=0 "
         rows = self.conn.execute(
-            "SELECT id, artwork_id, page_num, file_path, source, used_at "
-            "  FROM wallpaper_usage ORDER BY used_at DESC, id DESC LIMIT ?",
+            "SELECT id, artwork_id, page_num, file_path, source, used_at, backfilled "
+            "  FROM wallpaper_usage " + where +
+            " ORDER BY used_at DESC, id DESC LIMIT ?",
             (max(1, int(limit)),)).fetchall()
         return [dict(r) for r in rows]
 

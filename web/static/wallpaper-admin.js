@@ -80,17 +80,20 @@ function wallUsageHtml(items) {
   if (!items || !items.length) return '';
   const rows = items.slice(0, 12).map(u => {
     const src = WALL_USAGE_SRC[u.source] || u.source || '';
-    const art = u.artwork_id ? `作品 ${u.artwork_id}` : '未归属';
+    const art = u.artwork_id ? `作品 ${u.artwork_id}` : '未归属作品';
     const page = u.page_num == null ? '' : ` · 第 ${Number(u.page_num) + 1} 张`;
-    const name = String(u.file_path || '').split(/[\\/]/).pop();
-    return `<div class="wf-usage-row" title="${esc(u.file_path || '')}">
-      <span class="wf-tag">${esc(src)}</span>
-      <span>${esc(art + page)}</span>
-      <span class="hint">${esc(name)}</span>
-      <span class="hint">${esc(String(u.used_at || '').replace('T', ' ').slice(0, 19))}</span>
+    const full = String(u.file_path || '');
+    const name = full.split(/[\\/]/).pop();
+    const when = String(u.used_at || '').replace('T', ' ').slice(0, 19);
+    return `<div class="wf-usage-row" title="${esc(full)}">
+      <span class="wf-usage-src wf-tag">${esc(src)}</span>
+      <span class="wf-usage-work">${esc(art + page)}</span>
+      <span class="wf-usage-name">${esc(name)}</span>
+      <time class="wf-usage-time">${esc(when)}</time>
     </div>`;
   }).join('');
-  return `<div class="wf-usage"><div class="wf-usage-head">最近设置</div>${rows}</div>`;
+  return `<div class="wf-usage"><div class="wf-usage-head"><span>最近设置</span>
+    <span class="hint">按时间倒序 · 最多 12 条</span></div>${rows}</div>`;
 }
 
 function wallFilesCard(f) {

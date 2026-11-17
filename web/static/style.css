@@ -1894,7 +1894,19 @@ body.ob-open { overflow: hidden; }
 /* ===== 壁纸管理: 最近设置记录 (2026-11-18) ===== */
 .wf-usage { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px;
   padding: 8px 10px; background: #fcfdff; }
-.wf-usage-head { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
-.wf-usage-row { display: flex; gap: 8px; align-items: center; font-size: 12px;
-  padding: 3px 0; border-top: 1px dashed var(--border); }
-.wf-usage-row:first-of-type { border-top: none; }
+.wf-usage-head { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 10px; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.wf-usage-row { display: grid; grid-template-columns: 68px 180px minmax(0, 1fr) 138px;
+  gap: 10px; align-items: center; font-size: 12px;
+  padding: 4px 0; border-top: 1px dashed var(--border); }
+.wf-usage-head + .wf-usage-row { border-top: none; }
+.wf-usage-src { justify-self: start; }
+.wf-usage-work, .wf-usage-name { overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.wf-usage-work { color: var(--muted); }
+.wf-usage-time { color: var(--muted); text-align: right;
+  font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+  .wf-usage-row { grid-template-columns: 62px minmax(0, 1fr) 118px; row-gap: 2px; }
+  .wf-usage-name { grid-column: 1 / -1; padding-left: 72px; }
+}

@@ -6494,14 +6494,29 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
     @app.route("/api/wallpaper/usage")
     def api_wallpaper_usage():
-        """最近设置过的壁纸（原图只登记不复制，裁剪版同时进壁纸夹）。"""
+        """最近设置过的壁纸（原图只登记不复制，裁剪版同时进壁纸夹）。
+
+        同一作品同一页只留最新一条（旧路径/重复设置不重复列出）；补登记的壁纸库条目
+        （backfilled）不在这里出现。
+        """
         try:
-            limit = int(request.args.get("limit") or 50)
+            limit = max(1, int(request.args.get("limit") or 50))
         except Exception:
             limit = 50
         with _db() as db:
-            items = db.list_wallpaper_usage(limit=limit)
-        return jsonify({"ok": True, "items": items})
+            items = db.list_wallpaper_usage(limit=max(limit * 4, 60))
+        out, seen = [], set()
+        for it in items:
+            aid = str(it.get("artwork_id") or "")
+            key = (aid, it.get("page_num"), str(it.get("source") or "")) if aid \
+                else ("", None, "", str(it.get("file_path") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(it)
+            if len(out) >= limit:
+                break
+        return jsonify({"ok": True, "items": out})
 
     @app.route("/api/wallpaper/dir")
     def api_wallpaper_dir_get():
@@ -6701,13 +6716,35 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         gone = {n for n, p in targets if str(p) not in bad_set}
         freed = sum(pre.get(n, 0) for n in gone)
         # 扫描结果里把已删的那几条摘掉, 面板不用重扫也能对上号
+        removed_items = []
         with _WALL_DUPES_LOCK:
             res = _WALL_DUPES.get("result")
             if isinstance(res, dict) and res.get("items"):
+                removed_items = [it for it in res["items"] if it.get("name") in gone]
                 keep = [it for it in res["items"] if it.get("name") not in gone]
                 res["bytes"] = sum(int(it.get("size") or 0) for it in keep)
                 res["count"] = len(keep)
                 res["items"] = keep
+        # 删掉的是「与图库字节一致的副本」→ 图库原图仍在, 作为壁纸库条目补登记
+        # (backfilled=1: 只参与壁纸库统计, 不进「最近设置」)。
+        try:
+            img_root = Path(paths.user_data(_config["paths"].get("img_subdir") or "img"))
+            with _db() as _db3:
+                for it in removed_items:
+                    aid = str(it.get("artwork_id") or "")
+                    rel = str(it.get("rel") or "").replace("\\", "/")
+                    if not aid or not rel:
+                        continue
+                    fp = img_root / rel
+                    try:
+                        if not fp.is_file():
+                            continue
+                    except OSError:
+                        continue
+                    _db3.record_wallpaper_usage(aid, it.get("page_num"), str(fp),
+                                                "library", backfilled=True)
+        except Exception:
+            pass
         try:
             audit_log.record("delete", "清理壁纸副本",
                              f"把 {n_ok} 个与图库字节一致的壁纸副本送进电脑回收站"
@@ -6793,7 +6830,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             wall_dir = d.resolve()
             seen_refs = set()
             with _db() as _db2:
-                for u in _db2.list_wallpaper_usage(limit=5000):
+                for u in _db2.list_wallpaper_usage(limit=5000, include_backfilled=True):
                     fp = Path(str(u.get("file_path") or ""))
                     try:
                         if not fp.is_file() or fp.resolve().parent == wall_dir:
