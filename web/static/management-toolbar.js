@@ -104,15 +104,31 @@
 
   function peekCancelClose() { clearTimeout(peekTimer); }
 
+  // 叠三角开合时临时关掉 .management-main 的高度过渡:
+  // 收起浮层时它要从 absolute 回到文档流, auto→0 的过渡会在中途撑出高度,
+  // 把下面的列表顶一下 —— 表现就是「鼠标划过三角形, 图片列表跳一下」(2026-11-18)。
+  function peekNoAnim() {
+    main.classList.add('management-peek-noanim');
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        main.classList.remove('management-peek-noanim');
+      });
+    });
+  }
+
   function peekOpen() {
     if (!active || !state.compact) return;
     clearTimeout(peekTimer);
-    if (!main.classList.contains('management-peek')) main.classList.add('management-peek');
+    if (!main.classList.contains('management-peek')) {
+      peekNoAnim();
+      main.classList.add('management-peek');
+    }
     if (peekBtn) peekBtn.setAttribute('aria-expanded', 'true');
   }
 
   function peekClose() {
     clearTimeout(peekTimer);
+    if (main.classList.contains('management-peek')) peekNoAnim();
     main.classList.remove('management-peek');
     if (peekBtn) peekBtn.setAttribute('aria-expanded', 'false');
   }

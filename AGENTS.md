@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117s`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117t`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117s`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117t`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -345,7 +345,7 @@
   今后任何测试都必须走这个替身，**绝不允许**真实调用系统壁纸 API。
   用例自己的局部打桩仍可覆盖全局替身。
 
-### 4.13 卡片悬停抽屉的遮挡（2026-11-18，版本 `20261117s`）
+### 4.13 卡片悬停抽屉的遮挡（2026-11-18，版本 `20261117t`）
 
 - **现象**：卡片滚到吸顶菜单/标签栏下面后，鼠标划过菜单区域仍会弹出卡片详情抽屉。
 - **根因**：`cardAtPoint()` 只比较卡片的几何矩形，没考虑上面盖着的吸顶层；
@@ -355,6 +355,15 @@
   标签栏 `z-index:50`、顶栏 60。向上贴底展开时高度也不许越过卡片顶边。
 - **悬停延迟**：`CARD_PEEK_DELAY = 500` —— 鼠标在标题条上停留半秒才展开；
   换卡/移开/滚动立即收起并清定时器（`cancelPeekTimer`）。
+
+### 4.14 叠三角开合时列表跳动（2026-11-18，版本 `20261117t`）
+
+- **现象**：鼠标移到标签栏叠三角，简易菜单展开/收起时图片列表会上下跳一下。
+- **根因**：收起浮层时 `.management-main` 从 `position:absolute` 回到文档流，
+  而它带着 `height:auto → 0` 的过渡；过渡中途仍有高度，把下面的列表顶了一段。
+- **修复**：`peekOpen/peekClose` 时给 `main` 临时加 `.management-peek-noanim`
+  （`transition: none !important`），两帧后移除。实测开合过程中首卡位置与 `scrollTop` 完全不变。
+
 
 
 ---

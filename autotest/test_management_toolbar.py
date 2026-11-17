@@ -333,8 +333,10 @@ class ManagementToolbarTests(unittest.TestCase):
         self.assertIn("main.management-compact.management-peek .management-main", css)
 
         js = (PROJECT_ROOT / "web" / "static" / "management-toolbar.js").read_text(encoding="utf-8")
-        for token in ("function peekOpen", "function peekClose", "function paintPeek"):
+        for token in ("function peekOpen", "function peekClose", "function paintPeek",
+                      "function peekNoAnim"):
             self.assertIn(token, js, token)
+        self.assertIn("management-peek-noanim", css, "叠三角开合要临时禁用高度过渡")
 
         for name in ("library", "authors", "wallpapers"):
             toolbar = self._toolbar_for(name)

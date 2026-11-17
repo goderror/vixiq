@@ -55,6 +55,9 @@ main.management-compact.management-peek .management-heading,
 main.management-compact.management-peek .management-extra {
   display: none;
 }
+/* 简化菜单开合瞬间禁用高度过渡: 避免 absolute→文档流 的 auto→0 过渡把列表顶一下 */
+main.management-peek-noanim .management-main { transition: none !important; }
+
 /* 悬停标签栏叠三角时滑出简化菜单: 浮层不参与布局, 不推挤列表 */
 main.management-compact.management-peek .management-main {
   display: block;
