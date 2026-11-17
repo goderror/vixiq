@@ -10378,7 +10378,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261117k" and _mss.group(1) == "20261117k", \
+    assert _mjs and _mss and _mjs.group(1) == "20261117l" and _mss.group(1) == "20261117l", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10473,7 +10473,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261117k', html) and _re.search(r'app\.js\?v=20261117k', html), \
+    assert _re.search(r'style\.css\?v=20261117l', html) and _re.search(r'app\.js\?v=20261117l', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10867,7 +10867,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261117k" in html and "app.js?v=20261117k" in html, \
+        assert "style.css?v=20261117l" in html and "app.js?v=20261117l" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13177,6 +13177,17 @@ def t136_page_download_engine_and_frontend() -> None:
         "放大样式不许只挂远程弹窗 —— 两个弹窗都生效"
     assert "lightbox is-remote" not in js, "两个弹窗同用一种样式, is-remote 已成死代码"
     assert "clampAxis" in js and "panFrom" in js, "放大后没有拖拽平移"
+    # 手机端: 只用鼠标事件时手指拖动只会滚页面, 图一动不动 → 统一走 Pointer Events
+    assert "wrap.addEventListener('pointerdown', panStart)" in js \
+        and "window.addEventListener('pointermove', panMove" in js, \
+        "放大后的平移没接 Pointer Events (手机拖不动)"
+    assert "wrap.addEventListener('mousedown'" not in js, "别再只挂鼠标事件"
+    assert "touch-action: none" in css, "放大态要禁止浏览器自带滚动/下拉刷新"
+    # 翻页必须取消上一页还没下完的图, 否则几张大图同时抢连接 → 页码变了图还是第一张
+    assert "const pending = new Set();" in js and "cancelPending()" in js \
+        and "pending.add(pre)" in js, "翻页没取消上一页的图片请求"
+    assert "swapLayer(f, token, st, true" in js and "if (token !== seq) return;" in js, \
+        "原图要延后到缩略图之后, 且换页后不再请求"
     assert "if (hiOn) swapLayer(f" in js, "原图要**只在**点「显示原图」后才加载 (默认低清, 省流量)"
     # ---------- ④″ 放大后真的拖得动 + 放大态吃满可用空间 ----------
     # 夹取必须用容器的实际渲染尺寸: curNw/curNh 存的是图片**自然尺寸**, 拿它当视口算出的上限
@@ -13226,7 +13237,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261117k" in _h and "style.css?v=20261117k" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261117l" in _h and "style.css?v=20261117l" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"

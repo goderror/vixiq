@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117k`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117l`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117k`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117l`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -285,6 +285,21 @@
 
 数据流：扫描 → 写 `wallpaper_files` → 列表/查重都读这张表 → 秒回。
 `match_kind`：`md5` / `name` / `visual` / `manual`；`page_num` 可能为 NULL（文件名无页号）。
+
+### 4.9 大图查看器手机端修正（2026-11-17，版本 `20261117l`）
+
+手机实测反馈两件事，都出在「点开大图」之后：
+
+1. **放大后拖不动**：`setupZoom` 原来只挂 `mousedown/mousemove/mouseup`，手指拖动只会滚页面。
+   现统一改 Pointer Events（`pointerdown/pointermove/pointerup/pointercancel`，鼠标与触屏同一套），
+   并在 `.lightbox-img-wrap.is-zoom` 上加 `touch-action: none`；`panMoved` 继续用来区分「拖完松手」与「点一下放大」。
+2. **翻页后还是第一张**：连点时每页都会同时请求缩略图 + 原图（本地原图 5~15MB），
+   几页叠起来占满浏览器 6 条连接，新页只能排队 —— 页码变了、图还是旧的。
+   现在翻页先 `cancelPending()` 取消上一页未完成的 `Image` 请求；原图延后 220ms 再请求，
+   这一页已被换掉就跳过。远程大图弹窗本来就有「原图只在点按钮后加载」，不受影响。
+
+验收：Edge 移动仿真（390×844、触摸）下经 CDP 发真实触摸拖动，`transform` 从 `0px,0px` 变为 `-120px,-60px`；
+`5Mbps / 100ms` 限速下快速连翻 7 页，最后一页显示的是自己的 p6 缩略图。
 
 ---
 

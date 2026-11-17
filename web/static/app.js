@@ -8395,19 +8395,24 @@ function bind() {
       paint();
     };
     const panStart = (ev) => {
-      if (!zoom || ev.button !== 0) return;
-      panFrom = { x: ev.clientX, y: ev.clientY, ox: zx, oy: zy };
+      if (!zoom) return;
+      // 鼠标只认左键; 触屏/手写笔没有 button 之分 (button 恒为 0)
+      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+      panFrom = { x: ev.clientX, y: ev.clientY, ox: zx, oy: zy, id: ev.pointerId };
       panMoved = false;
-      ev.preventDefault();     // 拖图时不要顺手选中文字
+      if (ev.pointerType === 'mouse') ev.preventDefault();   // 拖图时不要顺手选中文字
     };
     const panMove = (ev) => {
       if (!panFrom) return;
+      if (panFrom.id != null && ev.pointerId != null && ev.pointerId !== panFrom.id) return;
       const dx = ev.clientX - panFrom.x, dy = ev.clientY - panFrom.y;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) panMoved = true;
       const [nw, nh] = getNat();
       zx = clampAxis(panFrom.ox + dx, wrap.clientWidth, nw);
       zy = clampAxis(panFrom.oy + dy, wrap.clientHeight, nh);
       paint();
+      // 触屏拖动必须拦掉浏览器自己的滚动/下拉刷新 (CSS 的 touch-action:none 是双保险)
+      if (ev.pointerType !== 'mouse' && ev.cancelable) ev.preventDefault();
     };
     const panEnd = () => { panFrom = null; };
     const onClick = (ev) => {
@@ -8416,10 +8421,13 @@ function bind() {
       if (blocked) return;     // 打码页 / 没有图: 占位图 1:1 只会露出一块小矩形
       zoomTo(!zoom);
     };
-    wrap.addEventListener('mousedown', panStart);
+    // 统一用 Pointer Events: 鼠标与触屏(手指)走同一套平移逻辑 ——
+    // 只挂 mousedown/mousemove 时, 手机上按住拖动只会滚动页面, 图一动不动 (2026-11-17 实测)。
+    wrap.addEventListener('pointerdown', panStart);
     wrap.addEventListener('click', onClick);
-    window.addEventListener('mousemove', panMove);
-    window.addEventListener('mouseup', panEnd);
+    window.addEventListener('pointermove', panMove, { passive: false });
+    window.addEventListener('pointerup', panEnd);
+    window.addEventListener('pointercancel', panEnd);
     applyZoom();     // 落一次初值 (调用方还没自然尺寸时, 它自己的 sizeWrap 会早退)
     return {
       isZoom: () => zoom,
@@ -8432,10 +8440,11 @@ function bind() {
         if (blocked && zoom) zoomTo(false);
       },
       teardown: () => {
-        wrap.removeEventListener('mousedown', panStart);
+        wrap.removeEventListener('pointerdown', panStart);
         wrap.removeEventListener('click', onClick);
-        window.removeEventListener('mousemove', panMove);
-        window.removeEventListener('mouseup', panEnd);
+        window.removeEventListener('pointermove', panMove);
+        window.removeEventListener('pointerup', panEnd);
+        window.removeEventListener('pointercancel', panEnd);
       },
     };
   };
@@ -8599,6 +8608,7 @@ function bind() {
       window.removeEventListener('resize', onWinResize);
       if (z) z.teardown();
       document.removeEventListener('keydown', onKey);
+      cancelPending();   // 关窗时把没下完的图也停掉 (手机流量/连接都省下来)
       lb.remove();
     };
 
@@ -8615,13 +8625,28 @@ function bind() {
       });
     }
 
+    // 正在预载的原图/缩略图。翻页时**必须取消**上一页没下完的请求:
+    // 手机经隧道看图时一张原图 5~15MB, 连点几页会同时占满 6 条连接, 新页只能排在后面,
+    // 表现就是「页码变了, 图还是第一张」(2026-11-17 手机端实测)。
+    const pending = new Set();
+    const cancelPending = () => {
+      pending.forEach((p) => {
+        p.onload = null;
+        p.onerror = null;
+        try { p.src = ''; } catch (e) { /* 取消失败不影响显示 */ }
+      });
+      pending.clear();
+    };
+
     // 把 url 放到「当前隐藏层」, 后台 Image 加载+decode 完成后才在隐藏层落 src,
     // 再淡入新层、淡出旧层 —— 可见层从不中途改 src, 全程无空白帧。
     // st: showPage 每次调用独立的 {fullShown} 状态; isFull: 是否为原图(缩略图晚到则丢弃)。
     const swapLayer = (url, token, st, isFull, done) => {
       if (!url) { if (done) done(null); return; }
       const pre = new Image();
+      pending.add(pre);
       const render = () => {
+        pending.delete(pre);
         if (token !== seq) return;
         const hid = 1 - vis;   // 渲染时再取「当前隐藏层」
         const im = lay[hid];
@@ -8655,6 +8680,7 @@ function bind() {
       const prevIdx = idx;
       idx = (i + pages.length) % pages.length;
       const token = ++seq;
+      cancelPending();      // 上一页还没下完的图先停掉, 别跟这一页抢连接
       const pg = Object.assign({}, cur, pages[idx]);   // 页面字段覆盖作品字段
       curPg = pg;
       const st = { fullShown: false };
@@ -8680,12 +8706,18 @@ function bind() {
 
       const { t, f } = urlsOf(pg);
       const fitFrom = (im) => { if (im && im.naturalWidth) sizeWrap(im.naturalWidth, im.naturalHeight); };
+      spinner.style.display = '';      // 换页先给反馈: 旧图还在, 但要让用户知道正在取新页
       // 缩略图(缓存秒开)先淡入垫底; 原图解码后在隐藏层就绪再淡入 → 全程无空白
       swapLayer(t, token, st, false, fitFrom);
-      swapLayer(f, token, st, true, (im) => {
-        fitFrom(im);
-        updateDim(im ? im.naturalWidth : pg.width, im ? im.naturalHeight : pg.height, pg);
-      });
+      // 原图**晚 220ms**再请求: 先让缩略图占住屏; 快速连翻时这一页已被换掉就直接跳过,
+      // 不会出现「每页都排着一张大图」把手机连接占满 (页码变了图不变的主因)。
+      window.setTimeout(() => {
+        if (token !== seq) return;
+        swapLayer(f, token, st, true, (im) => {
+          fitFrom(im);
+          updateDim(im ? im.naturalWidth : pg.width, im ? im.naturalHeight : pg.height, pg);
+        });
+      }, 220);
       // 这里**不再**预取相邻页原图。
       // 原写法一次翻页就悄悄下两张 img-original (各 1~9MB), 既费流量, 又跟当前这张抢同一
       // 域名的 6 条并发连接 —— 看起来就是「连低清都要等很久」。
