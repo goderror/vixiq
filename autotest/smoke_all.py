@@ -10388,7 +10388,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261118l" and _mss.group(1) == "20261118l", \
+    assert _mjs and _mss and _mjs.group(1) == "20261118n" and _mss.group(1) == "20261118n", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10483,7 +10483,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261118l', html) and _re.search(r'app\.js\?v=20261118l', html), \
+    assert _re.search(r'style\.css\?v=20261118n', html) and _re.search(r'app\.js\?v=20261118n', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10678,6 +10678,10 @@ def t127_wallpaper_current_trace() -> None:
     orig_recycle = wsrv._recycle_files
     orig_orb = wsrv._wall_orb_candidates
     orig_popen = wsrv.proc.popen
+    # 「移出壁纸」会先切到下一张再删文件 —— 单独跑本用例时也必须用替身,
+    # 否则会真的写 SPI_SETDESKWALLPAPER, 把用户桌面指向临时目录 (2026-11-18 实测踩到)。
+    orig_apply = wsrv.apply_wallpaper
+    wsrv.apply_wallpaper = lambda _p: True
     upaths.user_data = lambda rel: (tmp / str(rel))
     upaths.data_root = lambda: tmp
 
@@ -10743,6 +10747,8 @@ def t127_wallpaper_current_trace() -> None:
         assert j["artwork"]["artwork_id"] == "700001", j["artwork"]
         assert j["artwork"]["author_name"] == "shuno", j["artwork"]
         assert j["bigger"] == 0, j["bigger"]
+        sp = j["source_page"]
+        assert sp and sp["page_num"] == 0 and sp["width"] == 1920 and sp["height"] == 1080, sp
         assert "root=wall" in j["file"]["thumb"], j["file"]["thumb"]
         rt = client.get(j["file"]["thumb"])
         assert rt.status_code == 200, (rt.status_code, j["file"]["thumb"])
@@ -10753,6 +10759,7 @@ def t127_wallpaper_current_trace() -> None:
         assert j["file"]["in_library"] == 1, j["file"]
         assert j["match"]["kind"] == "library" and j["match"]["exact"] is True, j["match"]
         assert j["match"]["rel"] == rel_a, j["match"]
+        assert j["source_page"] and j["source_page"]["rel"] == rel_a, j["source_page"]
         assert "root=img" in j["file"]["thumb"], j["file"]["thumb"]
 
         # ---------- ④ 文件名是 pixiv 自然键且库里确有该作品 → kind=id + 库内更大 ----------
@@ -10767,6 +10774,8 @@ def t127_wallpaper_current_trace() -> None:
         assert j["artwork"]["artwork_id"] == "700002", j["artwork"]
         assert j["bigger"] == 1, "库里那张 3840x2160 更大, 应提示可换更高清"
         assert any(p.get("biggest") == 1 for p in j["pages"]), j["pages"]
+        # 原图对比: 当前壁纸 1920x1080 缩自 3840x2160 的原图
+        assert j["source_page"] and j["source_page"]["width"] == 3840, j["source_page"]
 
         # ---------- ⑤ 四档全落空 → kind=none; deep=1 才跑 ORB 慢路 ----------
         wa3 = wall_dir / "mystery_art.png"
@@ -10774,6 +10783,7 @@ def t127_wallpaper_current_trace() -> None:
         _use(wa3)
         j = client.get("/api/wallpaper/current").get_json()
         assert j["match"]["kind"] == "none" and j["artwork"] is None, j["match"]
+        assert j["source_page"] is None, j["source_page"]
         assert j["deep"] is False and j["candidates"] == [], j
         wsrv._wall_orb_candidates = lambda f, root: [
             {"rel": rel_a, "fusion": 0.82, "orb": 0.55}]
@@ -10877,7 +10887,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261118l" in html and "app.js?v=20261118l" in html, \
+        assert "style.css?v=20261118n" in html and "app.js?v=20261118n" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -10889,10 +10899,19 @@ def t127_wallpaper_current_trace() -> None:
         assert "window.wallAct = wallAct;" in js
         assert "window.wallPreview = wallPreview;" in js
         assert "function wallWatch()" in js and "function renderWallCard(d)" in js
-        assert ("if (name === 'library') { libSync(); loadStats(); loadLibrary(); "
-                "loadLibFacets(); loadTrashBadge(); wallWatch(); }") in js, \
-            "切到图库页必须启动壁纸轮询"
+        assert "else if (name === 'wallpapers') { wallFilesEnter(); wallWatch(); }" in js, \
+            "切到壁纸管理页必须启动壁纸轮询"
         assert "wall-card" in css and ".wall-badge.ok" in css, "壁纸面板样式缺失"
+        # 当前壁纸卡已从图库页移到壁纸管理页, 「清理副本」改到壁纸工具栏
+        lib_sec = html.split('id="tab-library"')[1].split('id="tab-wallpapers"')[0]
+        wf_sec = html.split('id="tab-wallpapers"')[1].split('id="tab-stats"')[0]
+        assert 'id="wall-card"' not in lib_sec, "图库页不应再有当前壁纸卡"
+        assert 'id="wall-card"' in wf_sec, "当前壁纸卡应在壁纸管理页"
+        assert 'onclick="wallDupesOpen()"' in wf_sec, "清理副本入口应在壁纸管理工具栏"
+        # 原图对比 + 设置来源: 一张原图可以派生多个壁纸, 比较基准必须是原图而非「最高清页」
+        assert "function wallSourceText(d)" in js and "d.source_page" in js, "缺少原图对比"
+        assert "库内最高清的一页" not in js, "应改为原图对比"
+        assert "d.usage" in js and "系统幻灯片切换" in js, "缺少设置来源与时间"
     finally:
         upaths.user_data = orig_ud
         upaths.data_root = orig_dr
@@ -10900,6 +10919,7 @@ def t127_wallpaper_current_trace() -> None:
         wsrv._recycle_files = orig_recycle
         wsrv._wall_orb_candidates = orig_orb
         wsrv.proc.popen = orig_popen
+        wsrv.apply_wallpaper = orig_apply
         wsrv._WALL_DEEP_CACHE.clear()
         _wt127.wallpaper_dir = _orig_wdir127
         shutil.rmtree(str(tmp), ignore_errors=True)
@@ -11751,11 +11771,11 @@ def t131_launcher_config_switches():
     assert 'id="wall-fold"' in html, "「当前壁纸」卡片缺收起按钮"
     for fn in ("wallDupesOpen", "wallDupesScan", "wallDupesDelete"):
         assert f"function {fn}" in js, f"前端缺 {fn}"
-    assert "'next'" in js and "⏭️ 下一张壁纸" in js, "网页版缺「下一张壁纸」按钮"
-    assert "function wallCopyLink" in js and "🔗 复制作品链接" in js, "网页版缺「复制作品链接」"
-    # 两端的分工从 2026-09-26 起不同了: 网页版地方大, 仍是「下一张壁纸 / 复制作品链接」
+    assert "'next'" in js and "⏭️ 下一张" in js, "网页版缺「下一张」按钮"
+    assert "function wallCopyLink" in js and "🔗 复制链接" in js, "网页版缺「复制链接」"
+    # 两端的分工从 2026-09-26 起不同了: 网页版地方大, 仍是「下一张 / 复制链接」
     # 两颗文字按钮; 小控件收敛成四颗图标键, 那两颗文字键在卡片上撤掉。
-    for _label in ("下一张壁纸", "复制作品链接"):
+    for _label in ("下一张", "复制链接"):
         assert _label in js, f"网页版缺「{_label}」"
     assert '"copy"' not in ww_src and "'copy'" not in ww_src, \
         "卡片上「复制作品链接」的动作键该撤了 (注释里提历史可以, 代码里不许再有)"
@@ -13247,7 +13267,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261118l" in _h and "style.css?v=20261118l" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261118n" in _h and "style.css?v=20261118n" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13398,7 +13418,7 @@ def t137_wallpaper_index_and_admin_page() -> None:
             "回收站页签只留图标 (文案在 title/aria-label 里)"
         assert 'id="tab-wallpapers"' in html and 'onclick="wallFilesScan(false)"' in html
         assert "function wallFilesEnter()" in wall_js and "function wallFilesCard(f)" in wall_js
-        assert "else if (name === 'wallpapers') wallFilesEnter();" in js
+        assert "else if (name === 'wallpapers') { wallFilesEnter(); wallWatch(); }" in js
         assert "lightbox-wall" in js and ".lightbox-wall" in css, \
             "设为壁纸要跟 ‹ › 同款圆形按钮, 不许挤在信息行里"
         assert "safeThumb(f.thumb, f)" in wall_js, \

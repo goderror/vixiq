@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118l`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118n`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261118l`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261118n`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -344,6 +344,10 @@
   `core.wallpaper_trace.apply_wallpaper` 全局替换成 `lambda _p: True`（no-op）。
   今后任何测试都必须走这个替身，**绝不允许**真实调用系统壁纸 API。
   用例自己的局部打桩仍可覆盖全局替身。
+- **2026-11-18 追加**：T127 单独运行（`python -c "from autotest.smoke_all import t127..."`）时不会走
+  `main()` 的全局替身，而「移出壁纸」接口会先 `apply_wallpaper(下一张)` —— 实测把真实桌面壁纸
+  改成了临时目录里已删除的文件。现在 T127 自己也会局部替换 `wsrv.apply_wallpaper` 为 no-op；
+  **任何单独调用、且会走到删除/换壁纸路径的用例都必须自带替身**。
 
 ### 4.13 卡片悬停抽屉的遮挡（2026-11-18，版本 `20261117t`）
 
@@ -568,6 +572,31 @@
   （移除 `#wf-usage`、`wallUsageHtml` 与 `.wf-usage*` 样式）。`/api/wallpaper/usage` 接口、
   `wallpaper_usage` 表与「设为壁纸」登记**全部保留**，壁纸库统计继续用这些数据；
   T153 改为断言页面上不再出现该区块。
+
+### 4.26 当前壁纸卡移到壁纸管理页并重设计（2026-11-18，版本 `20261118n`）
+
+- **位置**：`#wall-card` 从图库页移到壁纸管理页，放在统计卡下方、壁纸网格上方（随列表滚走，
+  仍可折叠，折叠状态存 `vixiq.wall.folded`）。轮询只在壁纸管理页激活：
+  `switchTab` 的 `wallpapers` 分支 `{ wallFilesEnter(); wallWatch(); }`，图库页不再启动。
+- **展示信息**：缩略图（安全模式）+ 文件名 + 溯源徽章 + 壁纸夹位置「第 X / Y 张」；
+  作品标题 / 作品 ID / 作者；当前壁纸尺寸与大小；**原图对比**；溯源结论；
+  设置来源与时间；壁纸夹路径。
+- **原图对比（用户 2026-11-18 要求）**：一张原图可能派生多个壁纸（裁剪/缩放/放大版），
+  比较基准改为**溯源到的那张图库原图**，不是「库内最高清页」。
+  `trace_current_wallpaper` 新增 `source_page`（`page_num/rel/width/height/size`）；
+  `kind=library` 时也补 `match.page_num`（原先只给 rel，导致拿不到对比页）。
+  前端 `wallSourceText` 按 `match.relation` + 面积判断「与原图尺寸一致 / 原图的裁剪版 /
+  原图的放大版 / 原图的缩小版 / 原图旋转 90° / 比原图更大 / 比原图小」。
+  `bigger`/`biggest` 字段保留（T127/T130 仍用）。
+- **设置来源**：`/api/wallpaper/current` 新增 `usage`（`db.find_wallpaper_usage_by_path`，
+  只查真实设置记录 `backfilled=0`）：显示「图库原图 / 裁剪版 / 壁纸夹 · 设置于 …」；
+  系统幻灯片直接切的没有记录，显示「来源：系统幻灯片切换」。
+- **按钮分组**：切换（上一张 / 下一张 / 随机）、查看（作者 / 在库中查看 / 复制链接）、
+  工具（打开文件夹 / 图像溯源）、危险（移出壁纸，仅库外文件）。
+  `/api/wallpaper/prev` 与 `?shuffle=1` 已接到卡片按钮。
+- **清理副本**入口从卡片移到壁纸管理工具栏（扫描归属 / 深度扫描旁边）。
+- **验收**：T127 增加 `source_page` 四档断言与移动后的静态护栏；T131/T137 更新按钮文案与
+  `switchTab` 接线断言；全量 **146/146**。
 
 
 

@@ -556,6 +556,8 @@ def trace_current_wallpaper(*, deep: bool = False, wall_path=_UNSET, db_factory=
         "match": {"kind": "none", "confidence": 0.0, "rel": "",
                   "page_num": None, "exact": False, "relation": ""},
         "artwork": None, "pages": [], "candidates": [], "bigger": 0,
+        # 当前壁纸溯源到的那张图库原图（一张原图可能派生多个壁纸：裁剪/缩放/放大版）
+        "source_page": None,
     }
     # 壁纸夹里的位置 (第几张/共几张) —— 小控件底部那条进度线要用 (widget_window.folder_frac)
     _idx, _tot = wallpaper_position(f)
@@ -590,6 +592,9 @@ def trace_current_wallpaper(*, deep: bool = False, wall_path=_UNSET, db_factory=
         if not aid and rel:
             row = _page_by_rel(db, rel)
             aid = str(row["artwork_id"]) if row else ""
+            # 补上命中的图片页号: 「当前壁纸 ↔ 原图」对比需要它 (library 路径原本只给了 rel)
+            if row is not None and info["match"].get("page_num") is None:
+                info["match"]["page_num"] = row["page_num"]
 
     # ── 第二段 (不占 DB 连接): ORB 兜底慢路 —— 首次要加载整库特征, 可能几秒~几十秒 ──
     if not aid and deep:
@@ -641,6 +646,13 @@ def trace_current_wallpaper(*, deep: bool = False, wall_path=_UNSET, db_factory=
         if page:
             info["match"]["relation"] = wall_relation(
                 (ww, wh), (page["width"], page["height"]))
+            info["source_page"] = {
+                "page_num": page.get("page_num"),
+                "rel": page.get("rel") or "",
+                "width": int(page.get("width") or 0),
+                "height": int(page.get("height") or 0),
+                "size": int(page.get("size") or 0),
+            }
         best = None
         for p in info["pages"]:
             if not (p["width"] and p["height"]):

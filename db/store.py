@@ -4577,6 +4577,23 @@ class PixivDatabase:
             (max(1, int(limit)),)).fetchall()
         return [dict(r) for r in rows]
 
+    def find_wallpaper_usage_by_path(self, file_path: str) -> "dict | None":
+        """某张壁纸最近一次的真实设置记录 → ``{source, used_at}``；没有返回 None。
+
+        当前壁纸可能是系统幻灯片直接切的（没有应用记录），界面据此显示「系统切换」。
+        """
+        raw = str(file_path or "").strip()
+        if not raw:
+            return None
+        for cand in dict.fromkeys([raw, raw.replace("\\", "/"), raw.replace("/", "\\")]):
+            row = self.conn.execute(
+                "SELECT source, used_at FROM wallpaper_usage "
+                "WHERE file_path=? AND backfilled=0 "
+                "ORDER BY used_at DESC, id DESC LIMIT 1", (cand,)).fetchone()
+            if row:
+                return dict(row)
+        return None
+
     def list_all_tags(self) -> list[dict]:
         """全部标签 + 各标签作品数 (分类浏览/标签下拉用)。"""
         rows = self.conn.execute(

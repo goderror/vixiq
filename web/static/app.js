@@ -20,10 +20,10 @@ window.switchTab = function (name) {
   $$('.tabpage').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   document.dispatchEvent(new CustomEvent('vixiq:tab-change', { detail: { name } }));
   actPush('NAV', '切换页面 → ' + name, {});   // 活动日志: 记下用户去哪一页了
-  if (name === 'library') { libSync(); loadStats(); loadLibrary(); loadLibFacets(); loadTrashBadge(); wallWatch(); }
+  if (name === 'library') { libSync(); loadStats(); loadLibrary(); loadLibFacets(); loadTrashBadge(); }
   else if (name === 'trash') loadTrash();
   else if (name === 'authors') loadAuthors();
-  else if (name === 'wallpapers') wallFilesEnter();
+  else if (name === 'wallpapers') { wallFilesEnter(); wallWatch(); }
   else if (name === 'stats') loadStatsPage();
   else if (name === 'reverse') loadReverseStatus();
   else if (name === 'tasks') refreshCart();
@@ -173,7 +173,8 @@ async function wallRefresh(opts) {
   if (!d || !d.active) { box.classList.add('hidden'); wallKey = ''; return; }
   wallData = d;
   box.classList.remove('hidden');
-  const key = d.file.path + '|' + d.file.mtime + '|' + (d.deep ? 1 : 0);
+  const key = d.file.path + '|' + d.file.mtime + '|' + (d.deep ? 1 : 0)
+            + '|' + ((d.usage || {}).used_at || '');
   if (key !== wallKey) { wallKey = key; renderWallCard(d); }
 }
 
@@ -598,7 +599,7 @@ async function wallExistingConfirm() {
     WEC.busy = false;
     closeWallExisting(); closeWallCrop(); closeWallPicker();
     toast('已将已有版本设为当前壁纸', 'ok');
-    if (isTabActive('library')) wallRefresh({ deep: true });
+    if (isTabActive('wallpapers')) wallRefresh({ deep: true });
   } catch (e) {
     $('#wall-existing-error').textContent = e.message || '设置失败，请重试';
   } finally {
@@ -644,9 +645,9 @@ async function confirmWallCrop() {
     closeWallCrop();
     closeWallPicker();
     // 先浅刷新让界面立刻反馈；深度溯源稍后再补，不挡「设置完成」
-    if (isTabActive('library')) {
+    if (isTabActive('wallpapers')) {
       wallRefresh();
-      setTimeout(() => { if (isTabActive('library')) wallRefresh({ deep: true }); }, 1500);
+      setTimeout(() => { if (isTabActive('wallpapers')) wallRefresh({ deep: true }); }, 1500);
     }
   } catch (e) {
     toast('设置壁纸失败: ' + (e.message || e), 'err');
@@ -655,10 +656,10 @@ async function confirmWallCrop() {
 window.confirmWallCrop = confirmWallCrop;
 
 function wallWatch() {
-  // 图库页开着才轮询, 离开就停 (没人看着的页面不该白跑请求)
+  // 壁纸管理页开着才轮询, 离开就停 (没人看着的页面不该白跑请求)
   if (wallTimer) { clearInterval(wallTimer); wallTimer = null; }
   wallRefresh();
-  wallTimer = setInterval(() => { if (isTabActive('library')) wallRefresh(); }, 8000);
+  wallTimer = setInterval(() => { if (isTabActive('wallpapers')) wallRefresh(); }, 8000);
 }
 
 // ============ 🖼 壁纸管理 (归属索引 + 查重) —— 2026-11-16 ============
@@ -792,20 +793,72 @@ function wallTitle(a, d) {
   return a ? '（无标题）' : '未溯源';
 }
 
+// 壁纸来源标签：一张原图可以派生多个壁纸（裁剪/缩放/放大版），这里说明当前这张是怎么来的
+const WALL_USAGE_SRC = { library: '图库原图', crop: '裁剪版', wall: '壁纸夹' };
+
+// 当前壁纸 ↔ 溯源到的那张原图：显示原图尺寸 + 两者的形态关系
+function wallSourceText(d) {
+  const src = d.source_page, f = d.file || {}, m = d.match || {};
+  if (!src || !src.width || !src.height) return '';
+  const area = (f.width || 0) * (f.height || 0), sarea = src.width * src.height;
+  const verdict = (m.relation === 'same' || (f.width === src.width && f.height === src.height))
+    ? '与原图尺寸一致'
+    : m.relation === 'crop' ? '原图的裁剪版'
+    : m.relation === 'rescale' ? (area > sarea ? '原图的放大版' : '原图的缩小版')
+    : m.relation === 'rotate' ? '原图旋转 90°'
+    : area > sarea ? '比原图更大' : area < sarea ? '比原图小' : '与原图尺寸一致';
+  return '原图 ' + src.width + '×' + src.height
+    + (src.page_num == null ? '' : '（第 ' + (Number(src.page_num) + 1) + ' 页）')
+    + ' · ' + verdict;
+}
+
+function wallActions(a, f, m) {
+  const groups = [];
+  groups.push(['切换',
+    '<button class="btn" onclick="wallAct(\'prev\')">⏮️ 上一张</button>'
+    + '<button class="btn" onclick="wallAct(\'next\')">⏭️ 下一张</button>'
+    + '<button class="btn ghost" onclick="wallAct(\'shuffle\')"'
+    + ' title="从壁纸夹随机换一张">🔀 随机</button>']);
+  const view = [];
+  if (a && a.author_id) {
+    view.push('<button class="btn" onclick="openAuthorDetail(\'' + esc(a.author_id) + '\')">👤 作者</button>');
+  }
+  if (a) {
+    view.push('<button class="btn" onclick="libOnlyThisWork(\'' + esc(a.artwork_id) + '\')">📚 在库中查看</button>');
+    view.push('<button class="btn" onclick="wallCopyLink(\'' + esc(a.artwork_id) + '\')">🔗 复制链接</button>');
+  }
+  if (view.length) groups.push(['查看', view.join('')]);
+  const tools = ['<button class="btn ghost" onclick="wallAct(\'open-folder\')">📂 打开文件夹</button>'];
+  if (m.kind === 'none' || m.kind === 'weak') {
+    tools.push('<button class="btn ghost" onclick="wallRefresh({deep:1})"'
+      + ' title="用 ORB 图像特征在库里找最像的一张（首次要加载整库特征，可能较慢）">🔍 图像溯源</button>');
+  }
+  groups.push(['工具', tools.join('')]);
+  if (!f.in_library) {
+    groups.push(['危险', '<button class="btn danger" onclick="wallAct(\'recycle\')">🗑️ 移出壁纸</button>']);
+  }
+  return '<div class="wall-actions">' + groups.map(([label, html]) =>
+    '<div class="wall-act-row"><span class="wall-act-label">' + esc(label) + '</span>'
+    + html + '</div>').join('') + '</div>';
+}
+
 function renderWallCard(d) {
   const f = d.file, m = d.match || {}, a = d.artwork, st = wallState(d);
   const r18 = a ? a.is_r18 : 0;
   const dim = (f.width && f.height) ? (f.width + '×' + f.height) : '尺寸未知';
   wallImgUrl = '/api/local-img?p=' + encodeURIComponent(f.name)
              + '&root=' + (f.in_library ? 'img' : 'wall');
-  const big = (d.pages || []).filter(p => p.biggest)[0];
-  // 库内最高清的那一页 —— 给的是「跟当前这张比谁更清楚」的结论, 不是让人去数像素
-  const bigTxt = big
-    ? '库内最高清的一页 ' + big.width + '×' + big.height + '（第 ' + (big.page_num + 1) + ' 页）· '
-      + (d.bigger ? '比当前壁纸更清晰' : '清晰度不及当前壁纸')
-    : '';
+  const srcTxt = wallSourceText(d);
+  const pos = (d.folder && d.folder.index > 0 && d.folder.total)
+    ? '壁纸夹第 ' + d.folder.index + ' / ' + d.folder.total + ' 张' : '';
+  const u = d.usage || null;
+  const usageHtml = u
+    ? '<span class="wf-tag">' + esc(WALL_USAGE_SRC[u.source] || u.source || '未知') + '</span>'
+      + ' <span class="muted">设置于 ' + esc(String(u.used_at || '').replace('T', ' ').slice(0, 19)) + '</span>'
+    : '<span class="muted">来源：系统幻灯片切换</span>';
   $('#wall-name').textContent = f.name;
   $('#wall-badges').innerHTML = st.badge;
+  $('#wall-pos').textContent = pos;
   $('#wall-body').innerHTML =
     '<img class="wall-thumb" src="' + imgSrc(f.thumb, { is_r18: r18 }) + '" alt=""'
       + ' title="点开看大图（可左右看库内其它页）" onclick="wallPreview()">'
@@ -813,21 +866,13 @@ function renderWallCard(d) {
     +   '<div class="wall-line"><b>' + esc(wallTitle(a, d)) + '</b>'
     +     (a ? ' <span class="muted">#' + esc(a.artwork_id) + ' · ' + esc(a.author_name || '') + '</span>' : '')
     +   '</div>'
-    +   '<div class="wall-line muted">壁纸 ' + esc(dim) + ' · ' + esc(fmtSize(f.size)) + ' · ' + esc(f.dir) + '</div>'
-    +   '<div class="wall-line">' + esc(st.txt) + '</div>'
-    +   (bigTxt ? '<div class="wall-line muted">' + esc(bigTxt) + '</div>' : '')
+    +   '<div class="wall-line muted">' + esc(dim + ' · ' + fmtSize(f.size)) + '</div>'
+    +   (srcTxt ? '<div class="wall-line">' + esc(srcTxt) + '</div>' : '')
+    +   '<div class="wall-line muted">' + esc(st.txt) + '</div>'
+    +   '<div class="wall-line">' + usageHtml + '</div>'
+    +   '<div class="wall-line muted wall-path" title="' + esc(f.dir) + '">' + esc(f.dir) + '</div>'
     +   (d.deep_error ? '<div class="wall-line err-text">图像溯源失败：' + esc(d.deep_error) + '</div>' : '')
-    +   '<div class="btn-row" style="margin-top:6px">'
-    +     (a && a.author_id ? '<button class="btn" onclick="openAuthorDetail(\'' + esc(a.author_id) + '\')">👤 作者</button>' : '')
-    +     (a ? '<button class="btn" onclick="libOnlyThisWork(\'' + esc(a.artwork_id) + '\')">📚 在库中查看这个作品</button>' : '')
-    +     '<button class="btn" onclick="wallAct(\'next\')">⏭️ 下一张壁纸</button>'
-    +     (a ? '<button class="btn" onclick="wallCopyLink(\'' + esc(a.artwork_id) + '\')">🔗 复制作品链接</button>' : '')
-    +     '<button class="btn ghost" onclick="wallAct(\'open-folder\')">📂 打开所在文件夹</button>'
-    +     (f.in_library ? '' : '<button class="btn danger" onclick="wallAct(\'recycle\')">🗑️ 移出壁纸（进电脑回收站）</button>')
-    +     ((m.kind === 'none' || m.kind === 'weak')
-           ? '<button class="btn ghost" onclick="wallRefresh({deep:1})"'
-             + ' title="用 ORB 图像特征在库里找最像的一张（首次要加载整库特征，可能较慢）">🔍 图像溯源</button>' : '')
-    +   '</div>'
+    +   wallActions(a, f, m)
     + '</div>';
 }
 
@@ -850,12 +895,17 @@ async function wallAct(what) {
     if (apiErr(r)) toast(apiErr(r), 'err');
     return;
   }
-  if (what === 'next') {
-    // 只是「跳到壁纸夹里的下一张」看看, 幻灯片的间隔/乱序/目录都不动
-    const r = await api('/api/wallpaper/next', { method: 'POST' });
+  if (what === 'next' || what === 'prev' || what === 'shuffle') {
+    // 只是「在壁纸夹里换一张」看看, 幻灯片的间隔/乱序/目录都不动
+    const url = what === 'prev' ? '/api/wallpaper/prev'
+      : what === 'shuffle' ? '/api/wallpaper/next?shuffle=1'
+      : '/api/wallpaper/next';
+    const r = await api(url, { method: 'POST' });
     const e = apiErr(r);
     if (e) { toast(e, 'err'); return; }
-    toast('已切到下一张：' + (r.name || ''), 'ok');
+    const verb = what === 'prev' ? '已切到上一张：'
+      : what === 'shuffle' ? '已随机换到：' : '已切到下一张：';
+    toast(verb + (r.name || ''), 'ok');
     wallKey = ''; wallRefresh();
     return;
   }

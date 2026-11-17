@@ -1465,6 +1465,11 @@ tr.tidy-risk td { background: #fffaf0; color: #b26a00; }
 .wall-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .wall-line { font-size: 13px; line-height: 1.5; word-break: break-all; }
 .wall-line.muted { color: var(--muted); font-size: 12px; }
+.wall-badge.pos { background: #eef3fb; color: #2b5c9a; border: 1px solid #d6e2f5; }
+.wall-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wall-actions { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.wall-act-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wall-act-label { font-size: 11px; color: var(--muted); min-width: 34px; }
 @media (max-width: 720px) {
   .wall-body { flex-direction: column; }
   .wall-thumb { width: 100%; height: 160px; }

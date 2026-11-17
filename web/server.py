@@ -6266,6 +6266,14 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             info["ai"] = texts_for(info)
         except Exception as e:
             info["ai"] = {"state": "off", "error": f"{type(e).__name__}: {e}"}
+        # 这张壁纸是怎么换上去的: 有应用设置记录就显示来源与时间, 没有就是系统幻灯片切的
+        info["usage"] = None
+        if info.get("active"):
+            try:
+                with _db() as db:
+                    info["usage"] = db.find_wallpaper_usage_by_path(info["file"]["path"])
+            except Exception:
+                info["usage"] = None
         return jsonify(info)
 
     @app.route("/api/wallpaper/next", methods=["POST"])
