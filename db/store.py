@@ -318,6 +318,34 @@ def foreign_author_id(source: str, handle: str) -> str:
     return "local_" + _hl.md5(key.encode("utf-8")).hexdigest()[:12]
 
 
+# 外部导入时标题被写成「相对路径 / 文件名」的还原规则 (2026-11-18)。
+# 只认带路径特征的左侧: 含 @账号 / #来源# / _local_ / _foreign_ / 结尾 _数字，
+# 避免把正常标题「A / B」误当路径。
+_PATH_TITLE_EXT_RE = re.compile(r"\.(?:jpe?g|png|webp|gif|bmp)$", re.I)
+
+
+def title_from_path_like(title: str) -> str:
+    """把「路径 / 文件名」还原成文件名；不像路径标题则返回空串。
+
+    `X图/#其他来源# / CEC84AD9E752` → `CEC84AD9E752`
+    `X图/Kloan_local_x/bilibili@Kloan / 雨` → `雨`
+    正常标题（左侧不含路径特征）一律返回空串，调用方跳过。
+    """
+    s = str(title or "")
+    if " / " not in s:
+        return ""
+    left, right = s.rsplit(" / ", 1)
+    # 左侧可能只是 `#其他来源#` 这种来源夹（没有 `/`），也算路径标题
+    if "/" not in left and not (left.startswith("#") and left.endswith("#")):
+        return ""
+    if not ("@" in left or "#" in left or "_local_" in left or "_foreign_" in left
+            or re.search(r"_\d{1,9}(?:/|$)", left)):
+        return ""
+    name = right.strip() or left.rstrip("/").rsplit("/", 1)[-1].strip()
+    name = _PATH_TITLE_EXT_RE.sub("", name).strip()
+    return name if name and name != s else ""
+
+
 # 文件名主干是否算「人读信息」(标题回填用: 别把哈希名当标题写进库)
 _CJK_CHAR_RE = re.compile(r'[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]')
 _HASHY_STEM_RE = re.compile(r'^[0-9a-fA-F\-_]{12,}$')
@@ -4447,6 +4475,34 @@ class PixivDatabase:
                 f"UPDATE artworks SET {sets}, updated_at=? WHERE artwork_id=?",
                 (*params, now_stamp(), artwork_id),
             )
+
+    def find_path_like_titles(self) -> list:
+        """找出标题被写成「路径 / 文件名」的作品（只读，供预览）。"""
+        rows = self.conn.execute(
+            "SELECT artwork_id, title FROM artworks WHERE title LIKE '% / %'").fetchall()
+        out = []
+        for r in rows:
+            old = str(r["title"] or "")
+            new = title_from_path_like(old)
+            if new and new != old:
+                out.append({"artwork_id": str(r["artwork_id"]), "old": old, "new": new})
+        out.sort(key=lambda x: x["artwork_id"])
+        return out
+
+    def fix_path_like_titles(self, ids: "list[str] | None" = None) -> list:
+        """把标题里的路径前缀去掉（保留文件名）。ids=None 处理全部候选。"""
+        items = self.find_path_like_titles()
+        if ids is not None:
+            want = {str(x) for x in ids if str(x)}
+            items = [x for x in items if x["artwork_id"] in want]
+        if not items:
+            return []
+        with self.conn:
+            for it in items:
+                self.conn.execute(
+                    "UPDATE artworks SET title=?, updated_at=? WHERE artwork_id=?",
+                    (it["new"], now_stamp(), it["artwork_id"]))
+        return items
 
     def list_all_tags(self) -> list[dict]:
         """全部标签 + 各标签作品数 (分类浏览/标签下拉用)。"""

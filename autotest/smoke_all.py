@@ -3051,6 +3051,7 @@ def run_suite() -> SuiteResult:
     suite.add("T148", "🔗 改作者时同名身份合并: 自定义作者 → 同名 pixiv 作者可一键合并（作品迁移/作者行删除/文件夹改名/文件归位）+ 不合并只改这一张也会搬文件 + 不存在的合并 ID 报错 (隔离数据)", t148_author_merge_on_change)
     suite.add("T149", "🛡 作者源头查重: 规范化名字（大小写/全半角/空白/零宽/宣传后缀）+ 同名 pixiv 存在时保存返回 409 让用户选复用/同名新建 + 同名自定义自动复用不重复建 (隔离数据)", t149_author_conflict_guard)
     suite.add("T150", "🔍 作者管理「重复作者」: 按规范化名字/别名分组 + 跨 pixiv/自定义识别 + 逐组合并（作品/作者行/文件）+ 不存在/相同 ID 报错 + 页面按钮接线 (隔离数据)", t150_author_duplicate_view)
+    suite.add("T151", "🏷️ 标题路径清理: 「路径 / 文件名」还原为文件名（含 #来源#/@账号/_local_）+ 正常标题不误伤 + 预览/执行/自动备份 + 页面按钮接线 (隔离数据)", t151_title_path_cleanup)
     suite.write_report()
     return suite
 
@@ -10384,7 +10385,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261118d" and _mss.group(1) == "20261118d", \
+    assert _mjs and _mss and _mjs.group(1) == "20261118e" and _mss.group(1) == "20261118e", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10479,7 +10480,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261118d', html) and _re.search(r'app\.js\?v=20261118d', html), \
+    assert _re.search(r'style\.css\?v=20261118e', html) and _re.search(r'app\.js\?v=20261118e', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10873,7 +10874,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261118d" in html and "app.js?v=20261118d" in html, \
+        assert "style.css?v=20261118e" in html and "app.js?v=20261118e" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13243,7 +13244,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261118d" in _h and "style.css?v=20261118d" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261118e" in _h and "style.css?v=20261118e" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13993,6 +13994,78 @@ def t150_author_duplicate_view() -> None:
             upaths.user_data = orig_ud
             if orig_img is not None:
                 wsrv._config["paths"]["img_subdir"] = orig_img
+
+
+def t151_title_path_cleanup() -> None:
+    """T151: 标题里的路径清理（2026-11-18）。
+
+    外部导入曾把标题写成 `X图/#其他来源# / 文件名`。规则只认带路径特征的左侧
+    （@账号 / #来源# / _local_ / _foreign_ / 结尾 _数字），正常标题「A / B」不误伤。
+    """
+    import tempfile
+    import utils.paths as upaths
+    from db.store import PixivDatabase, WSt, title_from_path_like
+    import web.server as wsrv
+
+    assert title_from_path_like("X图/#其他来源# / CEC84AD9E752") == "CEC84AD9E752"
+    assert title_from_path_like("X图/Kloan_local_x/bilibili@Kloan / 雨") == "雨"
+    assert title_from_path_like("#其他来源# / 1786539378762") == "1786539378762"
+    assert title_from_path_like("X图/作者_123 / 标题.png") == "标题"
+    assert title_from_path_like("A / B") == "", "正常标题不能误伤"
+    assert title_from_path_like("A/B / C") == "", "左侧无路径特征不能误伤"
+    assert title_from_path_like("普通标题") == ""
+
+    with tempfile.TemporaryDirectory(prefix="t151title_") as td:
+        tmp = Path(td)
+        orig_ud = upaths.user_data
+        upaths.user_data = lambda rel: tmp / str(rel)
+        try:
+            db = PixivDatabase(str(tmp / "pixiv.db"))
+            for aid, title in (
+                    ("960001", "X图/#其他来源# / CEC84AD9E752"),
+                    ("960002", "X图/Kloan_local_x/bilibili@Kloan / 雨"),
+                    ("960003", "#其他来源# / 1786539378762"),
+                    ("960004", "A / B"),
+                    ("960005", "正常标题")):
+                db.change_work_status(aid, WSt.DONE, title=title, total_pages=1)
+            db.close()
+
+            client = wsrv.create_app().test_client()
+
+            # ① 预览只命中 3 条路径标题
+            r = client.get("/api/library/title-fix/preview")
+            j = r.get_json()
+            assert r.status_code == 200 and j.get("total") == 3, j
+            got = {x["artwork_id"]: x["new"] for x in j["items"]}
+            assert got == {"960001": "CEC84AD9E752", "960002": "雨",
+                           "960003": "1786539378762"}, got
+
+            # ② 执行后标题变成文件名，正常标题不动
+            r = client.post("/api/library/title-fix/apply", json={})
+            j = r.get_json()
+            assert r.status_code == 200 and j.get("fixed") == 3, j
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                rows = {str(x["artwork_id"]): str(x["title"] or "")
+                        for x in db2.conn.execute("SELECT artwork_id, title FROM artworks")}
+                assert rows["960001"] == "CEC84AD9E752", rows
+                assert rows["960002"] == "雨", rows
+                assert rows["960003"] == "1786539378762", rows
+                assert rows["960004"] == "A / B", rows
+                assert rows["960005"] == "正常标题", rows
+                # 再跑一次应为空（幂等）
+                assert db2.find_path_like_titles() == []
+
+            # ③ 页面接线
+            html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+            js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+            assert 'id="lib-titlefix-btn"' in html, "图库工具栏缺少「清理标题」按钮"
+            for token in ("openTitleFixPreview", "applyTitleFix", "title-fix/preview",
+                          "title-fix/apply"):
+                assert token in js, f"前端缺少标题清理接线: {token}"
+            src = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+            assert "title-fix/preview" in src and "title-fix/apply" in src, "后端缺少接口"
+        finally:
+            upaths.user_data = orig_ud
 
 
 def main() -> int:
