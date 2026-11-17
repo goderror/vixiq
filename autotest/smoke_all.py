@@ -3054,6 +3054,7 @@ def run_suite() -> SuiteResult:
     suite.add("T151", "🏷️ 标题源头修复: 外部登记只写文件名（不再「文件夹 / 文件名」）+ 历史路径标题识别与一次性清理 + 正常标题不误伤 + 不保留常驻按钮/接口 (隔离数据)", t151_title_path_cleanup)
     suite.add("T152", "🗂 图库分类基础(A1): 分类表/作品 section_id + 按现有 X图/涩图 回填 + 整理按分类目录走 + 下载按 R18 落分类 (隔离数据)", t152_library_sections_base)
     suite.add("T153", "🖼 壁纸使用记录: 原图只登记不复制 / 裁剪版同时进壁纸夹 / 同键去重 + 最近设置接口与壁纸管理页展示 + 设置壁纸不再等 ORB 深查 (隔离数据)", t153_wallpaper_usage)
+    suite.add("T154", "🧹 一键整理空夹安全: move 的目标夹不得同时列为 rmdir（先移入后 rmtree 会删文件）+ 执行前二次检查非空夹不删 (隔离数据)", t154_tidy_rmdir_safety)
     suite.write_report()
     return suite
 
@@ -14196,6 +14197,67 @@ def t153_wallpaper_usage() -> None:
             assert '"info": None' in src, "设置响应不应现算大文件 info"
         finally:
             upaths.user_data = orig_ud
+
+
+def t154_tidy_rmdir_safety() -> None:
+    """T154: 一键整理「空夹清理」不得删掉刚移入的文件（2026-11-18 严重 bug 回归）。
+
+    事故：根目录 Kloan 夹要移入 X图/Kloan，同时 X图/Kloan 是空夹 → 两个计划都生成；
+    执行时先 move 再 rmtree，刚移入的图被永久删除。
+    两道防线：
+      ① 生成计划时，move 的目标夹（及其上级）不得列为 rmdir；
+      ② 执行 rmdir 前重新检查目录必须仍然为空。
+    """
+    import tempfile
+    from db.store import PixivDatabase, WSt, PSt
+    import web.server as ws
+
+    with tempfile.TemporaryDirectory(prefix="t154rmdir_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir(parents=True, exist_ok=True)
+        db = PixivDatabase(str(tmp / "pixiv.db"))
+        try:
+            db.upsert_author("66", "作者甲")
+            db.change_work_status("980001", WSt.DONE, title="a", author_id="66",
+                                  total_pages=1)
+            src = img / "作者甲_66" / "980001_p0.jpg"
+            src.parent.mkdir(parents=True)
+            src.write_bytes(b"x" * 16)
+            db.mark_page_status("980001", 0, PSt.DONE,
+                                local_path="作者甲_66/980001_p0.jpg")
+            # 目标分类夹已存在但是空的；另有一个真正的空夹
+            (img / "X图" / "作者甲_66").mkdir(parents=True)
+            (img / "空夹_999").mkdir()
+
+            plans = ws._tidy_build_plans(db, img)
+            moves = {p["from"]: p["to"] for p in plans if p["type"] == "move"}
+            assert moves.get("作者甲_66") == "X图/作者甲_66", moves
+            rmdirs = {p["from"] for p in plans if p["type"] == "rmdir"}
+            assert "X图/作者甲_66" not in rmdirs, f"move 目标夹被列成空夹: {rmdirs}"
+            assert "X图" not in rmdirs, f"move 目标的上级被列成空夹: {rmdirs}"
+            assert "空夹_999" in rmdirs, rmdirs
+
+            ws._tidy_apply_plans(db, img)
+            assert (img / "X图" / "作者甲_66" / "980001_p0.jpg").is_file(), \
+                "move 后文件被空夹清理误删"
+            assert not (img / "空夹_999").exists(), "真正的空夹应被清理"
+
+            # ② 执行阶段二次防线：计划生成后、执行前被放入文件 → 不得删
+            keep = img / "执行前有文件_88"
+            keep.mkdir()
+            (keep / "x.jpg").write_bytes(b"x")
+            old = ws._tidy_build_plans
+            ws._tidy_build_plans = lambda _db, _root: [{
+                "id": 1, "type": "rmdir", "from": "执行前有文件_88", "to": "(删除)",
+                "reason": "", "files": [], "auto": True}]
+            try:
+                ws._tidy_apply_plans(db, img)
+            finally:
+                ws._tidy_build_plans = old
+            assert (keep / "x.jpg").is_file(), "执行阶段二次检查失效：非空夹被删"
+        finally:
+            db.close()
 
 
 def main() -> int:

@@ -2397,6 +2397,15 @@ def _tidy_build_plans(db, img_root: Path) -> list:
     # 整理自己会把图搬走 (归位/平铺) 从而**制造**空夹, 善后理应在同一次"一键"里做完,
     # 而不是让用户再跑去健康面板点一次「删除空文件夹」。实测真实库整理完留着 16 个空夹。
     # 只列**最上层**那一处 (子夹随它一起删), 免得同一片残留列出一排重复行。
+    # ⚠ 安全: 本次整理会 move 进去的目标夹**绝不能**列成空夹 —— 否则「先移入、后清空夹」
+    # 会把刚移进去的文件整个删掉 (2026-11-18 实测: 根目录 Kloan 夹移入 X图/Kloan 后，
+    # 同时生成的 X图/Kloan 空夹计划把它 rmtree 了)。
+    _move_targets = {str(p.get("to") or "") for p in plans
+                     if p["type"] == "move" and p.get("to")}
+
+    def _will_receive_files(rel: str) -> bool:
+        return any(rel == t or t.startswith(rel + "/") for t in _move_targets)
+
     _todo = [img_root]
     while _todo:
         _d = _todo.pop()
@@ -2408,6 +2417,8 @@ def _tidy_build_plans(db, img_root: Path) -> list:
             _rel = str(_s.relative_to(img_root)).replace("\\", "/")
             if _rel in frozen:
                 continue        # 作者争议冻结中 → 它的夹一个指头都不碰
+            if _will_receive_files(_rel):
+                continue        # 整理会把文件搬进这个夹 (含其上级)，不能当空夹删
             if _tidy_dir_is_disposable(_s):
                 _add("rmdir", _rel, "(删除)",
                      f"空文件夹: {_rel}（除系统杂物外没有任何文件）", [], True)
@@ -2514,6 +2525,10 @@ def _tidy_apply_plans(db, img_root: Path,
                      key=lambda x: -x["from"].count("/")):
         _d = img_root / _p["from"]
         if not _d.is_dir():
+            continue
+        # 第二道防线: 执行到这里时目录必须**仍然**是空的。
+        # move 阶段可能刚把文件搬进来 (计划生成时它还是空夹)，此时绝不能 rmtree。
+        if not _tidy_dir_is_disposable(_d):
             continue
         try:
             _sh.rmtree(str(_d))
