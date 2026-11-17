@@ -630,14 +630,17 @@ async function confirmWallCrop() {
   const iw = img.clientWidth, ih = img.clientHeight;
   const b = WC.box;
   if (!b.w || !b.h) { toast('请先选择裁剪范围', 'err'); return; }
-  const crop = { x: b.x / iw, y: b.y / ih, w: b.w / iw, h: b.h / ih };
+  // 默认裁剪框就是整张图（用户没动）= 没裁剪，不要生成裁剪副本
+  const full = Math.abs(b.x) <= 0.5 && Math.abs(b.y) <= 0.5
+    && Math.abs(b.w - iw) <= 1 && Math.abs(b.h - ih) <= 1;
+  const crop = full ? null : { x: b.x / iw, y: b.y / ih, w: b.w / iw, h: b.h / ih };
   try {
     const r = await wallApply(WC.aid, WC.page, true, crop);
     if (r.status !== 'ok') {
       toast('设置壁纸失败: ' + (r.msg || '未知原因'), 'err');
       return;
     }
-    toast('已设为桌面壁纸（已裁剪）', 'ok');
+    toast(r.cropped ? '已设为桌面壁纸（已裁剪）' : '已设为桌面壁纸', 'ok');
     closeWallCrop();
     closeWallPicker();
     // 先浅刷新让界面立刻反馈；深度溯源稍后再补，不挡「设置完成」

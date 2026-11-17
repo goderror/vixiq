@@ -6392,31 +6392,35 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 cw = float(crop.get("w")); ch = float(crop.get("h"))
             except Exception:
                 return jsonify({"status": "error", "msg": "裁剪参数无效"}), 400
-            if (not (0 <= cx < 1 and 0 <= cy < 1 and 0 < cw <= 1 and 0 < ch <= 1)
-                    or cx + cw > 1.001 or cy + ch > 1.001):
-                return jsonify({"status": "error", "msg": "裁剪范围超出图片"}), 400
-            try:
-                from PIL import Image, ImageOps
-                with Image.open(p) as im:
-                    im = ImageOps.exif_transpose(im)
-                    W, H = im.size
-                    box = (int(round(cx * W)), int(round(cy * H)),
-                           int(round((cx + cw) * W)), int(round((cy + ch) * H)))
-                    if box[2] - box[0] < 16 or box[3] - box[1] < 16:
-                        return jsonify({"status": "error", "msg": "裁剪区域太小"}), 400
-                    im2 = im.crop(box)
-                    if im2.mode not in ("RGB", "L"):
-                        im2 = im2.convert("RGB")
-                    from core.wallpaper_trace import candidates_dir
-                    out_dir = candidates_dir() or paths.user_data("wallpaper_crops")
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    out = out_dir / f"{aid}_p{page_used}_crop.jpg"
-                    im2.save(out, quality=92)
-                p = out
-                cropped = True
-            except Exception as e:
-                return jsonify({"status": "error",
-                                "msg": f"裁剪失败: {type(e).__name__}: {e}"}), 500
+            if cx <= 0.001 and cy <= 0.001 and cw >= 0.999 and ch >= 0.999:
+                # 默认裁剪框就是整张图 = 用户没裁剪，按原图处理，不生成副本
+                crop = None
+            else:
+                if (not (0 <= cx < 1 and 0 <= cy < 1 and 0 < cw <= 1 and 0 < ch <= 1)
+                        or cx + cw > 1.001 or cy + ch > 1.001):
+                    return jsonify({"status": "error", "msg": "裁剪范围超出图片"}), 400
+                try:
+                    from PIL import Image, ImageOps
+                    with Image.open(p) as im:
+                        im = ImageOps.exif_transpose(im)
+                        W, H = im.size
+                        box = (int(round(cx * W)), int(round(cy * H)),
+                               int(round((cx + cw) * W)), int(round((cy + ch) * H)))
+                        if box[2] - box[0] < 16 or box[3] - box[1] < 16:
+                            return jsonify({"status": "error", "msg": "裁剪区域太小"}), 400
+                        im2 = im.crop(box)
+                        if im2.mode not in ("RGB", "L"):
+                            im2 = im2.convert("RGB")
+                        from core.wallpaper_trace import candidates_dir
+                        out_dir = candidates_dir() or paths.user_data("wallpaper_crops")
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        out = out_dir / f"{aid}_p{page_used}_crop.jpg"
+                        im2.save(out, quality=92)
+                    p = out
+                    cropped = True
+                except Exception as e:
+                    return jsonify({"status": "error",
+                                    "msg": f"裁剪失败: {type(e).__name__}: {e}"}), 500
 
         if not apply_wallpaper(p):
             return jsonify({"status": "error", "msg": "系统没接受这次换壁纸"}), 500
@@ -6437,8 +6441,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         except Exception:
             pass
         _notify_widget()
+        # 不再在响应里现算完整 info（md5/尺寸是一次大文件读取）；前端浅刷新会异步补上
         return jsonify({"status": "ok", "file": str(p), "name": p.name,
-                        "cropped": cropped, "info": _wall_info_payload(p)})
+                        "cropped": cropped, "info": None})
 
     @app.route("/api/wallpaper/use", methods=["POST"])
     def api_wallpaper_use():
