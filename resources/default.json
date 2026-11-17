@@ -68,10 +68,11 @@
     "readonly_after_finish": true
   },
   "web": {
-    "_note": "Web 版界面 (替代 Tkinter gui/)。port 是本地服务端口; host 是监听地址: 127.0.0.1=仅本机, 0.0.0.0=允许手机/局域网访问 (建议配合 Tailscale, 用防火墙只放行 100.64.0.0/10); access_pin 是公网访问密码, 空=不启用, 走 Cloudflare Tunnel/内网穿透时务必设置。",
+    "_note": "Web 版界面 (替代 Tkinter gui/)。port 是本地服务端口; host 是监听地址: 127.0.0.1=仅本机, 0.0.0.0=允许局域网直连; access_pin 是公网访问密码, 空=不启用, 走 Cloudflare Tunnel/内网穿透时务必设置; mobile_enabled=手机访问 (Cloudflare 快速隧道), 开启后随程序启动自动开隧道, 地址每次启动都会变。",
     "port": 7790,
     "host": "127.0.0.1",
-    "access_pin": ""
+    "access_pin": "",
+    "mobile_enabled": false
   },
   "launcher": {
     "_note": "启动器形态 (2026-09-24): 托盘常驻。tray_enabled=双击 exe 后常驻右下角任务栏托盘; auto_open_browser=启动时是否自动打开浏览器界面 (默认关); wall_widget=是否显示桌面壁纸小控件 (默认关); notify_on_wall_change=壁纸切换时是否弹提示气泡 (默认关); exit_on_browser_close=浏览器页面全关后是否自动退出 (默认关 —— 开了就不是常驻托盘了)。",

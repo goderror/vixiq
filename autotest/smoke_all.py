@@ -3044,6 +3044,7 @@ def run_suite() -> SuiteResult:
     suite.add("T141", "壁纸管理：归属、分组、整理、回收恢复、失败回滚与路径保护（18项，合成图片）", t141_wallpaper_admin)
     suite.add("T142", "图库操作与统计：筛选/跨页/去重/占位页/双下载入口及选择统计（隔离数据）", t142_gallery_controls)
     suite.add("T143", "三管理页共享吸顶抽屉：结构/控件唯一性、状态与控制器集成、防回跳/手动展开与焦点保护", t143_management_drawer)
+    suite.add("T144", "📱 手机访问(Cloudflare 快速隧道): 默认关闭可兜底 + 地址解析只认 trycloudflare + 无访问密码拒绝开启 + 退出回收/孤儿清理/打包带上 cloudflared + 设置页与托盘入口接线 (离线)", t144_mobile_tunnel)
     suite.write_report()
     return suite
 
@@ -10377,7 +10378,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261117i" and _mss.group(1) == "20261117i", \
+    assert _mjs and _mss and _mjs.group(1) == "20261117j" and _mss.group(1) == "20261117j", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10472,7 +10473,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261117i', html) and _re.search(r'app\.js\?v=20261117i', html), \
+    assert _re.search(r'style\.css\?v=20261117j', html) and _re.search(r'app\.js\?v=20261117j', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10866,7 +10867,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261117i" in html and "app.js?v=20261117i" in html, \
+        assert "style.css?v=20261117j" in html and "app.js?v=20261117j" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -10933,11 +10934,13 @@ def t128_tray_pure_functions():
     items = tray.tray_menu_items(full)
     kinds = [s for _c, _l, s in items]
     assert kinds[0] == "gray" and kinds[1] == "gray", kinds
-    assert kinds.count("sep") == 2, kinds
+    # 三组分隔: 状态信息 / 打开类命令 / 手机访问 / 设置退出
+    assert kinds.count("sep") == 3, kinds
     cmds = [c for c, _l, s in items if s != "sep"]
     labels = [l for _c, l, s in items if s != "sep"]
-    # 非 sep 项里 cmd=0 的只有顶部两行灰字信息; 其余必须是各命令 id (顺序即菜单顺序)
-    assert cmds == [0, 0, tray.CMD_OPEN_GALLERY, tray.CMD_OPEN_FOLDER,
+    # 非 sep 项里 cmd=0 的是只读灰字行 (顶部两行 + 手机访问状态), 其余必须是各命令 id
+    assert cmds == [0, 0, tray.CMD_OPEN_GALLERY, tray.CMD_OPEN_FOLDER, 0,
+                    tray.CMD_TOGGLE_TUNNEL, tray.CMD_COPY_TUNNEL,
                     tray.CMD_SETTINGS, tray.CMD_QUIT], cmds
     assert labels[2:4] == ["打开图库", "打开所在文件夹"], labels
     assert labels[-2:] == ["设置…", "退出 Vixiq"], labels
@@ -10951,9 +10954,27 @@ def t128_tray_pure_functions():
     assert nofile[tray.CMD_OPEN_FOLDER] == "gray", nofile
     assert nofile[tray.CMD_OPEN_GALLERY] == "normal" and nofile[tray.CMD_QUIT] == "normal"
 
+    # ---------- ②b 手机访问 ----------
+    off = tray.tray_menu_items(full, None)
+    off_map = {l: s for _c, l, s in off if _c}
+    assert any("手机访问：已关闭" in l for _c, l, s in off if s == "gray"), off
+    assert off_map["开启手机访问"] == "normal", off_map
+    assert "复制手机访问地址" in off_map and \
+        [s for c, _l, s in off if c == tray.CMD_COPY_TUNNEL][0] == "gray", "没地址时复制必须灰掉"
+    on = tray.tray_menu_items(full, {"running": True, "url": "https://a-b-c.trycloudflare.com"})
+    assert any("https://a-b-c.trycloudflare.com" in l for _c, l, _s in on), "菜单要能直接看到地址"
+    assert [l for c, l, _s in on if c == tray.CMD_TOGGLE_TUNNEL][0] == "关闭手机访问"
+    assert [s for c, _l, s in on if c == tray.CMD_COPY_TUNNEL][0] == "normal"
+    # 启动中 / 失败两种态都要有可读文案 (不能只剩一个空白灰行)
+    assert any("正在连接" in l for _c, l, _s in tray.tray_menu_items(
+        full, {"running": True, "url": ""}))
+    assert any("网络" in l for _c, l, _s in tray.tray_menu_items(
+        full, {"running": False, "error": "网络不通"}))
+
     # ---------- ③ 命令 id ----------
     ids = [tray.CMD_OPEN_GALLERY, tray.CMD_OPEN_FOLDER,
-           tray.CMD_SETTINGS, tray.CMD_QUIT]
+           tray.CMD_SETTINGS, tray.CMD_QUIT,
+           tray.CMD_TOGGLE_TUNNEL, tray.CMD_COPY_TUNNEL]
     assert len(set(ids)) == len(ids), "命令 id 撞了 → 菜单会点错功能"
     assert tray.menu_cmd_label(tray.CMD_QUIT) == "退出 Vixiq"
     assert tray.menu_cmd_label("1002") == "打开所在文件夹", "字符串 id 也要认"
@@ -13205,7 +13226,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261117i" in _h and "style.css?v=20261117i" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261117j" in _h and "style.css?v=20261117j" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13411,6 +13432,68 @@ def t138_subprocess_no_console_flash() -> None:
                 if "creationflags" not in block and "startupinfo" not in block:
                     bad.append(f"{rel}:{i} 裸调用 subprocess")
     assert not bad, "这些地方会闪命令窗口: " + "；".join(bad[:6])
+
+
+def t144_mobile_tunnel() -> None:
+    """📱 手机访问 (Cloudflare 快速隧道) —— 2026-11-17 用户要求「程序里一个开关」。
+
+    钉住五件事:
+      ① ``web.mobile_enabled`` 默认关, 老 user.json 缺这节也不能炸;
+      ② 地址解析只认 ``*.trycloudflare.com``, 半截日志/别的域名必须返回空串;
+      ③ **没有访问密码必须拒绝开启** —— 不能把图库裸奔到公网;
+      ④ 退出路径回收隧道、启动清理上次残留、打包带上 cloudflared.exe;
+      ⑤ 设置页与托盘都有入口 (用户找不到入口 = 功能不存在)。
+    """
+    import json as _json
+    from utils import tunnel as tn
+    from utils.config import _canonicalize
+
+    # ① 配置默认值
+    assert _canonicalize({"web": {}})["web"]["mobile_enabled"] is False
+    raw = _json.loads((PROJECT_ROOT / "resources" / "default.json").read_text(encoding="utf-8"))
+    assert raw["web"]["mobile_enabled"] is False
+    assert "mobile_enabled" in raw["web"]["_note"], "键要写进 _note, 否则用户不知道它是什么"
+
+    # ② 地址解析
+    sample = ("INF +-----------------------------------------------+\n"
+              "INF | https://ray-management-perfume-come.trycloudflare.com |\n")
+    assert tn.parse_public_url(sample) == \
+        "https://ray-management-perfume-come.trycloudflare.com"
+    assert tn.parse_public_url("") == "" and tn.parse_public_url("no url") == ""
+    assert tn.parse_public_url("https://example.com/x") == "", "别的域名不能当隧道地址"
+    # 失败原因要带给用户 (Cloudflare 限流时 cloudflared 会直接退出)
+    assert "failed to request" in tn.last_error_line(
+        'INF Requesting new quick Tunnel...\nfailed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel"')
+    assert tn.last_error_line("") == ""
+
+    # ③ 无密码拒绝开启 (安全红线)
+    import main as _main
+    _saved = _main.load_config
+    try:
+        _main.load_config = lambda: {"web": {"access_pin": ""}}
+        r = _main._start_tunnel(7811)
+        assert r.get("ok") is False and "密码" in str(r.get("error") or ""), r
+    finally:
+        _main.load_config = _saved
+    assert _main._tunnel_status().get("running") is False
+
+    # ④ 生命周期 / 打包接线
+    src = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")
+    assert "_stop_tunnel()" in src, "退出必须回收隧道子进程"
+    assert "kill_orphan" in src, "启动要清理上次异常退出留下的 cloudflared"
+    assert "set_tunnel_ctl" in (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    assert "tools/cloudflared.exe" in (PROJECT_ROOT / "build.spec").read_text(encoding="utf-8")
+    assert tn.find_cloudflared() is not None, "源码 tools/ 缺少 cloudflared.exe"
+
+    # ⑤ 入口: 设置页卡片 + 托盘菜单 (T128 已覆盖菜单纯函数)
+    html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'id="tunnel-toggle"' in html and "手机访问" in html
+    assert 'id="tunnel-pin"' in html, "没有设置访问密码的输入框, 普通用户开不了"
+    assert all(k in js for k in ("loadTunnel", "toggleTunnel", "saveTunnelPin",
+                                 "copyTunnelUrl"))
+    tail = js.split("else if (name === 'settings')")[1][:600]
+    assert "loadTunnel()" in tail, "切到设置页没加载手机访问状态"
 
 
 def main() -> int:

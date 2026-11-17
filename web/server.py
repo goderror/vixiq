@@ -112,6 +112,20 @@ def set_launcher_apply(fn) -> None:
     global _launcher_apply
     _launcher_apply = fn
 
+
+# 手机访问 (Cloudflare 快速隧道) 的读写钩子: main.py 用 set_tunnel_ctl() 交进来。
+# web 层不直接持有 Tunnel —— 进程生命周期归 main.py 管。没接钩子 (冒烟) 时接口
+# 如实回 connected=False, 前端据此提示「当前版本未接入」。
+_tunnel_status = None
+_tunnel_set = None
+
+
+def set_tunnel_ctl(status_fn, set_fn) -> None:
+    """注册手机访问: ``status_fn()`` 读快照, ``set_fn(bool)`` 起停并落盘偏好。"""
+    global _tunnel_status, _tunnel_set
+    _tunnel_status = status_fn
+    _tunnel_set = set_fn
+
 # ---------------------------------------------------------------------------
 # 🔔 数据域「脏」登记 + 事件驱动刷新 (一套覆盖全库的机制)
 #   问题: 以前每个写接口各自"记得"通知前端刷新, 漏一个就出现"改了但界面没变",
@@ -9665,6 +9679,68 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 applied = {"error": str(e)}
         mark_dirty("settings")
         return jsonify({"ok": True, **upd, "applied": applied})
+
+    # ---------------- 📱 手机访问 (Cloudflare 快速隧道) ----------------
+    @app.route("/api/tunnel")
+    def api_tunnel_get():
+        """手机访问状态: 是否接入了隧道组件、是否开着、当前公网地址。
+
+        地址是**临时域名**, 每次开启都会变; 状态由 main.py 提供 (见 set_tunnel_ctl)。
+        设置页据此画开关与地址, 手机端自己不调用这个接口 (地址要在电脑上看)。"""
+        from utils.config import load_config
+        web = load_config().get("web") or {}
+        st = {}
+        if _tunnel_status is not None:
+            try:
+                st = dict(_tunnel_status() or {})
+            except Exception as e:
+                st = {"error": str(e)}
+        return jsonify({
+            "ok": True,
+            "connected": _tunnel_status is not None,
+            "enabled": bool(web.get("mobile_enabled")),
+            "pin_set": bool(str(web.get("access_pin") or "").strip()),
+            "running": bool(st.get("running")),
+            "starting": bool(st.get("starting")),
+            "url": str(st.get("url") or ""),
+            "error": str(st.get("error") or ""),
+        })
+
+    @app.route("/api/tunnel", methods=["POST"])
+    def api_tunnel_set():
+        """设置手机访问: body ``{"on": bool}`` 和/或 ``{"pin": "123456"}``。
+
+        - ``pin``: 4-12 位数字, 写回 config/user.json 并**就地更新内存里的 _config**
+          —— 访问守卫 ``_guard_access`` 读的是 _config, 不更新的话新密码要等重启才生效
+          (期间等于没设密码, 不能接受)。
+        - ``on``: 开/关隧道。无密码时拒绝开启, ``_start_tunnel`` 里还会再兜一次。"""
+        body = request.get_json(silent=True) or {}
+        if "on" not in body and "pin" not in body:
+            return jsonify({"ok": False, "error": "缺少 on 或 pin 参数"}), 400
+        from utils.config import save_user_config
+        if "pin" in body:
+            pin = str(body.get("pin") or "").strip()
+            if not re.fullmatch(r"\d{4,12}", pin):
+                return jsonify({"ok": False, "error": "访问密码需要 4-12 位数字"}), 400
+            try:
+                save_user_config({"web": {"access_pin": pin}})
+            except Exception as e:
+                return jsonify({"ok": False, "error": f"保存密码失败: {e}"}), 500
+            _config.setdefault("web", {})["access_pin"] = pin
+        if "on" not in body:
+            mark_dirty("settings")
+            return jsonify({"ok": True, "pin_set": True})
+        if _tunnel_set is None:
+            return jsonify({"ok": False, "error": "当前版本未接入手机访问组件"}), 501
+        want = bool(body.get("on"))
+        try:
+            r = dict(_tunnel_set(want) or {})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        mark_dirty("settings")
+        r.setdefault("ok", True)
+        r["enabled"] = want
+        return jsonify(r), (200 if r.get("ok") else 400)
 
     # ---------------- 📁 路径设置 (所有路径都要有设置入口) ----------------
     @app.route("/api/paths")

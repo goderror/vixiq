@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117i`，上一提交 `8007a1f`，本轮三项修复尚未提交）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117j`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 135 用例，必须全过，2026-11-16 已 135/135 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 136 用例，必须全过，2026-11-17 已 136/136 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，135 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，136 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 135 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 136 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117i`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117j`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -256,7 +256,22 @@
      会被藏起来；命令行改为字符串 `explorer /select,"<路径>"`（逗号必须在引号外，列表参数在含空格路径下会失效）。
      本轮改了 Python 后端，已重新打包并替换 `dist/vixiq` 与 `D:\Program Files\Vixiq` 的程序文件（config 未动）。
 
-### 4.7 壁纸相关接口速查
+### 4.7 手机访问（Cloudflare 快速隧道，2026-11-17，版本 `20261117j`）
+
+- 设置页「📱 手机访问」卡片：访问密码（4-12 位数字，写 `web.access_pin`，并**就地更新**
+  `web/server.py` 里的 `_config`，否则新密码要等重启才生效）、开关、当前地址、复制地址。
+  开关状态存 `web.mobile_enabled`：开启后下次启动自动开隧道。
+- 托盘右键新增一组：状态灰字行 / 开启-关闭手机访问 / 复制手机访问地址。
+  菜单仍是纯函数 `tray_menu_items(info, tunnel)` 生成，T128 覆盖各状态。
+- `utils/tunnel.py` 管 cloudflared quick tunnel：工作目录固定 `data/logs`（绝不继承安装目录）、
+  退出 terminate→kill、启动按 pid 文件清理上次残留（校验进程名，不误伤别的隧道）、
+  stderr 单独落 `cloudflared.err`，把 Cloudflare 的拒绝原因原样带回界面。
+- 安全：`access_pin` 为空时拒绝开启（`main._start_tunnel`），`/api/tunnel` 是**本机设置接口**。
+- 打包：`build.spec` 在 `tools/cloudflared.exe` 存在时随包进 `_internal/resources/`；该二进制不进版本库。
+- 已知限制：quick tunnel 地址每次启动都变，且 Cloudflare 对同一 IP 的创建有频率限制，
+  短时间内反复开关会返回 `failed to request quick Tunnel`（界面已原样显示）。
+
+### 4.8 壁纸相关接口速查
 
 | 接口 | 说明 |
 |---|---|

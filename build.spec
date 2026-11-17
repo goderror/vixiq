@@ -40,6 +40,8 @@ import os as _os
 for _src, _dst in [
     ('resources/msedgedriver.exe', 'resources'),
     ('resources/icon.ico', 'resources'),
+    # 手机访问用的 cloudflared（55MB，不进版本库，只在本机打包时带上）
+    ('tools/cloudflared.exe', 'resources'),
 ]:
     if _os.path.exists(_src):
         extra_resources.append((_src, _dst))

@@ -39,12 +39,16 @@ CMD_OPEN_GALLERY = 1001
 CMD_OPEN_FOLDER = 1002
 CMD_SETTINGS = 1004
 CMD_QUIT = 1005
+CMD_TOGGLE_TUNNEL = 1006
+CMD_COPY_TUNNEL = 1007
 
 _CMD_LABELS = {
     CMD_OPEN_GALLERY: "打开图库",
     CMD_OPEN_FOLDER: "打开所在文件夹",
     CMD_SETTINGS: "设置…",
     CMD_QUIT: "退出 Vixiq",
+    CMD_TOGGLE_TUNNEL: "手机访问开关",
+    CMD_COPY_TUNNEL: "复制手机访问地址",
 }
 
 # ── Win32 常量 ──
@@ -109,13 +113,15 @@ def tray_tooltip(info) -> str:
     return _clip(_oneline(" · ".join(parts)))
 
 
-def tray_menu_items(info) -> "list[tuple]":
+def tray_menu_items(info, tunnel=None) -> "list[tuple]":
     """右键菜单的**纯数据**描述, 由 ctypes 层逐条 AppendMenuW。
 
     每项 = ``(cmd_id, label, state)``:
       - ``state == 'sep'``    分隔线 (cmd_id/label 忽略)
       - ``state == 'gray'``   灰字不可点 (顶部只读信息行, 或缺文件时的禁用命令)
       - ``state == 'normal'`` 可点命令 (cmd_id 取 CMD_*)
+
+    ``tunnel`` 是 ``utils.tunnel.Tunnel.status()`` 的快照 (None = 没启用)。
     """
     art = (info or {}).get("artwork") or {}
     f = (info or {}).get("file") or {}
@@ -127,12 +133,24 @@ def tray_menu_items(info) -> "list[tuple]":
     else:
         line1 = "未识别当前壁纸"
         line2 = str(f.get("name") or "（没开幻灯片，或壁纸不在图库内）")
+    t = tunnel or {}
+    t_url = str(t.get("url") or "")
+    if t.get("running"):
+        t_line = f"手机访问：{t_url}" if t_url else "手机访问：正在连接…"
+        t_toggle = "关闭手机访问"
+    else:
+        t_line = f"手机访问：{t.get('error') or '已关闭'}"
+        t_toggle = "开启手机访问"
     return [
         (0, line1, "gray"),
         (0, line2, "gray"),
         (0, "", "sep"),
         (CMD_OPEN_GALLERY, _CMD_LABELS[CMD_OPEN_GALLERY], "normal"),
         (CMD_OPEN_FOLDER, _CMD_LABELS[CMD_OPEN_FOLDER], "normal" if has_file else "gray"),
+        (0, "", "sep"),
+        (0, _clip(_oneline(t_line), 90), "gray"),
+        (CMD_TOGGLE_TUNNEL, t_toggle, "normal"),
+        (CMD_COPY_TUNNEL, _CMD_LABELS[CMD_COPY_TUNNEL], "normal" if t_url else "gray"),
         (0, "", "sep"),
         (CMD_SETTINGS, _CMD_LABELS[CMD_SETTINGS], "normal"),
         (CMD_QUIT, _CMD_LABELS[CMD_QUIT], "normal"),
@@ -145,6 +163,53 @@ def menu_cmd_label(cmd_id) -> str:
         return _CMD_LABELS.get(int(cmd_id), f"#{cmd_id}")
     except (TypeError, ValueError):
         return f"#{cmd_id}"
+
+
+def copy_text(text: str) -> bool:
+    """把一段文本放进 Windows 剪贴板 (托盘「复制手机访问地址」用)。
+
+    不引 tkinter (禁区), 直接走 Win32 剪贴板。句柄必须是 64 位, 否则 x64 上
+    GlobalAlloc 的返回值会被截断 → SetClipboardData 拿到野指针。
+    """
+    if os.name != "nt" or not text:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+        u32.OpenClipboard.restype = wintypes.BOOL
+        u32.OpenClipboard.argtypes = [wintypes.HWND]
+        u32.SetClipboardData.restype = ctypes.c_void_p
+        u32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+        k32.GlobalAlloc.restype = ctypes.c_void_p
+        k32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        k32.GlobalLock.restype = ctypes.c_void_p
+        k32.GlobalLock.argtypes = [ctypes.c_void_p]
+        k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        k32.GlobalFree.argtypes = [ctypes.c_void_p]
+        if not u32.OpenClipboard(None):
+            return False
+        try:
+            u32.EmptyClipboard()
+            data = ctypes.create_unicode_buffer(str(text))
+            size = ctypes.sizeof(data)
+            h = k32.GlobalAlloc(0x0002, size)      # GMEM_MOVEABLE
+            if not h:
+                return False
+            p = k32.GlobalLock(h)
+            if not p:
+                k32.GlobalFree(h)
+                return False
+            ctypes.memmove(p, ctypes.addressof(data), size)
+            k32.GlobalUnlock(h)
+            if not u32.SetClipboardData(13, h):     # CF_UNICODETEXT
+                k32.GlobalFree(h)
+                return False
+            return True                             # 所有权已交给系统, 不要再释放
+        finally:
+            u32.CloseClipboard()
+    except Exception:
+        return False
 
 
 def wall_key(path=None) -> str:
@@ -464,11 +529,15 @@ class Tray:
     行为不可靠 (菜单会一闪就没)。
     """
 
-    def __init__(self, *, port: int, log=None, on_quit=None):
+    def __init__(self, *, port: int, log=None, on_quit=None,
+                 tunnel_status=None, on_tunnel_toggle=None):
         self.port = int(port)
         self.base_url = f"http://127.0.0.1:{self.port}/"
         self.log = log
         self.on_quit = on_quit
+        # 手机访问: 状态由 main.py 提供 (托盘碰不到隧道对象), 点击开关也回调 main.py
+        self.tunnel_status = tunnel_status
+        self.on_tunnel_toggle = on_tunnel_toggle
         self.info = None
         self.hwnd = 0
         self.hicon = 0
@@ -677,7 +746,7 @@ class Tray:
         if not hmenu:
             return
         try:
-            for cmd, label, state in tray_menu_items(self.info):
+            for cmd, label, state in tray_menu_items(self.info, self._tunnel_now()):
                 if state == "sep":
                     user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
                 else:
@@ -705,10 +774,45 @@ class Tray:
             self._open_url(self.base_url + "#library")
         elif cmd == CMD_OPEN_FOLDER:
             self._open_folder()
+        elif cmd == CMD_TOGGLE_TUNNEL:
+            self._toggle_tunnel()
+        elif cmd == CMD_COPY_TUNNEL:
+            self._copy_tunnel_url()
         elif cmd == CMD_SETTINGS:
             self._open_url(self.base_url + "#settings")
         elif cmd == CMD_QUIT:
             self._request_quit()
+
+    def _tunnel_now(self) -> dict:
+        try:
+            return dict((self.tunnel_status or (lambda: {}))())
+        except Exception:
+            return {}
+
+    def _toggle_tunnel(self) -> None:
+        """手机访问开关: 具体起停由 main.py 做 (这里只回调 + 提示结果)。"""
+        if self.on_tunnel_toggle is None:
+            self._bubble("手机访问", "当前版本未接入隧道组件")
+            return
+        try:
+            self.on_tunnel_toggle()
+        except Exception as e:
+            self._bubble("手机访问", f"开关失败: {e}")
+            return
+        st = self._tunnel_now()
+        if st.get("running") and st.get("url"):
+            self._bubble("手机访问已开启", f"{st['url']}（右键菜单可复制地址）")
+        elif st.get("running"):
+            self._bubble("手机访问已开启", "正在获取公网地址，稍后右键菜单查看")
+        else:
+            self._bubble("手机访问已关闭", str(st.get("error") or "本机之外已无法访问"))
+
+    def _copy_tunnel_url(self) -> None:
+        url = str(self._tunnel_now().get("url") or "")
+        if not url:
+            self._bubble("手机访问", "还没有地址：先在菜单里开启手机访问")
+            return
+        self._bubble("已复制手机访问地址", url if copy_text(url) else "复制失败，请手动选择")
 
     def _open_url(self, url: str) -> None:
         try:

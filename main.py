@@ -54,6 +54,8 @@ _instance_mutex = None
 _tray = None
 # 桌面壁纸小控件 (utils/widget_window.py 的 WallWidget; launcher.wall_widget 开着时才有)
 _wall_widget = None
+# 手机访问隧道 (utils/tunnel.py 的 Tunnel; web.mobile_enabled 开着或用户手动开启时才有)
+_tunnel = None
 # 服务实际绑定的端口 (端口顺延后才是最终值): 「启动与托盘」开关热应用时按它起组件
 _active_port = DEFAULT_PORT
 # 心跳守护的**代次**: 每关/每开一次都 +1, 在跑的守护线程发现自己的代次过期就自己退出。
@@ -235,6 +237,85 @@ def _wall_widget_stop():
         pass
 
 
+# ── 手机访问 (Cloudflare 快速隧道) ────────────────────────────────────────────
+# 对外暴露必须带访问密码; 开启后随程序启动 (web.mobile_enabled=true), 退出时回收子进程。
+_TUNNEL_IDLE = {"running": False, "starting": False, "url": "", "error": "", "pid": 0}
+
+
+def _tunnel_status() -> dict:
+    """给托盘/设置页/接口读的隧道快照 (永不抛异常)。"""
+    t = _tunnel
+    if t is None:
+        return dict(_TUNNEL_IDLE)
+    try:
+        return t.status()
+    except Exception as e:
+        d = dict(_TUNNEL_IDLE)
+        d["error"] = str(e)
+        return d
+
+
+def _start_tunnel(port: "int | None" = None) -> dict:
+    """开手机访问。``access_pin`` 为空直接拒绝 —— 不能把无密码的图库挂到公网。"""
+    global _tunnel
+    port = int(port or _active_port)
+    pin = str((load_config().get("web") or {}).get("access_pin") or "").strip()
+    if not pin:
+        return {"ok": False, "error": "先在设置里填写公网访问密码，否则不允许对外暴露"}
+    try:
+        if _tunnel is None:
+            from utils.tunnel import Tunnel
+            _tunnel = Tunnel(port, log=_app_log)
+        _tunnel.start()
+    except Exception as e:
+        _app_log(f"手机访问启动失败: {e}")
+        return {"ok": False, "error": str(e), **_tunnel_status()}
+    return {"ok": True, **_tunnel_status()}
+
+
+def _stop_tunnel() -> dict:
+    global _tunnel
+    t, _tunnel = _tunnel, None
+    if t is not None:
+        try:
+            t.stop()
+        except Exception as e:
+            _app_log(f"手机访问关闭失败: {e}")
+    return {"ok": True, **_tunnel_status()}
+
+
+def _set_tunnel(on: bool, port: "int | None" = None) -> dict:
+    """设置页/托盘统一开关: 先起停, 成功后才把偏好落盘 (下次启动自动开)。"""
+    if on:
+        r = _start_tunnel(port)
+        if not r.get("ok"):
+            return r
+    else:
+        r = _stop_tunnel()
+    try:
+        from utils.config import save_user_config
+        save_user_config({"web": {"mobile_enabled": bool(on)}})
+    except Exception as e:
+        _app_log(f"手机访问偏好保存失败: {e}")
+    return r
+
+
+def _tunnel_from_tray() -> None:
+    """托盘菜单「开启/关闭手机访问」。"""
+    r = _set_tunnel(not bool(_tunnel_status().get("running")))
+    if not r.get("ok"):
+        _app_log(f"托盘开启手机访问失败: {r.get('error')}")
+
+
+def _register_tunnel_bridge() -> None:
+    """把手机访问的读写交给 web/server.py (web 层碰不到隧道对象)。"""
+    try:
+        from web.server import set_tunnel_ctl
+        set_tunnel_ctl(_tunnel_status, _set_tunnel)
+    except Exception as e:
+        _app_log(f"手机访问接口钩子未接上: {e}")
+
+
 def _notify_pages_quit() -> None:
     """退出前告诉所有已打开的标签页「应用要退了」: 前端收到 app_quit 会弹遮罩并尝试
     ``window.close``, 一次退出把所有窗口一起收掉。
@@ -267,6 +348,7 @@ def _cleanup():
     _notify_pages_quit()  # 先让页面知道, 再拆台 —— 拆完就没 SSE 连接可发了
     _tray_stop()
     _wall_widget_stop()
+    _stop_tunnel()   # 手机访问隧道: 子进程必须跟着主进程一起走, 不留孤儿
     # 触发 server.py 的 _cancel_event 让 _kick_metadata_fill 等后台循环退出
     try:
         from web.server import _cancel_event
@@ -422,7 +504,8 @@ def _start_tray(port: int) -> None:
     global _tray
     try:
         from utils.tray import Tray
-        t = Tray(port=port, log=_app_log, on_quit=_quit_from_tray)
+        t = Tray(port=port, log=_app_log, on_quit=_quit_from_tray,
+                 tunnel_status=_tunnel_status, on_tunnel_toggle=_tunnel_from_tray)
         if t.start():
             _tray = t
         else:
@@ -707,6 +790,13 @@ def main():
     # (锁住 driver 与 profile 文件, 导致整个程序目录删不掉)
     if not config.get("launcher", {}).get("isolated"):
         _kill_orphan_drivers()
+        # 上次异常退出遗留的 cloudflared: 只按自己的 pid 记录清理, 不误伤别的隧道
+        try:
+            from utils.tunnel import kill_orphan as _kill_orphan_tunnel
+            if _kill_orphan_tunnel():
+                print("🧹 已清理上次残留的手机访问隧道进程")
+        except Exception:
+            pass
     try:
         from utils.browser import clean_stale_browser_profiles
         n = clean_stale_browser_profiles()
@@ -723,6 +813,8 @@ def main():
         raise
     # 设置页「启动与托盘」开关的热应用钩子: 存盘后立刻 reconcile, 不用重启
     _register_launcher_bridge()
+    # 设置页「手机访问」开关: web 层通过它读状态/开关隧道
+    _register_tunnel_bridge()
 
     # 端口决策:
     #  - 端口上有活实例(能响应 HTTP) → 不重复启动, 直接打开它
@@ -780,6 +872,10 @@ def main():
                 print("🌱 首次使用：已自动打开浏览器引导（完成后不再自动弹出）")
         if ln.get("wall_widget"):
             _start_wall_widget(port)
+        if (config.get("web") or {}).get("mobile_enabled"):
+            r = _start_tunnel(port)
+            if not r.get("ok"):
+                _app_log(f"手机访问未能自动开启: {r.get('error')}")
         if _tray is not None:
             print("🖥 已在右下角托盘运行（悬停看当前壁纸 · 右键打开图库/设置/退出）")
         else:

@@ -23,7 +23,7 @@ window.switchTab = function (name) {
   else if (name === 'stats') loadStatsPage();
   else if (name === 'reverse') loadReverseStatus();
   else if (name === 'tasks') refreshCart();
-  else if (name === 'settings') { loadThumbsStats(); loadOperations(); paintSelfCheckCard(); loadActivityStats(); loadPixivActions(); loadLauncher(); loadWallDir(); loadWallLib(); loadAiText(); loadPaths(); }
+  else if (name === 'settings') { loadThumbsStats(); loadOperations(); paintSelfCheckCard(); loadActivityStats(); loadPixivActions(); loadLauncher(); loadWallDir(); loadWallLib(); loadAiText(); loadPaths(); loadTunnel(); }
 };
 
 // ============ 卡片密度: 收起只显示标题, 悬停浮层展开 ============
@@ -2587,6 +2587,100 @@ async function toggleLauncher(key) {
     else toast(name + '（已立即生效）', 'ok');
   } catch (e) { toast('设置失败: ' + (e.message || e), 'err'); }
   finally { if (btn) btn.disabled = false; }
+}
+
+// ===== 手机访问（Cloudflare 快速隧道）=====
+// 地址是临时的：开启后后端异步等 cloudflared 输出 URL，这里轮询几次把它显示出来。
+let tunnelState = {};
+let tunnelPollTimer = null;
+
+async function loadTunnel() {
+  try { tunnelState = await api('/api/tunnel'); } catch (e) { tunnelState = {}; }
+  paintTunnel();
+}
+
+function paintTunnel() {
+  const st = tunnelState || {};
+  const btn = $('#tunnel-toggle'), copy = $('#tunnel-copy');
+  const state = $('#tunnel-state'), url = $('#tunnel-url'), pin = $('#tunnel-pin');
+  const running = !!st.running;
+  if (btn) {
+    btn.textContent = running ? '⏹ 关闭手机访问' : '📱 开启手机访问';
+    btn.classList.toggle('accent', running);
+    btn.classList.toggle('ghost', !running);
+  }
+  if (copy) copy.disabled = !st.url;
+  if (state) {
+    if (st.connected === false) state.textContent = '当前版本未接入手机访问组件';
+    else if (running && st.url) state.textContent = '已开启';
+    else if (running) state.textContent = '正在获取公网地址…';
+    else if (st.error) state.textContent = '未开启：' + st.error;
+    else state.textContent = '已关闭（不影响本机使用）';
+  }
+  if (url) url.textContent = st.url || '';
+  if (pin && st.pin_set) pin.placeholder = '访问密码已设置（输入新密码可更换）';
+}
+
+function _tunnelPoll(times = 12) {
+  clearInterval(tunnelPollTimer);
+  tunnelPollTimer = setInterval(async () => {
+    if (!tunnelState.running) { clearInterval(tunnelPollTimer); return; }
+    try { tunnelState = await api('/api/tunnel'); } catch (e) { return; }
+    paintTunnel();
+    if (tunnelState.url || (!tunnelState.starting && tunnelState.error)) clearInterval(tunnelPollTimer);
+  }, 1500);
+  setTimeout(() => clearInterval(tunnelPollTimer), times * 1500);
+}
+
+async function toggleTunnel() {
+  const btn = $('#tunnel-toggle');
+  if (btn && btn.disabled) return;
+  if (btn) btn.disabled = true;
+  const next = !tunnelState.running;
+  try {
+    const r = await api('/api/tunnel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on: next }),
+    });
+    if (r && r.ok === false) throw new Error(r.error || '开关失败');
+    tunnelState = { ...tunnelState, ...r };
+    paintTunnel();
+    if (next) { toast('手机访问已开启，正在获取公网地址…', 'ok'); _tunnelPoll(); }
+    else toast('手机访问已关闭（本机访问不受影响）', 'ok');
+  } catch (e) { toast('手机访问: ' + (e.message || e), 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
+async function saveTunnelPin() {
+  const inp = $('#tunnel-pin');
+  const pin = (inp && inp.value || '').trim();
+  if (!/^\d{4,12}$/.test(pin)) { toast('访问密码需要 4-12 位数字', 'err'); return; }
+  try {
+    const r = await api('/api/tunnel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    });
+    if (r && r.ok === false) throw new Error(r.error || '保存失败');
+    if (inp) inp.value = '';
+    tunnelState.pin_set = true;
+    paintTunnel();
+    toast('访问密码已保存，手机打开地址后输入这串数字', 'ok');
+  } catch (e) { toast('保存密码失败: ' + (e.message || e), 'err'); }
+}
+
+async function copyTunnelUrl() {
+  const url = (tunnelState && tunnelState.url) || '';
+  if (!url) { toast('还没有公网地址：先开启手机访问', 'err'); return; }
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('已复制地址，粘贴到手机浏览器打开', 'ok');
+  } catch (e) {
+    const inp = document.createElement('input');
+    inp.value = url; document.body.appendChild(inp); inp.select();
+    try { document.execCommand('copy'); toast('已复制地址', 'ok'); }
+    catch (err) { toast('复制失败，请手动选择: ' + url, 'err'); }
+    finally { inp.remove(); }
+  }
 }
 
 // ===== 壁纸夹  「上一张/下一张/幻灯片」的候选目录 =====

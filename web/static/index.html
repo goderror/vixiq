@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261117i">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117i">
+<link rel="stylesheet" href="/static/style.css?v=20261117j">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117j">
 </head>
 <body>
 
@@ -572,6 +572,21 @@
             </div>
             <div class="hint" style="margin-top:8px">当前状态：<span id="launcher-state">读取中…</span>（亮起 = 已开启）</div>
           </div>
+          <div class="card mini">
+            <h3>📱 手机访问</h3>
+            <div class="hint">开启后自动建立 Cloudflare 快速隧道，手机浏览器打开下方地址即可查看和管理图库。地址是临时的，每次启动都会变；退出程序时隧道自动关闭。</div>
+            <div class="field-row" style="margin-top:10px">
+              <input id="tunnel-pin" type="password" inputmode="numeric" autocomplete="new-password"
+                     maxlength="12" spellcheck="false" placeholder="访问密码（4-12 位数字）">
+              <button id="tunnel-pin-save" class="btn ghost" onclick="saveTunnelPin()">保存密码</button>
+            </div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="tunnel-toggle" class="btn ghost" onclick="toggleTunnel()">📱 开启手机访问</button>
+              <button id="tunnel-copy" class="btn ghost" onclick="copyTunnelUrl()" disabled>📋 复制地址</button>
+            </div>
+            <div class="hint" style="margin-top:8px">当前状态：<span id="tunnel-state">读取中…</span></div>
+            <div class="hint"><span id="tunnel-url" style="word-break:break-all"></span></div>
+          </div>
         </div>
       </div>
 
@@ -808,10 +823,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261117i"></script>
-<script src="/static/wallpaper-admin.js?v=20261117i"></script>
-<script src="/static/management-drawer-state.js?v=20261117i"></script>
-<script src="/static/management-toolbar.js?v=20261117i"></script>
+<script src="/static/app.js?v=20261117j"></script>
+<script src="/static/wallpaper-admin.js?v=20261117j"></script>
+<script src="/static/management-drawer-state.js?v=20261117j"></script>
+<script src="/static/management-toolbar.js?v=20261117j"></script>
 </body>
 </html>
 
