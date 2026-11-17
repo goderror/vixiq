@@ -364,6 +364,25 @@
 - **修复**：`peekOpen/peekClose` 时给 `main` 临时加 `.management-peek-noanim`
   （`transition: none !important`），两帧后移除。实测开合过程中首卡位置与 `scrollTop` 完全不变。
 
+### 4.15 作者夹跟随分类目录（2026-11-18，B 止血）
+
+- **现象**：用户手工把作者夹分到 `X图`（普通）/ `涩图`（R18），但下载器和一键整理仍按
+  图库根目录建夹，导致根目录与分类目录同时存在作者夹。
+- **规则**（`utils/author_naming.py`，三处共用，不要各写一份）：
+  - `collect_author_dir_parents`：扫磁盘得出每位作者的作者夹父路径（`""` / `X图` / `涩图`）。
+  - `collect_section_dirs`：识别顶层分类目录（排除作者夹、`#来源#`、`.` 开头）。
+  - `pick_section_parent`：作者已有分类夹 → 跟随；多分类按 R18 选；认不出返回 `None`，不瞎搬。
+  - `pick_default_section`：新作者按 R18 落已有分类（`r18/r-18/涩图` vs `x图/普通/一般/全年龄`）；
+    分类名认不出就返回 `None`，保持旧行为（落根目录）。
+- `web/server.py` 的 `_tidy_build_plans` 用 `_section_prefix` 决定期望夹前缀；
+  `core/crawler.py` 的 `_pick_author_dir` 新增 `is_r18`，补页仍优先落回原夹（`with_work`），
+  新作品/新作者按分类落盘。
+- 验收：T146（纯函数 + 整理计划 + 下载落点，含新作者与多分类），全量 **138/138**；
+  真实库只读预览：根目录 9 个作者夹（11 张非 R18）会被整理进 `X图`。
+- 部署：`dist/vixiq` 已同步候选包（配置哈希未变）；安装版程序待停启窗口替换；
+  GitHub 已本地提交 `c39ecfa`，**未推送**。
+- A 阶段（下一步）：分类字段化、`涩图`→`R18`、`X图`→`普通`（名称可配置）、按规则重排与迁移。
+
 
 
 ---
