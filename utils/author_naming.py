@@ -9,6 +9,12 @@
 """
 
 import re
+from pathlib import Path
+
+# 分类夹名关键词 (2026-11-18): 作者夹可能被用户手工分到 X图 / 涩图(R18) 等子目录。
+# 同一作者夹出现在多个分类下时，按作品 R18 选对应分类；认不出就把选择权交回调用方。
+R18_SECTION_HINTS = ("r18", "r-18", "涩图")
+GENERAL_SECTION_HINTS = ("x图", "普通", "一般", "全年龄")
 
 # 污染括号: 下载时被追加进文件夹名/昵称的「源站账号」或「旧名_旧ID」, 不是作者真名
 # (真名自带的括号如 藤ちょこ（藤原）、弱電波(@JackDempa) 不匹配这些模式, 不会误剥)
@@ -136,3 +142,93 @@ def author_folder_name(db, aid: str, cur_name: str) -> str:
         # (潜伏 bug, 2026-09-14 首次踩到: 某作者出现第 2 个别名时才会触发, 此前一直没暴露)
         return f"{sanitize_dir(base)}（{'、'.join(sanitize_dir(s) for s in sel)}）_{aid}"
     return f"{sanitize_dir(base)}_{aid}"
+
+
+def _author_id_in_name(name: str, ids: set):
+    """目录名里是否带 authors 表里的 ID（从右往左试 `_`，兼容 local_xxx）。"""
+    idx = len(name)
+    while True:
+        idx = name.rfind("_", 0, idx)
+        if idx <= 0:
+            return None
+        cand = name[idx + 1:]
+        if cand in ids:
+            return cand
+
+
+def collect_author_dir_parents(root, author_ids) -> dict:
+    """扫描图库，返回 {author_id: {作者夹的父相对路径}}。
+
+    父路径 `""` 表示作者夹就在图库根目录；`"X图"` 表示在分类子目录下。
+    作者夹判定与 `_is_author_folder` 同一口径：目录名从右往左试 `_` 后面的
+    每一段，命中 authors 表里的 ID 即算（`local_xxx` 本身含下划线）。
+    只读目录名，不碰文件；用于「同一作者已有分类夹时，新文件跟着走」。
+    """
+    root = Path(root)
+    ids = {str(x) for x in (author_ids or []) if str(x)}
+    out: "dict[str, set]" = {}
+    if not ids:
+        return out
+    try:
+        dirs = [p for p in root.rglob("*") if p.is_dir()]
+    except OSError:
+        return out
+    for p in dirs:
+        aid = _author_id_in_name(p.name, ids)
+        if aid:
+            rel = p.relative_to(root)
+            parent = "" if str(rel) == p.name else rel.parent.as_posix()
+            out.setdefault(aid, set()).add(parent)
+    return out
+
+
+def collect_section_dirs(root, author_ids) -> set:
+    """图库顶层的「分类目录」候选：不是作者夹、不是 `#来源#` 夹、不以 `.` 开头。
+
+    用户手工把作者夹分到 `X图` / `涩图` 等子目录时，这些目录要先被认出来，
+    新作者才能按 R18 落进对应分类，而不是继续堆在根目录。
+    """
+    root = Path(root)
+    ids = {str(x) for x in (author_ids or []) if str(x)}
+    out = set()
+    try:
+        tops = [p for p in root.iterdir() if p.is_dir()]
+    except OSError:
+        return out
+    for p in tops:
+        name = p.name
+        if name.startswith(".") or (name.startswith("#") and name.endswith("#")):
+            continue
+        if ids and _author_id_in_name(name, ids):
+            continue
+        out.add(name)
+    return out
+
+
+def pick_section_parent(parents, is_r18):
+    """从作者夹的父路径集合里选一个分类前缀。
+
+    返回 `""`（根目录）、具体前缀（如 `"X图"`），或 `None`（多个分类且按
+    R18 猜不准 —— 调用方应保持现状，不擅自搬家）。
+    """
+    non_root = sorted({str(p) for p in (parents or ()) if str(p)})
+    if not non_root:
+        return ""
+    if len(non_root) == 1:
+        return non_root[0]
+    if is_r18 is None:
+        return None
+    hints = R18_SECTION_HINTS if is_r18 else GENERAL_SECTION_HINTS
+    hits = [p for p in non_root if any(h in p.lower() for h in hints)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def pick_default_section(sections, is_r18):
+    """新作者该落哪个分类：按 R18 关键词唯一命中才用，认不出返回 None。"""
+    names = sorted({str(x) for x in (sections or ()) if str(x)})
+    if not names or is_r18 is None:
+        return None
+    hints = R18_SECTION_HINTS if is_r18 else GENERAL_SECTION_HINTS
+    hits = [n for n in names if any(h in n.lower() for h in hints)]
+    return hits[0] if len(hits) == 1 else None
+

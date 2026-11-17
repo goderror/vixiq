@@ -22,7 +22,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 
 from utils import paths
-from utils.author_naming import author_folder_name, clean_author_name
+from utils.author_naming import (
+    author_folder_name, clean_author_name, collect_section_dirs,
+    pick_default_section, pick_section_parent,
+)
 from utils.config import load_config
 from utils.reporter import Reporter, PrintReporter
 from utils.browser import make_browser, login_with_cookies
@@ -210,6 +213,7 @@ class PixivDownloader:
         self._http = None
         self._http_cookie_mtime = 0.0
         self._author_dir_cache: "dict[str, str]" = {}
+        self._section_dirs = None   # 图库顶层的分类目录 (X图/涩图…), 首次落盘时懒加载
         self.download_from_list = do_list
         self.not_found = []
         # P4b · 购物车 Item 级进度: 外层可注册回调 —— PixivDownloader 内部每一次
@@ -426,7 +430,9 @@ class PixivDownloader:
         # 否则第一次下载建一个夹、一键整理又想要另一个 (实测 作者甲/作者乙 双夹)。
         # `_pick_author_dir` 仍会优先复用磁盘上已存在的夹 (含被分类进 涩图/X图 的)。
         save_dir = self._pick_author_dir(
-            aid, aname, artwork_id, author_folder_name(self.db, aid, raw_name or aname))
+            aid, aname, artwork_id, author_folder_name(self.db, aid, raw_name or aname),
+            is_r18=(getattr(meta_info, "is_r18", None)
+                    if meta_info is not None else None))
         return aid, aname, save_dir, meta_info
 
     def _db_has_title(self, artwork_id) -> bool:
@@ -514,13 +520,15 @@ class PixivDownloader:
             force_overwrite=force_overwrite)
 
     def _pick_author_dir(self, author_id: str, aname: str, artwork_id: str,
-                         folder_name: "str | None" = None) -> str:
+                         folder_name: "str | None" = None,
+                         is_r18: "bool | None" = None) -> str:
         """决定作品落盘目录: 优先复用图库里**已存在的该作者夹** (用户可能已把它手工
         分类到 涩图/X图 等子目录), 尤其选已含本作品文件的那个夹 —— 补下缺页时新页必须
         落进同一夹, 不能在图库根另建一个作者夹把作品拆两半; 找不到才用根级标准夹。
 
         folder_name: 规范夹名 (由 `author_folder_name` 算, 与一键整理的期望夹名一致)。
-        不传则退回「清洗后现用名_ID」—— 那条路与一键整理可能对不上, 只在老调用点用。"""
+        不传则退回「清洗后现用名_ID」—— 那条路与一键整理可能对不上, 只在老调用点用。
+        is_r18: 作者在多个分类下都有夹时, 按作品 R18 选对应分类 (涩图/R18 vs X图/普通)。"""
         author_id = str(author_id or "0")
         cache_key = f"{author_id}/{artwork_id}"
         if cache_key in self._author_dir_cache:
@@ -535,12 +543,43 @@ class PixivDownloader:
                         with_work.append(p)
         except OSError:
             pass
+
+        def _parent_of(p: Path) -> str:
+            rel = p.relative_to(self.save_folder)
+            return "" if str(rel) == p.name else rel.parent.as_posix()
+
+        def _default_section() -> "str | None":
+            """图库顶层已有的分类目录 (X图/涩图…), 新作者按 R18 落进去。"""
+            if getattr(self, "_section_dirs", None) is None:
+                try:
+                    ids = {str(r[0]) for r in self.db.conn.execute(
+                        "SELECT author_id FROM authors")}
+                except Exception:
+                    ids = set()
+                self._section_dirs = collect_section_dirs(self.save_folder, ids)
+            return pick_default_section(self._section_dirs, is_r18)
+
         if with_work:
             d = str(max(with_work, key=lambda x: len(list(x.glob(f"{artwork_id}_p*")))))
         elif cands:
-            d = str(cands[0])
+            # 分类夹优先: 作者已经在 X图/涩图 下建过夹, 新作品跟过去,
+            # 不再在根目录另建一个 (2026-11-18 实测同一作者两个夹并存)。
+            picked = pick_section_parent({_parent_of(p) for p in cands}, is_r18)
+            if picked:
+                pool = [p for p in cands if _parent_of(p) == picked]
+                d = str(sorted(pool, key=lambda x: str(x))[0])
+            else:
+                sec = _default_section()
+                if sec:
+                    d = os.path.join(self.save_folder, sec,
+                                     folder_name or f"{aname}_{author_id}")
+                else:
+                    d = str(sorted(cands, key=lambda x: str(x))[0])
         else:
-            d = os.path.join(self.save_folder, folder_name or f"{aname}_{author_id}")
+            # 新作者: 图库已有分类时按 R18 落分类, 没有分类才落根目录 (保持旧行为)
+            sec = _default_section()
+            d = os.path.join(self.save_folder, sec or "",
+                             folder_name or f"{aname}_{author_id}")
         self._author_dir_cache[cache_key] = d
         return d
 
@@ -582,7 +621,8 @@ class PixivDownloader:
         # 规范夹名 (与一键整理同一套) —— 见 `_resolve_author` 同处注释
         save_dir = self._pick_author_dir(
             aid, aname, artwork_id,
-            author_folder_name(self.db, aid, raw_name or aname))
+            author_folder_name(self.db, aid, raw_name or aname),
+            is_r18=getattr(info, "is_r18", None))
         os.makedirs(save_dir, exist_ok=True)
         self.reporter.log(f"图片将保存至:{save_dir}（HTTP 直连，共 {len(pages)} 页）")
         # 权威元数据当场落库 (标题/标签/作者/R18/封面/页数; 顺带纠正作者旧名/乱码名)
@@ -686,7 +726,8 @@ class PixivDownloader:
         # 规范夹名 (与一键整理同一套) —— 见 `_resolve_author` 同处注释
         save_dir = self._pick_author_dir(
             aid, aname, artwork_id,
-            author_folder_name(self.db, aid, raw_name or aname))
+            author_folder_name(self.db, aid, raw_name or aname),
+            is_r18=getattr(info, "is_r18", None))
         os.makedirs(save_dir, exist_ok=True)
         self.reporter.log(f"🎞 动图作品, 图片将保存至:{save_dir}（共 {len(frames)} 帧）")
         # 权威元数据当场落库 (illust_type=2 也一并写入 → 图库「类型: 动图」筛得到)

@@ -3046,6 +3046,7 @@ def run_suite() -> SuiteResult:
     suite.add("T143", "三管理页共享吸顶抽屉：结构/控件唯一性、状态与控制器集成、防回跳/手动展开与焦点保护", t143_management_drawer)
     suite.add("T144", "📱 手机访问(Cloudflare 快速隧道): 默认关闭可兜底 + 地址解析只认 trycloudflare + 无访问密码拒绝开启 + 退出回收/孤儿清理/打包带上 cloudflared + 设置页与托盘入口接线 (离线)", t144_mobile_tunnel)
     suite.add("T145", "📱 手机版自适应(高频路径): 底部导航与「更多」+ tabs 桌面/手机切换 + 2 列卡片 + 大图左右滑翻页/双指缩放 + 桌面样式不受影响 (离线静态)", t145_mobile_layout)
+    suite.add("T146", "🗂 作者分类夹跟随: 同一作者已在 X图/涩图 下有夹时, 整理/下载不再在图库根另建一个 + 多分类按 R18 选 + 唯一分类直接跟随 (离线)", t146_author_section_follow)
     suite.write_report()
     return suite
 
@@ -13551,6 +13552,124 @@ def t145_mobile_layout() -> None:
     # ⑤ 桌面回归: 顶部 tabs 的显示规则没被改掉
     assert ".tabs {\n  position: relative;\n  z-index: 50;" in css and \
         "display: flex; gap: 4px; padding: 8px 20px 0;" in css, "桌面顶部 tabs 被改坏了"
+
+
+def t146_author_section_follow() -> None:
+    """T146: 作者分类夹跟随（2026-11-18，用户手工分 X图/涩图 后同一作者两个夹）。
+
+    规则：作者已在某个分类子目录下有作者夹时，整理和下载都把文件送进那个分类夹，
+    不再在图库根另建一个；作者同时在多个分类有夹时按作品 R18 选（涩图/R18 vs X图/普通），
+    认不出就不动；只有一个分类时直接跟随（不因 R18 不匹配改回落根目录）。
+    """
+    import tempfile
+    import shutil
+    from types import SimpleNamespace
+    from db.store import PixivDatabase, WSt, PSt
+    import web.server as ws
+    from utils.author_naming import (
+        collect_section_dirs, pick_default_section, pick_section_parent)
+    from core.crawler import PixivDownloader
+
+    # ① 纯函数：作者的分类父路径集合 → 选哪个
+    assert pick_section_parent({"X图"}, False) == "X图"
+    assert pick_section_parent({"X图", "涩图"}, False) == "X图"
+    assert pick_section_parent({"X图", "涩图"}, True) == "涩图"
+    assert pick_section_parent({"X图", "涩图"}, None) is None, "多分类且不知道 R18 时不许瞎猜"
+    assert pick_section_parent({""}, True) == "", "只有根目录夹时保持根目录"
+    assert pick_section_parent(set(), False) == ""
+    assert pick_default_section({"X图", "涩图"}, False) == "X图"
+    assert pick_default_section({"X图", "涩图"}, True) == "涩图"
+    assert pick_default_section({"X图", "涩图"}, None) is None
+    assert pick_default_section({"随便叫"}, True) is None, "认不出的分类名不许瞎猜"
+
+    tmp = Path(tempfile.mkdtemp(prefix="t146section_"))
+    img_root = tmp / "img"
+    img_root.mkdir(parents=True, exist_ok=True)
+    db = PixivDatabase(tmp / "pixiv.db")
+    try:
+        def _work(aid, author_id, r18, rel):
+            db.change_work_status(aid, WSt.DONE, title=aid, author_id=author_id,
+                                  total_pages=1)
+            if r18 is not None:
+                db.update_artwork(aid, is_r18=1 if r18 else 0)
+            p = img_root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"x" * 16)
+            db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
+
+        # 作者 55：X图 与 涩图 下都已有夹；根目录还有同一个作者夹（要归位）
+        db.upsert_author("55", "分类画师")
+        _work("910001", "55", False, "分类画师_55/910001_p0.jpg")          # 根目录，非 R18
+        _work("910002", "55", True, "分类画师_55/910002_p0.jpg")           # 根目录，R18
+        _work("910003", "55", False, "X图/分类画师_55/910003_p0.jpg")      # 已在分类，不动
+        _work("910004", "55", True, "涩图/分类画师_55/910004_p0.jpg")      # 已在分类，不动
+
+        # ② 磁盘索引：父路径集合要能认出作者夹（local_ 带下划线的 ID 也要认）
+        from utils.author_naming import collect_author_dir_parents
+        parents = collect_author_dir_parents(img_root, {"55"})
+        assert parents.get("55") == {"", "X图", "涩图"}, parents
+        # 顶层分类识别: 作者夹与 #来源# 夹不算分类
+        secs = collect_section_dirs(img_root, {"55", "56"})
+        assert secs == {"X图", "涩图"}, secs
+
+        # ③ 一键整理：根目录同名夹的作品按 R18 分到对应分类，已归位的零计划
+        plans = ws._tidy_build_plans(db, img_root)
+        targets = {}
+        for p in plans:
+            for f in p["files"]:
+                if f.endswith("910001_p0.jpg"):
+                    targets["910001"] = p["to"]
+                if f.endswith("910002_p0.jpg"):
+                    targets["910002"] = p["to"]
+        assert targets.get("910001") == "X图/分类画师_55", targets
+        assert targets.get("910002") == "涩图/分类画师_55", targets
+        assert not any(f.endswith("910003_p0.jpg") or f.endswith("910004_p0.jpg")
+                       for p in plans for f in p["files"]), "已在分类夹的作品不应再产生计划"
+
+        # ④ 下载器落点：同一个作者，新作品按 R18 进对应分类夹，不在根目录新建
+        fake = SimpleNamespace(save_folder=img_root, _author_dir_cache={},
+                               _section_dirs={"X图", "涩图"})
+        d_x = PixivDownloader._pick_author_dir(
+            fake, "55", "分类画师", "910005", "分类画师_55", is_r18=False)
+        d_r = PixivDownloader._pick_author_dir(
+            fake, "55", "分类画师", "910006", "分类画师_55", is_r18=True)
+        assert Path(d_x).as_posix().endswith("X图/分类画师_55"), d_x
+        assert Path(d_r).as_posix().endswith("涩图/分类画师_55"), d_r
+
+        # ⑤ 只有一个分类夹时直接跟随（即使作品 R18 与分类名对不上，也不回根目录）
+        db.upsert_author("56", "单人画师")
+        _work("910007", "56", True, "X图/单人画师_56/910007_p0.jpg")
+        fake2 = SimpleNamespace(save_folder=img_root, _author_dir_cache={},
+                                _section_dirs={"X图", "涩图"})
+        d = PixivDownloader._pick_author_dir(
+            fake2, "56", "单人画师", "910008", "单人画师_56", is_r18=True)
+        assert Path(d).as_posix().endswith("X图/单人画师_56"), d
+
+        # ⑥ 新作者（图库里还没有夹）：整理和下载都按 R18 落已有分类，不再堆根目录
+        db.upsert_author("57", "新画师")
+        _work("910009", "57", False, "新画师_57/910009_p0.jpg")
+        _work("910010", "57", True, "新画师_57/910010_p0.jpg")
+        plans = ws._tidy_build_plans(db, img_root)
+        new_targets = {}
+        for p in plans:
+            for f in p["files"]:
+                if f.endswith("910009_p0.jpg"):
+                    new_targets["910009"] = p["to"]
+                if f.endswith("910010_p0.jpg"):
+                    new_targets["910010"] = p["to"]
+        assert new_targets.get("910009") == "X图/新画师_57", new_targets
+        assert new_targets.get("910010") == "涩图/新画师_57", new_targets
+        fake3 = SimpleNamespace(save_folder=img_root, _author_dir_cache={},
+                                _section_dirs={"X图", "涩图"})
+        d_x = PixivDownloader._pick_author_dir(
+            fake3, "58", "另一个新画师", "910011", "另一个新画师_58", is_r18=False)
+        d_r = PixivDownloader._pick_author_dir(
+            fake3, "58", "另一个新画师", "910012", "另一个新画师_58", is_r18=True)
+        assert Path(d_x).as_posix().endswith("X图/另一个新画师_58"), d_x
+        assert Path(d_r).as_posix().endswith("涩图/另一个新画师_58"), d_r
+    finally:
+        db.close()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> int:

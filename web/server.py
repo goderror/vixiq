@@ -79,8 +79,12 @@ from utils.net import urlopen
 from utils.author_naming import (
     POLLUTE_PAREN as _POLLUTE_PAREN,
     author_folder_name as _author_folder_name,
+    collect_author_dir_parents as _collect_author_dir_parents,
+    collect_section_dirs as _collect_section_dirs,
     folder_base as _folder_base,
     is_unreadable_name as _is_unreadable_name,
+    pick_default_section as _pick_default_section,
+    pick_section_parent as _pick_section_parent,
     sanitize_dir as _sanitize_dir,
     search_promo as _search_promo,
     strip_promo as _strip_promo,
@@ -2072,6 +2076,23 @@ def _tidy_build_plans(db, img_root: Path) -> list:
     _seq = [0]
     frozen = set()   # 作者归属有争议的文件夹: 冻结, 只出「待确认」, 等用户定完再动
 
+    # 作者夹分类索引 (2026-11-18): 用户会把作者夹手工分到 X图 / 涩图 等子目录。
+    # 同一作者已有分类夹时, 根目录里的同名作者夹必须跟着搬过去, 否则同一个人
+    # 会在根目录和分类下各留一个夹 (实测就是这么分裂的)。
+    _author_ids = {str(r[0]) for r in db.conn.execute("SELECT author_id FROM authors")}
+    _author_parents = _collect_author_dir_parents(img_root, _author_ids)
+    _section_dirs = _collect_section_dirs(img_root, _author_ids)
+
+    def _section_prefix(meta, fallback: str = "") -> str:
+        """作者已有分类夹 → 用它的父前缀; 新作者 → 按 R18 落已有分类; 再不行用 fallback。"""
+        aid = str((meta or {}).get("author_id") or "")
+        r18 = (meta or {}).get("is_r18")
+        picked = _pick_section_parent(_author_parents.get(aid, ()), r18) if aid else None
+        if picked:
+            return picked
+        default = _pick_default_section(_section_dirs, r18)
+        return default or fallback
+
     def _add(ptype, frm, to, reason, files, auto, **extra):
         # 同 (type, from, to) 合并 files (一夹多作品/多文件)
         for pl in plans:
@@ -2162,7 +2183,9 @@ def _tidy_build_plans(db, img_root: Path) -> list:
         renameable = False
         if len(author_ids) == 1:
             aid0 = str(meta0.get("author_id") or "")
-            _e = _tidy_expected_folder(db, meta0, parent)
+            # 根目录作者夹: 该作者在其他分类下已有夹 → 期望夹跨到分类下,
+            # 这样下面的「同级改名」条件不成立, 改由逐作品归位搬过去。
+            _e = _tidy_expected_folder(db, meta0, parent or _section_prefix(meta0, parent))
             # 只允许同级改名 (exp 的父级 == 当前夹父级)。pixiv 顶层夹里混外来源作品时
             # exp 是「夹/子夹」, 绝不能把顶层夹整体改名成子夹, 交给逐作品归位处理。
             if (_e and _e != folder
@@ -2189,7 +2212,11 @@ def _tidy_build_plans(db, img_root: Path) -> list:
             if meta:
                 # 期望夹 prefix: parent 自己若是作者夹 (不论是本作品的作者、还是别人),
                 # 先剥掉再拼本作品的作者夹 —— 否则会算出 `作者夹/作者夹` 的自我套娃
-                exp = _tidy_expected_folder(db, meta, _tidy_parent_prefix(db, parent))
+                _base = _tidy_parent_prefix(db, parent)
+                # 根目录(或从根目录作者夹剥出来)的作者夹: 跟随该作者已有的分类夹
+                if not _base:
+                    _base = _section_prefix(meta, _base)
+                exp = _tidy_expected_folder(db, meta, _base)
             if exp and exp != folder:
                 _add("move", folder, exp,
                      f"作品 {art_id} 未放在作者文件夹 {exp.split('/')[-1]} 中, 归位",
@@ -2241,6 +2268,9 @@ def _tidy_build_plans(db, img_root: Path) -> list:
             meta = db.get_artwork_metadata(nat[0])
             # 期望夹 = 「文件所在文件夹的父级」+ 作者夹名; 已在作者夹内(exp==folder)则不动
             parent_prefix = "/".join(segs[:-2])
+            # 根目录散件: 跟随该作者已有的分类夹, 别在根目录另建一个
+            if not parent_prefix:
+                parent_prefix = _section_prefix(meta, parent_prefix) if meta else parent_prefix
             exp = _tidy_expected_folder(db, meta, parent_prefix) if meta else None
             if exp:
                 if exp != folder:
