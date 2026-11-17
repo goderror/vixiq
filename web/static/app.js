@@ -13,6 +13,10 @@ const isTabActive = (name) => {
 // 切换顶部 Tab (search/tasks/reverse/library/trash/authors/stats/settings), 进入时刷新该页数据
 window.switchTab = function (name) {
   $$('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === name));
+  // 手机底部导航与顶部 tabs 是同一套路由: 两边都同步高亮
+  $$('.m-tab').forEach(x => x.classList.toggle('active', x.dataset.mtab === name));
+  const mSheet = $('#m-more-sheet');
+  if (mSheet) mSheet.classList.add('hidden');
   $$('.tabpage').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   document.dispatchEvent(new CustomEvent('vixiq:tab-change', { detail: { name } }));
   actPush('NAV', '切换页面 → ' + name, {});   // 活动日志: 记下用户去哪一页了
@@ -8036,6 +8040,27 @@ function bind() {
 
   $$('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
 
+  // ---- 手机底部导航 (窄屏显示): 与顶部 tabs 同一套 switchTab ----
+  $$('.m-tab[data-mtab]').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.mtab)));
+  const mMore = $('.m-more'), mSheet = $('#m-more-sheet');
+  if (mMore && mSheet) {
+    const closeSheet = () => {
+      mSheet.classList.add('hidden');
+      mMore.setAttribute('aria-expanded', 'false');
+    };
+    mMore.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const willOpen = mSheet.classList.contains('hidden');
+      mSheet.classList.toggle('hidden', !willOpen);
+      mMore.setAttribute('aria-expanded', String(willOpen));
+    });
+    mSheet.addEventListener('click', (ev) => {
+      const b = ev.target.closest('button[data-mtab]');
+      if (b) switchTab(b.dataset.mtab);      // switchTab 自己会收起 sheet
+      else if (ev.target.closest('.m-sheet-close')) closeSheet();
+    });
+  }
+
   // 顶栏头像按钮: 点击展开账户菜单; 点击菜单外区域自动收起
   $('#account-btn').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -8364,9 +8389,18 @@ function bind() {
   //   sizeWrapFn: 调用方自己的重排 —— 按 isZoom() 取宽高额度 (放大态放开上限), 写入 wrap 的
   //               inline 尺寸, 并记下自然尺寸
   //   getNat:     取 [自然宽, 自然高] (调用方的 curNw/curNh)
-  const setupZoom = (lb, wrap, lay, sizeWrapFn, getNat) => {
+  //   swipe:      未放大时的单指横滑回调 {onPrev, onNext} (手机翻页; 桌面鼠标不触发)
+  const setupZoom = (lb, wrap, lay, sizeWrapFn, getNat, swipe) => {
     const hint = lb.querySelector('.lb-zoom-hint');
     let zoom = false, zx = 0, zy = 0, panFrom = null, panMoved = false, blocked = false;
+    // 手机手势: swipeFrom = 未放大时的横滑起点; pointers/pinchFrom = 双指捏合
+    let swipeFrom = null, pinchFrom = 0;
+    const pointers = new Map();
+    const pinchDist = () => {
+      const a = [...pointers.values()];
+      if (a.length < 2) return 0;
+      return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+    };
     // 平移量是「相对居中」的偏移: 上限 = (自然 - 视口)/2; 图比视口小 → 不可拖。
     // 视口必须取 wrap 的**实际渲染尺寸**, 不能拿自然尺寸去算 (那样算出来恒为 0 → 拖不动)。
     const clampAxis = (v, view, nat) => {
@@ -8395,7 +8429,22 @@ function bind() {
       paint();
     };
     const panStart = (ev) => {
-      if (!zoom) return;
+      // 双指捏合: 记录每根手指, 第二根落下时取消单指平移
+      if (ev.pointerType !== 'mouse') {
+        pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+        if (pointers.size === 2) {
+          pinchFrom = pinchDist();
+          panFrom = null;
+          swipeFrom = null;      // 双指不是翻页手势, 别让抬起时被当成横滑
+          return;
+        }
+      }
+      if (!zoom) {
+        // 未放大: 单指横滑 = 上一张 / 下一张 (手机上比点两侧小箭头顺手)
+        if (ev.pointerType !== 'mouse')
+          swipeFrom = { x: ev.clientX, y: ev.clientY, id: ev.pointerId };
+        return;
+      }
       // 鼠标只认左键; 触屏/手写笔没有 button 之分 (button 恒为 0)
       if (ev.pointerType === 'mouse' && ev.button !== 0) return;
       panFrom = { x: ev.clientX, y: ev.clientY, ox: zx, oy: zy, id: ev.pointerId };
@@ -8403,6 +8452,19 @@ function bind() {
       if (ev.pointerType === 'mouse') ev.preventDefault();   // 拖图时不要顺手选中文字
     };
     const panMove = (ev) => {
+      if (pointers.has(ev.pointerId))
+        pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      if (pointers.size >= 2) {
+        swipeFrom = null;
+        const d = pinchDist();
+        if (d > 0 && pinchFrom > 0) {
+          // 双指张开 → 1:1 放大; 双指收拢 → 还原 (连续缩放交给双击/拖动, 这里只做开关)
+          if (!zoom && d > pinchFrom * 1.25) { zoomTo(true); panMoved = true; }
+          else if (zoom && d < pinchFrom * 0.8) { zoomTo(false); panMoved = true; }
+        }
+        if (ev.cancelable) ev.preventDefault();
+        return;
+      }
       if (!panFrom) return;
       if (panFrom.id != null && ev.pointerId != null && ev.pointerId !== panFrom.id) return;
       const dx = ev.clientX - panFrom.x, dy = ev.clientY - panFrom.y;
@@ -8414,7 +8476,21 @@ function bind() {
       // 触屏拖动必须拦掉浏览器自己的滚动/下拉刷新 (CSS 的 touch-action:none 是双保险)
       if (ev.pointerType !== 'mouse' && ev.cancelable) ev.preventDefault();
     };
-    const panEnd = () => { panFrom = null; };
+    const panEnd = (ev) => {
+      if (ev && pointers.has(ev.pointerId)) pointers.delete(ev.pointerId);
+      if (pointers.size < 2) pinchFrom = 0;
+      // 未放大时的横滑 → 翻页 (纵滑留给页面滚动, 不抢)
+      if (swipeFrom && ev && ev.pointerId === swipeFrom.id) {
+        const dx = ev.clientX - swipeFrom.x, dy = ev.clientY - swipeFrom.y;
+        swipeFrom = null;
+        if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          panMoved = true;   // 阻止随后那次 click 把图放大
+          if (dx < 0) { if (swipe && swipe.onNext) swipe.onNext(); }
+          else if (swipe && swipe.onPrev) swipe.onPrev();
+        }
+      }
+      panFrom = null;
+    };
     const onClick = (ev) => {
       // 点「🔒 显示」/ 刚拖完图 (panMoved) 都不算「点图放大」
       if (ev.target.closest('.lightbox-reveal') || panMoved) { panMoved = false; return; }
@@ -8600,7 +8676,11 @@ function bind() {
     const onWinResize = () => { if (curNw && curNh) z.resync(); };
     window.addEventListener('resize', onWinResize);
     // 🔍 点图 1:1 放大 + 拖动平移 (与远程大图弹窗共用同一支; 下沉到本地图库)
-    z = setupZoom(lb, wrap, lay, () => sizeWrap(curNw, curNh), () => [curNw, curNh]);
+    z = setupZoom(lb, wrap, lay, () => sizeWrap(curNw, curNh), () => [curNw, curNh], {
+      // 手机: 未放大时左右滑翻页 (桌面鼠标不触发)
+      onPrev: () => { if (pages.length > 1) showPage(idx - 1); },
+      onNext: () => { if (pages.length > 1) showPage(idx + 1); },
+    });
 
     // 关闭查看器: 点背景 / 关闭按钮 / Esc / 设为壁纸 都走这一处 ——
     // 不摘 window 监听的话, 关窗后 resize 与方向键还会继续响应。
@@ -9032,7 +9112,11 @@ function bind() {
     // 为什么需要: 弹窗里大图是按容器缩放的, master1200(低清) 与 img-original(原图) 在这个尺寸
     // 下都远超容器, 肉眼完全一样 —— 只有 1:1 看才比得出细节(以及 master1200 重编码的痕迹)。
     // 放大只重排**已经加载的**那一张, 不会顺手去取原图 (原图仍只在点「🖼️ 显示原图」时才请求)。
-    z = setupZoom(lb, wrap, lay, () => sizeWrap(curNw, curNh), () => [curNw, curNh]);
+    z = setupZoom(lb, wrap, lay, () => sizeWrap(curNw, curNh), () => [curNw, curNh], {
+      // 手机: 未放大时左右滑翻页 (远端多页作品同样适用)
+      onPrev: () => showPage(idx - 1),
+      onNext: () => showPage(idx + 1),
+    });
 
     // 把 url 放隐藏层, 解码完成才切可见性 (与本地 Lightbox 同一套双叠层, 无空白帧)
     const swapLayer = (url, token, st, isFull, done) => {

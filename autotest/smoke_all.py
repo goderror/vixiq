@@ -3045,6 +3045,7 @@ def run_suite() -> SuiteResult:
     suite.add("T142", "图库操作与统计：筛选/跨页/去重/占位页/双下载入口及选择统计（隔离数据）", t142_gallery_controls)
     suite.add("T143", "三管理页共享吸顶抽屉：结构/控件唯一性、状态与控制器集成、防回跳/手动展开与焦点保护", t143_management_drawer)
     suite.add("T144", "📱 手机访问(Cloudflare 快速隧道): 默认关闭可兜底 + 地址解析只认 trycloudflare + 无访问密码拒绝开启 + 退出回收/孤儿清理/打包带上 cloudflared + 设置页与托盘入口接线 (离线)", t144_mobile_tunnel)
+    suite.add("T145", "📱 手机版自适应(高频路径): 底部导航与「更多」+ tabs 桌面/手机切换 + 2 列卡片 + 大图左右滑翻页/双指缩放 + 桌面样式不受影响 (离线静态)", t145_mobile_layout)
     suite.write_report()
     return suite
 
@@ -10378,7 +10379,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261117l" and _mss.group(1) == "20261117l", \
+    assert _mjs and _mss and _mjs.group(1) == "20261117m" and _mss.group(1) == "20261117m", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10473,7 +10474,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261117l', html) and _re.search(r'app\.js\?v=20261117l', html), \
+    assert _re.search(r'style\.css\?v=20261117m', html) and _re.search(r'app\.js\?v=20261117m', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10867,7 +10868,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261117l" in html and "app.js?v=20261117l" in html, \
+        assert "style.css?v=20261117m" in html and "app.js?v=20261117m" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13237,7 +13238,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261117l" in _h and "style.css?v=20261117l" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261117m" in _h and "style.css?v=20261117m" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13507,6 +13508,48 @@ def t144_mobile_tunnel() -> None:
                                  "copyTunnelUrl", "_tunnelErrText"))
     tail = js.split("else if (name === 'settings')")[1][:600]
     assert "loadTunnel()" in tail, "切到设置页没加载手机访问状态"
+
+
+def t145_mobile_layout() -> None:
+    """📱 手机版自适应 (2026-11-17，第一期只覆盖高频路径)。
+
+    做法是**同一页面按屏宽重排**，不是另做一套：
+      ① 窄屏隐藏顶部 tabs，用底部导航（查询/图库/下载/壁纸/设置）+「更多」承载低频页；
+      ② 卡片网格 2 列、表格可横滑、字号/触控目标按手机调；
+      ③ 大图支持单指左右滑翻页、双指捏合开关 1:1；两侧小箭头在手机隐藏；
+      ④ 所有这些规则只在 `max-width: 760px` 内，桌面布局零变化。
+    """
+    html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    # ① 结构: 底部导航 + 更多面板
+    assert 'class="m-nav"' in html and 'data-mtab="search"' in html, "手机底部导航没建"
+    assert 'data-mtab="library"' in html and 'data-mtab="wallpapers"' in html, "高频入口不全"
+    assert 'id="m-more-sheet"' in html and 'data-mtab="stats"' in html, "低频页没有入口"
+    # 桌面必须隐藏手机导航 (靠媒体查询切换, 不是 JS 隐藏)
+    assert ".m-nav, .m-sheet { display: none; }" in css, "桌面会看到手机底部导航"
+
+    # ② 路由同步: 底部导航与顶部 tabs 共用 switchTab
+    assert "$$('.m-tab').forEach" in js and "btn.dataset.mtab" in js, "底部导航没接路由"
+    assert "mMore.addEventListener" in js and "m-more-sheet" in js, "「更多」打不开"
+
+    # ③ 大图手势: 左右滑翻页 + 双指捏合
+    assert "swipeFrom" in js and "pinchDist" in js and "pointers" in js, \
+        "大图没接手机手势 (左右滑/双指)"
+    assert "if (Math.abs(dx) > 55" in js and "swipe.onNext" in js and "swipe.onPrev" in js, \
+        "左右滑的判定或回调缺失"
+    assert js.count("setupZoom(lb, wrap, lay,") == 2, "两个弹窗都要装手势"
+    # ④ 窄屏排版
+    _mob = css.split("@media (max-width: 760px)", 1)[1]
+    assert ".tabs { display: none; }" in _mob, "手机上顶部 tabs 没让位"
+    assert ".m-nav { display: flex" in _mob, "手机上底部导航没显示"
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in _mob, "手机卡片不是 2 列"
+    assert ".lightbox-prev, .lightbox-next { display: none; }" in _mob, \
+        "手机仍显示两侧小箭头 (应让位给滑动)"
+    assert "env(safe-area-inset-bottom)" in _mob, "没有避开 iPhone 底部安全区"
+    # ⑤ 桌面回归: 顶部 tabs 的显示规则没被改掉
+    assert ".tabs {\n  display: flex;" in css, "桌面顶部 tabs 被改坏了"
 
 
 def main() -> int:

@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261117l">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117l">
+<link rel="stylesheet" href="/static/style.css?v=20261117m">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117m">
 </head>
 <body>
 
@@ -75,6 +75,23 @@
   </button>
   <button class="tab tab-subtle" data-tab="trash" title="回收站" aria-label="回收站">🗑️<span id="trash-badge" class="badge hidden">0</span></button>
 </nav>
+
+<!-- ===== 手机端底部导航 (窄屏才显示; 顶部 tabs 在手机上隐藏) ===== -->
+<nav class="m-nav" aria-label="主导航">
+  <button class="m-tab active" data-mtab="search">🔍<span>查询</span></button>
+  <button class="m-tab" data-mtab="library">📚<span>图库</span></button>
+  <button class="m-tab" data-mtab="tasks">📥<span>下载</span></button>
+  <button class="m-tab" data-mtab="wallpapers">🖼️<span>壁纸</span></button>
+  <button class="m-tab" data-mtab="settings">⚙️<span>设置</span></button>
+  <button class="m-tab m-more" type="button" aria-haspopup="menu" aria-expanded="false">☰<span>更多</span></button>
+</nav>
+<div id="m-more-sheet" class="m-sheet hidden" role="menu" aria-label="更多页面">
+  <button type="button" data-mtab="reverse">🔎 反搜来源</button>
+  <button type="button" data-mtab="authors">👤 作者管理</button>
+  <button type="button" data-mtab="stats">📊 统计</button>
+  <button type="button" data-mtab="trash">🗑️ 回收站</button>
+  <button type="button" class="m-sheet-close">取消</button>
+</div>
 
 <main tabindex="0">
   <!-- ===== 查询: 作品 / 作者 双子页 ===== -->
@@ -823,10 +840,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261117l"></script>
-<script src="/static/wallpaper-admin.js?v=20261117l"></script>
-<script src="/static/management-drawer-state.js?v=20261117l"></script>
-<script src="/static/management-toolbar.js?v=20261117l"></script>
+<script src="/static/app.js?v=20261117m"></script>
+<script src="/static/wallpaper-admin.js?v=20261117m"></script>
+<script src="/static/management-drawer-state.js?v=20261117m"></script>
+<script src="/static/management-toolbar.js?v=20261117m"></script>
 </body>
 </html>
 

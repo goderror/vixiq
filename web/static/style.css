@@ -652,6 +652,9 @@ main.cards-collapsed #tab-wallpapers .wf-card .wf-meta { padding: 8px 10px; }
   position: relative;
   display: flex; align-items: center; justify-content: center;
   max-width: 92vw; max-height: 85vh;
+  /* 手势全部交给 JS: 单指左右滑翻页、放大后拖动平移、双指捏合。
+     不写 none 时浏览器会把横滑当成滚动/回弹, 只发 pointercancel, 翻页收不到事件。 */
+  touch-action: none;
   /* 尺寸由 JS 按图片自然比例显式设定 (叠层 absolute 不撑开父容器),
      保证缩略图/原图/翻页换层时容器零变化 → 无布局跳变、无闪烁 */
   min-width: 30vw; min-height: 40vh;
@@ -1816,3 +1819,54 @@ body.ob-open { overflow: hidden; }
 .card-peek .wf-pick,
 .card-peek .wf-more,
 .card-peek .wf-name { display: none; }
+
+/* ===== 手机版自适应 (2026-11-17) =====
+   只改「排布与尺寸」, 全部包在窄屏媒体查询里, 桌面样式不受影响。
+   顶部 tabs 在手机上隐藏, 换成底部导航 .m-nav; 低频页收进「更多」.m-sheet。 */
+.m-nav, .m-sheet { display: none; }
+
+@media (max-width: 760px) {
+  .topbar { padding: 8px 10px; gap: 8px; flex-wrap: wrap; }
+  .brand { font-size: 16px; }
+  .search-wrap { order: 9; flex: 1 1 100%; max-width: none; margin: 0; }
+  .search-wrap input { font-size: 16px; padding: 8px 12px; }   /* ≥16px: iOS 聚焦不放大 */
+  .account-wrap { margin-left: auto; }
+  .tabs { display: none; }
+  main { padding: 12px 10px calc(74px + env(safe-area-inset-bottom)); }
+  .panel { padding: 12px; }
+  .btn { padding: 8px 12px; font-size: 13px; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .works-grid, .wf-grid, .rev-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* 底部导航 */
+  .m-nav { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 120;
+    background: rgba(255,255,255,.97); backdrop-filter: blur(10px);
+    border-top: 1px solid var(--border);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    justify-content: space-around; }
+  .m-tab { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center;
+    gap: 2px; border: none; background: transparent; color: var(--muted);
+    font-size: 19px; line-height: 1.1; padding: 4px 0; border-radius: 10px; cursor: pointer; }
+  .m-tab span { font-size: 10px; }
+  .m-tab.active { color: var(--accent); background: rgba(25,118,210,.09); }
+  .m-sheet { display: grid; gap: 8px; position: fixed; left: 8px; right: 8px;
+    bottom: calc(70px + env(safe-area-inset-bottom)); z-index: 130;
+    background: #fff; border: 1px solid var(--border); border-radius: 14px;
+    padding: 10px; box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+  .m-sheet.hidden { display: none; }
+  .m-sheet button { padding: 12px; font-size: 15px; border: none; border-radius: 10px;
+    background: #f2f5f8; color: var(--text); }
+  .m-sheet button:active { background: #e6ebf1; }
+
+  .toast { bottom: calc(80px + env(safe-area-inset-bottom)); z-index: 140; max-width: 92vw; }
+  #to-top { width: 56px; height: 56px; right: 12px; bottom: calc(78px + env(safe-area-inset-bottom)); }
+
+  /* 大图: 屏幕优先, 左右滑翻页代替两侧小箭头 */
+  .lightbox-wrap { max-width: 100vw; max-height: 100vh; }
+  .lightbox-info { gap: 8px; font-size: 12px; padding: 8px 10px 0; flex-wrap: wrap; }
+  .lightbox-close { top: 10px; right: 10px; width: 40px; height: 40px; }
+  .lightbox-prev, .lightbox-next { display: none; }
+  .lb-strip-hint { font-size: 11px; }
+}
+@media (max-width: 380px) { .m-tab span { display: none; } }
