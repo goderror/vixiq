@@ -4528,6 +4528,33 @@ class PixivDatabase:
                 n += int(cur.rowcount or 0)
         return n
 
+    def record_wallpaper_usage(self, artwork_id: str, page_num, file_path: str,
+                               source: str = "library") -> None:
+        """登记一次「设为壁纸」：原图/裁剪版/壁纸夹已有都记，同一张只保留最新时间。"""
+        aid = str(artwork_id or "")
+        try:
+            pn = int(page_num) if page_num is not None else None
+        except (TypeError, ValueError):
+            pn = None
+        fp = str(file_path or "")
+        if not fp:
+            return
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM wallpaper_usage WHERE artwork_id=? AND page_num IS ? "
+                "AND file_path=?", (aid, pn, fp))
+            self.conn.execute(
+                "INSERT INTO wallpaper_usage(artwork_id, page_num, file_path, source) "
+                "VALUES(?,?,?,?)", (aid, pn, fp, str(source or "library")))
+
+    def list_wallpaper_usage(self, limit: int = 50) -> list[dict]:
+        """最近的壁纸使用记录（按设置时间倒序）。"""
+        rows = self.conn.execute(
+            "SELECT id, artwork_id, page_num, file_path, source, used_at "
+            "  FROM wallpaper_usage ORDER BY used_at DESC, id DESC LIMIT ?",
+            (max(1, int(limit)),)).fetchall()
+        return [dict(r) for r in rows]
+
     def list_all_tags(self) -> list[dict]:
         """全部标签 + 各标签作品数 (分类浏览/标签下拉用)。"""
         rows = self.conn.execute(

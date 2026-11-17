@@ -51,10 +51,15 @@ function wallOptions(el, options) {
 async function wallFilesLoad() {
   const seq = ++WFA.loading;
   try {
-    const [d, groups] = await Promise.all([api('/api/wallpaper/files'), api('/api/wallpaper/groups')]);
+    const [d, groups, usage] = await Promise.all([
+      api('/api/wallpaper/files'),
+      api('/api/wallpaper/groups'),
+      api('/api/wallpaper/usage?limit=20').catch(() => null),
+    ]);
     if (seq !== WFA.loading) return;
     if (!d?.ok || !groups?.ok) throw new Error(d?.error || groups?.msg || '读取失败');
     WFD = d; WFA.groups = groups.items || [];
+    WFA.usage = (usage && usage.items) || [];
     const alive = new Set(d.items.map(x => x.name));
     [...WF_SEL].forEach(n => { if (!alive.has(n)) WF_SEL.delete(n); });
     const works = new Map();
@@ -67,6 +72,25 @@ async function wallFilesLoad() {
       `<option value="${g.id}">${esc(g.name)} · ${d.items.filter(x => x.group_id === g.id).length} 张</option>`).join(''));
     wallFilesPaint();
   } catch (e) { if (seq === WFA.loading) $('#wf-result').innerHTML = `<div class="hint err-text">${esc(e.message)}</div>`; }
+}
+
+const WALL_USAGE_SRC = { library: '图库原图', crop: '裁剪版', wall: '壁纸夹' };
+
+function wallUsageHtml(items) {
+  if (!items || !items.length) return '';
+  const rows = items.slice(0, 12).map(u => {
+    const src = WALL_USAGE_SRC[u.source] || u.source || '';
+    const art = u.artwork_id ? `作品 ${u.artwork_id}` : '未归属';
+    const page = u.page_num == null ? '' : ` · 第 ${Number(u.page_num) + 1} 张`;
+    const name = String(u.file_path || '').split(/[\\/]/).pop();
+    return `<div class="wf-usage-row" title="${esc(u.file_path || '')}">
+      <span class="wf-tag">${esc(src)}</span>
+      <span>${esc(art + page)}</span>
+      <span class="hint">${esc(name)}</span>
+      <span class="hint">${esc(String(u.used_at || '').replace('T', ' ').slice(0, 19))}</span>
+    </div>`;
+  }).join('');
+  return `<div class="wf-usage"><div class="wf-usage-head">最近设置</div>${rows}</div>`;
 }
 
 function wallFilesCard(f) {
@@ -91,6 +115,8 @@ function wallFilesPaint() {
   $('#wf-scan-tip').textContent = d.scanned ? `共 ${stats.total} 张 · ${fmtSize(stats.bytes)} · 上次扫描 ${stats.scanned_at || '未知'}` : '扫描归属后可管理壁纸文件。';
   $('#wf-stats').innerHTML = [['壁纸', stats.total || 0], ['已归属', stats.owned || 0], ['未归属', stats.orphan || 0], ['重复图片', `${stats.dupes || 0} 组`]].map(([label, n]) =>
     `<div class="stat-card"><div class="num">${n}</div><div class="lbl">${label}</div></div>`).join('');
+  const ubox = $('#wf-usage');
+  if (ubox) ubox.innerHTML = wallUsageHtml(WFA.usage);
   const duplicateNames = new Set((d.groups || []).flatMap(g => g.files));
   const work = $('#wf-work-filter').value, group = $('#wf-group-filter').value;
   let list = (d.items || []).filter(f => {

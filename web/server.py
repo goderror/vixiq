@@ -6378,7 +6378,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         # (存进壁纸夹, 避免壁纸指向会被清理的临时目录)
         # 检测必须早于写入裁剪文件，避免把本次刚生成的图片判作已有副本。
         if not bool(body.get("force")):
-            existing = _wall_dupes_for(aid, page_md5, (width, height), page_num=page_used)
+            # deep=False: 设置壁纸只做文件名/MD5 快查，不在这个请求里跑 ORB
+            existing = _wall_dupes_for(aid, page_md5, (width, height),
+                                       deep=False, page_num=page_used)
             if existing:
                 return jsonify({"status": "dupe", "msg": "壁纸夹里已有这张图片的版本",
                                 "existing": existing}), 409
@@ -6427,6 +6429,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     _wall_upsert_file(db, wd, p, aid, page_used, "manual", 1.0)
         except Exception:
             pass
+        # 壁纸库使用记录: 原图只登记不复制, 裁剪版登记 + 已在壁纸夹
+        try:
+            with _db() as db:
+                db.record_wallpaper_usage(
+                    aid, page_used, str(p), "crop" if cropped else "library")
+        except Exception:
+            pass
         _notify_widget()
         return jsonify({"status": "ok", "file": str(p), "name": p.name,
                         "cropped": cropped, "info": _wall_info_payload(p)})
@@ -6449,9 +6458,30 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error", "msg": "该文件不是支持的壁纸图片"}), 400
         if not apply_wallpaper(file):
             return jsonify({"status": "error", "msg": "系统未接受本次壁纸设置，请重试"}), 500
+        try:
+            with _db() as db:
+                row = db.conn.execute(
+                    "SELECT artwork_id, page_num FROM wallpaper_files WHERE file_name=?",
+                    (name,)).fetchone()
+                db.record_wallpaper_usage(
+                    str(row["artwork_id"] or "") if row else "",
+                    (row["page_num"] if row else None), str(file), "wall")
+        except Exception:
+            pass
         _notify_widget()
         return jsonify({"status": "ok", "name": file.name, "file": str(file),
                         "info": _wall_info_payload(file)})
+
+    @app.route("/api/wallpaper/usage")
+    def api_wallpaper_usage():
+        """最近设置过的壁纸（原图只登记不复制，裁剪版同时进壁纸夹）。"""
+        try:
+            limit = int(request.args.get("limit") or 50)
+        except Exception:
+            limit = 50
+        with _db() as db:
+            items = db.list_wallpaper_usage(limit=limit)
+        return jsonify({"ok": True, "items": items})
 
     @app.route("/api/wallpaper/dir")
     def api_wallpaper_dir_get():

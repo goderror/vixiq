@@ -640,7 +640,11 @@ async function confirmWallCrop() {
     toast('已设为桌面壁纸（已裁剪）', 'ok');
     closeWallCrop();
     closeWallPicker();
-    if (isTabActive('library')) wallRefresh({ deep: true });
+    // 先浅刷新让界面立刻反馈；深度溯源稍后再补，不挡「设置完成」
+    if (isTabActive('library')) {
+      wallRefresh();
+      setTimeout(() => { if (isTabActive('library')) wallRefresh({ deep: true }); }, 1500);
+    }
   } catch (e) {
     toast('设置壁纸失败: ' + (e.message || e), 'err');
   }

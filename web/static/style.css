@@ -319,15 +319,19 @@ main { flex: 1; overflow-y: auto; padding: 20px; }
   gap: 14px;
 }
 
-/* ===== 卡片密度: 收起后保留正常缩略图与标题, 悬停从标题下方拉出抽屉 ===== */
+/* ===== 卡片密度: 收起后保留正常缩略图、标题与作者, 悬停从标题下方拉出抽屉 ===== */
 /* 缩略图与正常卡片同尺寸, 只收掉标题以下的信息; 页数角标照常显示 */
-main.cards-collapsed #tab-library .work-card .w-body > :not(.w-title):not(.tag) {
+main.cards-collapsed #tab-library .work-card .w-body > :not(.w-title):not(.w-author) {
   display: none;
 }
 main.cards-collapsed #tab-library .work-card .w-body { padding: 8px 10px; }
 main.cards-collapsed #tab-library .work-card .w-title {
   display: block; min-height: 0; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset;
+}
+main.cards-collapsed #tab-library .work-card .w-author {
+  display: block; font-size: 12px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
 }
 main.cards-collapsed #tab-wallpapers .wf-card .wf-more,
 main.cards-collapsed #tab-wallpapers .wf-card .wf-meta > :not(.wf-name) {
@@ -1886,3 +1890,11 @@ body.ob-open { overflow: hidden; }
 /* ===== 作者管理: 重复作者分组 (2026-11-18) ===== */
 .author-dup-group { margin: 12px 0 16px; }
 .author-dup-name { font-weight: 600; margin-bottom: 6px; }
+
+/* ===== 壁纸管理: 最近设置记录 (2026-11-18) ===== */
+.wf-usage { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 10px; background: #fcfdff; }
+.wf-usage-head { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.wf-usage-row { display: flex; gap: 8px; align-items: center; font-size: 12px;
+  padding: 3px 0; border-top: 1px dashed var(--border); }
+.wf-usage-row:first-of-type { border-top: none; }
