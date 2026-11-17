@@ -13553,6 +13553,18 @@ def t145_mobile_layout() -> None:
 
 
 def main() -> int:
+    # ⚠ 冒烟**绝不允许改真实桌面壁纸** (2026-11-17 用户反馈「每次更新代码壁纸就被换掉」):
+    # T127 的「移出壁纸」用例会走服务端「先切下一张再删」, 真实调用 SPI_SETDESKWALLPAPER,
+    # 把桌面壁纸指到测试临时图; 测试结束 temp 目录一删, 壁纸就变成黑屏/消失。
+    # 在套件跑之前把服务端里的 apply_wallpaper 全局换成 no-op (返回 True = 视为已切换),
+    # 用例自己的局部打桩仍可覆盖。
+    try:
+        import web.server as _ws_guard
+        _ws_guard.apply_wallpaper = lambda _p: True
+        import core.wallpaper_trace as _wt_guard
+        _wt_guard.apply_wallpaper = lambda _p: True
+    except Exception:
+        pass
     # 冒烟运行时关掉活动日志的**打屏**(文件照写, T102 会自己验证落盘) ——
     # 否则每个测试用例的 HTTP 流水都会刷屏, 把冒烟结果淹掉。
     try:
