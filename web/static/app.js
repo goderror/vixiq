@@ -8038,7 +8038,10 @@ function bind() {
     });
   });
 
-  $$('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+  // 只绑真正的页面 tab: 叠三角 #mgmt-peek 也带 .tab 类 (只是长得像标签),
+  // 它没有 data-tab —— 一起绑会把 switchTab(undefined) 跑一遍, 所有 tabpage 同时失活,
+  // 表现就是「点一下三角形, 列表整个空白」(2026-11-17 实测)。
+  $$('.tab[data-tab]').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
 
   // ---- 手机底部导航 (窄屏显示): 与顶部 tabs 同一套 switchTab ----
   $$('.m-tab[data-mtab]').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.mtab)));

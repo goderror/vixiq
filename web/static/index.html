@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261117m">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117m">
+<link rel="stylesheet" href="/static/style.css?v=20261117n">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261117n">
 </head>
 <body>
 
@@ -246,6 +246,8 @@
   <section id="tab-library" class="tabpage">
     <div class="panel">
       <div class="management-toolbar" data-management="library">
+      <!-- 分页行放在菜单主体之前: 共计/页码始终紧贴标签栏, 展开菜单只会往下推列表 -->
+      <div id="lib-pager-top" class="lib-pager management-pager"></div>
       <div class="management-main">
       <div class="panel-head management-heading">
         <h2>📚 图库管理</h2>
@@ -357,8 +359,6 @@
       </div>
       </div>
       </div>
-      <!-- 分页行留在吸顶区内: 收起菜单后仍能看到总数与页码 -->
-      <div id="lib-pager-top" class="lib-pager management-pager"></div>
       </div>
       <!-- 以下内容随列表滚走，不吸顶 (统计/当前壁纸/提示) -->
       <div id="wall-card" class="wall-card hidden">
@@ -409,6 +409,7 @@
   <section id="tab-authors" class="tabpage">
     <div class="panel">
       <div class="management-toolbar" data-management="authors">
+      <div id="authors-pager-top" class="lib-pager management-pager"></div>
       <div class="management-main">
       <div class="panel-head management-heading">
         <h2>👤 作者管理</h2>
@@ -431,7 +432,6 @@
       </div>
       <div class="management-selection"></div>
       </div>
-      <div id="authors-pager-top" class="lib-pager management-pager"></div>
       </div>
       <div id="authors-result" class="table-wrap">
         <div class="hint">加载中…</div>
@@ -444,6 +444,7 @@
   <section id="tab-wallpapers" class="tabpage">
     <div class="panel">
       <div class="management-toolbar" data-management="wallpapers">
+      <div id="wf-pager" class="lib-pager management-pager"></div>
       <div class="management-main">
       <div class="panel-head management-heading">
         <h2>🖼️ 壁纸管理</h2>
@@ -496,7 +497,6 @@
       </div>
       </div>
       </div>
-      <div id="wf-pager" class="lib-pager management-pager"></div>
       </div>
       <!-- 以下随列表滚走 -->
       <div id="wf-stats" class="stats-grid"></div>
@@ -797,8 +797,8 @@
      全库磁盘普查交给「设置 → 🩺 体检」, 刷新只做"行脚医生", 保持毫秒级。
      样式刻意做成"透明背景 + 细线图标", 平时半透明不抢视线, 悬停才亮起来 -->
 <button id="smart-refresh" title="刷新" aria-label="刷新" data-tip="刷新">
-  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor"
-       stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor"
+       stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/>
     <path d="M20.5 3.5v5.2h-5.2"/>
   </svg>
@@ -840,10 +840,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261117m"></script>
-<script src="/static/wallpaper-admin.js?v=20261117m"></script>
-<script src="/static/management-drawer-state.js?v=20261117m"></script>
-<script src="/static/management-toolbar.js?v=20261117m"></script>
+<script src="/static/app.js?v=20261117n"></script>
+<script src="/static/wallpaper-admin.js?v=20261117n"></script>
+<script src="/static/management-drawer-state.js?v=20261117n"></script>
+<script src="/static/management-toolbar.js?v=20261117n"></script>
 </body>
 </html>
 

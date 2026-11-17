@@ -29,14 +29,50 @@ test('下滑收起与阈值保持', () => {
   assert.strictEqual(s.compact, true);
 });
 
-test('低位置主动上滑展开', () => {
+test('低位置滚回顶部不再自动展开 (要下拉)', () => {
   const s = make();
   s.toggle(500); // 手动收起
   assert.strictEqual(s.compact, true);
   s.settle(70);
   s.input(-1, 70);
-  assert.strictEqual(s.compact, false, '70 上滑应展开');
-  assert.strictEqual(s.manualTop, null, '自动展开清空 manualTop');
+  assert.strictEqual(s.compact, true, '滚到 70 不应自动展开');
+  s.scroll(70);
+  assert.strictEqual(s.compact, true, '只滚到顶部不展开');
+});
+
+// 2b. 到顶后继续下拉，累计超过阈值才展开（与下拉刷新同一手感）
+test('到顶后下拉累计过阈值才展开', () => {
+  const s = make();
+  s.toggle(500);
+  s.settle(0);
+  s.input(-1, 0);
+  assert.strictEqual(s.compact, true);
+  assert.strictEqual(s.pull(40), false);
+  assert.strictEqual(s.compact, true, '40px 还不够');
+  assert.strictEqual(s.pull(50), true, '累计 90px 应展开');
+  assert.strictEqual(s.compact, false);
+  assert.strictEqual(s.manualTop, null, '下拉展开等同自动展开');
+  assert.strictEqual(s.pullAccum, 0);
+});
+
+test('下拉途中向下滚会清零', () => {
+  const s = make();
+  s.toggle(500);
+  s.settle(0);
+  s.input(-1, 0);
+  assert.strictEqual(s.pull(60), false);
+  s.input(1, 0);
+  assert.strictEqual(s.pullAccum, 0, '向下意图应清零');
+  assert.strictEqual(s.pull(60), false);
+  assert.strictEqual(s.compact, true);
+});
+
+test('布局锁内下拉不展开', () => {
+  const s = make();
+  s.toggle(500);
+  s.beginLayout();
+  assert.strictEqual(s.pull(500), false);
+  assert.strictEqual(s.compact, true);
 });
 
 // 2. 布局导致 170 -> 0 不展开、不循环
@@ -134,15 +170,16 @@ test('focusedExtra 阻止自动收起', () => {
   assert.strictEqual(s.compact, true);
 });
 
-// 8. 手动收起后零位置上滑可展开
-test('零位置上滑恢复展开', () => {
+// 8. 手动收起后，零位置上滑也不再自动展开（必须下拉）
+test('零位置上滑不再自动展开', () => {
   const s = make();
   s.settle(0);
   s.toggle(0);
   assert.strictEqual(s.compact, true);
   s.input(-1, 0);
-  assert.strictEqual(s.compact, false, '物理 top=0 上滑应展开');
-  assert.strictEqual(s.manualTop, null);
+  assert.strictEqual(s.compact, true, '只有下拉过阈值才展开');
+  assert.strictEqual(s.pull(90), true);
+  assert.strictEqual(s.compact, false);
 });
 
 // 9. reset 对应切 tab 统一展开
@@ -186,19 +223,22 @@ function controllerFixture() {
   }
   return { state, screen, context };
 }
-test('控制器：高度钳制到零后 Home 无需额外滚动即展开', () => {
+test('控制器：Home 不再自动展开菜单', () => {
   const f = controllerFixture();
   vm.runInContext("onKeydown({key:'Home'})", f.context);
-  assert.equal(f.screen.compact, false);
-  assert.equal(f.screen.paints, 1);
-  vm.runInContext("onKeydown({key:'Home'})", f.context);
-  assert.equal(f.screen.paints, 1, '重复顶部输入不能反复重画');
+  assert.equal(f.screen.compact, true, 'Home 只负责滚到顶, 不展开');
+  assert.equal(f.screen.paints, 0);
 });
-test('控制器：零位置向上滚轮立即展开', () => {
+test('控制器：零位置向上滚轮要累计够距离才展开', () => {
   const f = controllerFixture();
   vm.runInContext('onWheel({deltaY:-30,target:{}})', f.context);
-  assert.equal(f.screen.compact, false);
+  assert.equal(f.screen.compact, true, '30px 不够');
+  assert.equal(f.screen.paints, 0);
+  vm.runInContext('onWheel({deltaY:-60,target:{}})', f.context);
+  assert.equal(f.screen.compact, false, '累计 90px 应展开');
   assert.equal(f.screen.paints, 1);
+  vm.runInContext('onWheel({deltaY:-60,target:{}})', f.context);
+  assert.equal(f.screen.paints, 1, '展开后继续上滚不重复重画');
 });
 test('控制器：零位置向下滚轮不展开、不提前收起', () => {
   const f = controllerFixture();

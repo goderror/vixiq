@@ -1,8 +1,8 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117m`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117n`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
-> 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。
+> 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
 ---
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117m`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117n`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -315,6 +315,21 @@
   `.lightbox-img-wrap` **基础态就要 `touch-action: none`** —— 否则横滑被浏览器当成滚动，
   只发 `pointercancel`，翻页回调收不到（实测）。双指落下时必须清掉 `swipeFrom`，否则抬起会被误判成翻页。
 - 第二期未做：三管理页表格转卡片、筛选抽屉、设置页分组折叠、PWA 图标/离线壳。
+
+### 4.11 桌面端四项修正（2026-11-17，版本 `20261117n`）
+
+1. **叠三角把列表点成空白**：`#mgmt-peek` 也带 `.tab` 类，通用绑定 `$$('.tab')` 给它跑了
+   `switchTab(undefined)` → 所有 `.tabpage` 同时失活。现只绑 `.tab[data-tab]`。
+   **新增任何「长得像 tab 但不是页面」的按钮，都不要给它 `data-tab`，并确认通用绑定带了守卫。**
+2. **到顶自动展开改成下拉触发**：`ManagementDrawerState.input/scroll` 不再在上滑到低阈值时展开；
+   新增 `pull(distance)`（默认累计 90px，`pullThreshold`）与 `resetPull()`。
+   控制器在 `scrollTop<=2` 时把滚轮上滚 / 手指下拉换算成 pull，够距离才展开；向下滚清零。
+   「回到顶部」按钮是明确动作，仍直接 `state.expand()`。
+3. **共计/页码易位**：三个管理页的 `#lib-pager-top` / `#authors-pager-top` / `#wf-pager`
+   移到 `.management-main` **之前**，展开菜单只把列表往下推，页码始终紧贴标签栏。
+4. **刷新按钮不显眼**：`#smart-refresh` 从 32px 透明细线改成 38px、描边 2.3、淡底 + 边框 + 阴影；
+   手机端与置顶按钮错开（置顶出现时刷新上移到 `146px + 安全区`）。
+
 
 ---
 

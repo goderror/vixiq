@@ -270,6 +270,12 @@
     var dy = e.deltaY;
     if (!dy) return;
     decayIntent();
+    // 收起态且已经在顶部: 继续向上滚 = 「下拉」，累计超过阈值才展开。
+    // 这样滚回顶部只是停在顶部，不会立刻把菜单弹开 (2026-11-17 用户要求)。
+    if (state.compact && dy < 0 && main.scrollTop <= 2) {
+      if (state.pull(-dy)) paint(false);
+      return;
+    }
     setIntent(dy > 0 ? 1 : -1);
     var top = main.scrollTop;
     var fe = focusedExtra();
@@ -324,6 +330,13 @@
     var dy = e.touches[0].clientY - touchStartY;
     if (Math.abs(dy) <= 4) return;
     decayIntent();
+    // 收起态 + 已在顶部: 手指继续往下拉 = 展开手势 (和滚轮同一口径)。
+    if (state.compact && dy > 0 && main.scrollTop <= 2) {
+      if (e.cancelable) e.preventDefault();    // 别让浏览器触发自己的下拉刷新
+      if (state.pull(dy)) paint(false);
+      touchStartY = e.touches[0].clientY;
+      return;
+    }
     // 手指向下 = 内容上移 = 负方向
     setIntent(dy > 0 ? -1 : 1);
     touchStartY = e.touches[0].clientY;
@@ -398,11 +411,9 @@
     var btn = e.target.closest && e.target.closest('#to-top');
     if (!btn) return;
     decayIntent();
-    setIntent(-1);
-    var top = main.scrollTop;
-    var fe = focusedExtra();
+    // 点「回到顶部」是明确动作: 直接展开菜单 (滚到顶部本身不再自动展开)。
     var ch = false;
-    try { ch = state.input(-1, top); } catch (err) {}
+    try { ch = state.expand(); } catch (err) {}
     if (ch) paint(false);
   }
 
@@ -462,7 +473,7 @@
     main.addEventListener('wheel', onWheel, { passive: true });
     document.addEventListener('keydown', onKeydown);
     main.addEventListener('touchstart', onTouchStart, { passive: true });
-    main.addEventListener('touchmove', onTouchMove, { passive: true });
+    main.addEventListener('touchmove', onTouchMove, { passive: false });
     main.addEventListener('touchend', onTouchEnd, { passive: true });
     main.addEventListener('pointerdown', onPointerDown, { passive: true });
     main.addEventListener('click', onToolbarClick);

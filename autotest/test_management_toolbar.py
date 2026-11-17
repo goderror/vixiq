@@ -418,6 +418,47 @@ class ManagementToolbarTests(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------ #
+    def test_drawer_pull_trigger_and_pager_order(self):
+        """2026-11-17: 到顶不再自动展开 (要下拉过阈值); 总计/页码排在菜单主体之前。"""
+        state_js = (PROJECT_ROOT / "web" / "static" / _MANAGEMENT_DRAWER_STATE).read_text(encoding="utf-8")
+        self.assertIn("pull(distance)", state_js)
+        self.assertIn("pullThreshold", state_js)
+        self.assertIn("resetPull()", state_js)
+        # 老的「上滑到底部边界就展开」分支必须删掉, 否则滚回顶部又会自动弹开
+        self.assertNotIn("this.intent < 0 && top <= this.low", state_js)
+
+        toolbar_js = (PROJECT_ROOT / "web" / "static" / _MANAGEMENT_TOOLBAR).read_text(encoding="utf-8")
+        for token in ("state.pull(-dy)", "main.scrollTop <= 2", "state.pull(dy)",
+                      "{ passive: false }"):
+            self.assertIn(token, toolbar_js, token)
+
+        # 分页行必须是工具栏的第一个块 (在 .management-main 之前) ——
+        # 这样展开菜单只会把列表往下推, 「共计 + 页码」始终紧贴标签栏。
+        for name in ("library", "authors", "wallpapers"):
+            bar = self._toolbar_for(name)
+            kinds = []
+            for child in bar.children:
+                if child.has_class("management-pager"):
+                    kinds.append("pager")
+                elif child.has_class("management-main"):
+                    kinds.append("main")
+            self.assertIn("pager", kinds, "%s 工具栏缺分页行" % name)
+            self.assertIn("main", kinds, "%s 工具栏缺菜单主体" % name)
+            self.assertLess(kinds.index("pager"), kinds.index("main"),
+                            "%s: 分页行要排在菜单主体之前" % name)
+
+    # ------------------------------------------------------------------ #
+    def test_smart_refresh_is_visible(self):
+        """刷新按钮要够显眼 (2026-11-17 反馈"不够显眼"): 加大 + 加粗描边 + 淡边框底。"""
+        btn = self.doc.find_by_id("smart-refresh")
+        self.assertIsNotNone(btn, "missing #smart-refresh")
+        svg = btn.find_descendants(lambda e: e.tag == "svg")[0]
+        self.assertEqual(svg.get("stroke-width"), "2.3")
+        css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertIn("width: 38px; height: 38px", css)
+        self.assertIn("background: rgba(255,255,255,.92)", css)
+
+    # ------------------------------------------------------------------ #
     @unittest.skipUnless(shutil.which("node"), "node is not available")
     def test_node_management_drawer_state(self):
         script = PROJECT_ROOT / "autotest" / "test_management_drawer_state.cjs"
