@@ -1226,6 +1226,62 @@ function renderAuthors(items) {
     <tbody>${rows}</tbody></table>`;
 }
 
+// 🔍 重复作者: 按规范化名字/曾用名分组，列出同名但不同 ID 的作者，逐组确认合并。
+// 只负责发现和引导；同名不等于同一人，绝不自动合并。
+window.openAuthorDuplicates = async function () {
+  try {
+    const r = await api('/api/library/author-duplicates');
+    const groups = r.groups || [];
+    window._authorDupGroups = groups;
+    if (!groups.length) { toast('没有发现重复作者', 'ok'); return; }
+    const body = groups.map((g, gi) => {
+      const rows = g.items.map((it, i) => `<tr>
+        <td>${esc(it.name)}</td>
+        <td class="mono">${esc(it.author_id)}</td>
+        <td>${it.is_pixiv ? 'pixiv' : '自定义'}</td>
+        <td class="num">${it.count ?? 0}</td>
+        <td>${(it.sources || []).map(s => `<span class="tag src-tag">${esc(sourceLabel(s))}</span>`).join(' ') || '—'}</td>
+        <td><button class="btn ghost" onclick="mergeAuthorGroup(${gi},${i})">合并到这位</button></td>
+      </tr>`).join('');
+      return `<div class="author-dup-group">
+        <div class="author-dup-name">同名：${esc(g.name)}</div>
+        <div class="table-wrap"><table class="table lib-list"><thead><tr>
+          <th>作者名</th><th>ID</th><th>类型</th><th>作品数</th><th>来源</th><th>操作</th>
+        </tr></thead><tbody>${rows}</tbody></table></div>
+      </div>`;
+    }).join('');
+    openLibModal('🔍 重复作者（' + groups.length + ' 组）', `
+      <div class="hint">同名/同别名不等于同一人。确认是同一人后，选一个目标，把组内其他条目合并过去；
+        合并会迁移作品、曾用名和链接，并同步文件夹。</div>
+      ${body}`, { lg: true });
+  } catch (e) { toast('读取重复作者失败: ' + e.message, 'err'); }
+};
+
+window.mergeAuthorGroup = async function (gi, ti) {
+  const g = (window._authorDupGroups || [])[gi];
+  if (!g) return;
+  const dst = g.items[ti];
+  const srcs = g.items.filter(x => String(x.author_id) !== String(dst.author_id));
+  if (!srcs.length) return;
+  if (!confirm(`把这组里的其他 ${srcs.length} 条作者合并到「${dst.name}（${dst.author_id}）」？\n\n`
+    + '同名不代表同一人，请确认。合并后源作者记录会删除，作品/曾用名/链接迁到目标。')) return;
+  try {
+    let moved = 0, files = 0;
+    for (const s of srcs) {
+      const r = await api('/api/library/author-merge', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ src_id: s.author_id, dst_id: dst.author_id }) });
+      const err = apiErr(r); if (err) throw new Error(err);
+      moved += Number(r.artworks || 0);
+      files += Number(r.files_gathered || 0);
+    }
+    toast(`已合并 ${srcs.length} 条作者，迁移 ${moved} 个作品`
+      + (files ? `，${files} 个文件已归位` : ''), 'ok');
+    closeLibModal();
+    loadAuthors(); loadLibFacets(); loadLibrary();
+  } catch (e) { toast('合并失败: ' + e.message, 'err'); }
+};
+
 // 作者主页链接 (danbooru 式): 优先用**记录的第一条来源链接**, 其次 pixiv 官方主页。
 // (链接是多条的, 顺序即优先级 —— 要它打开哪个站就把它放第一条)
 function authorHomeUrl(x) {

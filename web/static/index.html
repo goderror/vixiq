@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261118c">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261118c">
+<link rel="stylesheet" href="/static/style.css?v=20261118d">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261118d">
 </head>
 <body>
 
@@ -420,6 +420,8 @@
           <button id="authors-search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
         </div>
         <button id="authors-search-btn" class="btn accent">搜索</button>
+        <button id="authors-dupes-btn" class="btn ghost" onclick="openAuthorDuplicates()"
+          title="列出同名/同别名的重复作者，逐组确认合并">🔍 重复作者</button>
         <button type="button" class="btn ghost management-toggle" aria-expanded="true" aria-controls="authors-filters">收起菜单</button>
       </div>
       <div class="management-extra">
@@ -840,10 +842,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261118c"></script>
-<script src="/static/wallpaper-admin.js?v=20261118c"></script>
-<script src="/static/management-drawer-state.js?v=20261118c"></script>
-<script src="/static/management-toolbar.js?v=20261118c"></script>
+<script src="/static/app.js?v=20261118d"></script>
+<script src="/static/wallpaper-admin.js?v=20261118d"></script>
+<script src="/static/management-drawer-state.js?v=20261118d"></script>
+<script src="/static/management-toolbar.js?v=20261118d"></script>
 </body>
 </html>
 

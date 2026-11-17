@@ -1844,6 +1844,61 @@ class PixivDatabase:
         out.sort(key=lambda x: (0 if x["is_pixiv"] else 1, -x["count"]))
         return out
 
+    def find_author_duplicate_groups(self) -> list:
+        """按规范化名字/别名分组，返回至少两条的重复作者组。
+
+        用并查集把「现用名或曾用名规范化后相同」的作者连成一组，覆盖：
+        pixiv 与自定义同名、自定义与自定义写法差异、改名后旧名与另一条现用名重合。
+        只做发现，不自动合并。
+        """
+        rows = self.list_authors()
+        parent = {str(r["author_id"]): str(r["author_id"]) for r in rows}
+
+        def find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: str, b: str) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        by_key: "dict[str, str]" = {}
+        for r in rows:
+            aid = str(r["author_id"])
+            keys = {normalize_author_name(r.get("name"))}
+            keys |= {normalize_author_name(x) for x in (r.get("aliases") or [])}
+            keys.discard("")
+            for k in keys:
+                if k in by_key:
+                    union(aid, by_key[k])
+                else:
+                    by_key[k] = aid
+
+        groups: "dict[str, list]" = {}
+        for r in rows:
+            groups.setdefault(find(str(r["author_id"])), []).append(r)
+        out = []
+        for items in groups.values():
+            if len(items) < 2:
+                continue
+            items.sort(key=lambda x: (0 if str(x["author_id"]).isdigit() else 1,
+                                      -(x.get("count") or 0)))
+            out.append({
+                "name": items[0].get("name") or items[0]["author_id"],
+                "items": [{
+                    "author_id": str(x["author_id"]),
+                    "name": str(x.get("name") or ""),
+                    "is_pixiv": str(x["author_id"]).isdigit(),
+                    "count": int(x.get("count") or 0),
+                    "sources": list(x.get("sources") or []),
+                } for x in items],
+            })
+        out.sort(key=lambda g: str(g.get("name") or "").lower())
+        return out
+
     def create_or_get_local_author(self, name: str, status: "str | None" = None,
                                    source: "str | None" = None,
                                    handle: "str | None" = None,

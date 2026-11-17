@@ -5502,6 +5502,48 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                          res.get("artworks", 0))
         return jsonify({"status": "ok", "author_id": pid, "name": new_name, **res})
 
+    @app.route("/api/library/author-duplicates")
+    def api_library_author_duplicates():
+        """列出同名/同别名的重复作者组（只读，供作者管理页统一处理）。
+
+        同名不等于同一人，这里只做发现；是否合并由用户逐组确认。"""
+        with _db() as db:
+            groups = db.find_author_duplicate_groups()
+        return jsonify({"status": "ok", "groups": groups, "total": len(groups)})
+
+    @app.route("/api/library/author-merge", methods=["POST"])
+    def api_library_author_merge():
+        """把一条作者身份整体并入另一条（作者页「重复作者」用）。
+
+        body: {"src_id": "...", "dst_id": "..."} —— src 的作品/队列/曾用名/链接
+        全部迁到 dst，作者行删除；能改文件夹名时一起改，并把文件归到目标作者夹。
+        同名不自动合并，必须由用户在这个接口上显式确认。"""
+        data = request.get_json(silent=True) or {}
+        src = str(data.get("src_id") or "").strip()
+        dst = str(data.get("dst_id") or "").strip()
+        if not src or not dst or src == dst:
+            return jsonify({"status": "error", "error": "缺少 src_id/dst_id 或两者相同"}), 400
+        with _db() as db:
+            if db.get_author(src) is None or db.get_author(dst) is None:
+                return jsonify({"status": "error", "error": "作者不存在"}), 404
+            res = db.merge_author_into(src, dst)
+            dst_name = str((db.get_author(dst) or {}).get("name") or "")
+            try:
+                res["folder_renamed"] = _sync_author_folder(
+                    db, dst, dst_name, old_id=src)
+            except Exception:
+                res["folder_renamed"] = 0
+            try:
+                _g = _gather_works_into_author_folder(db, res.get("artwork_ids") or [])
+            except Exception as e:
+                _g = {"moved": 0, "failed": [f"{type(e).__name__}: {e}"], "dests": []}
+            res["files_gathered"] = int(_g.get("moved") or 0)
+            res["gather_failed"] = _g.get("failed") or []
+        audit_log.record("update", "合并重复作者",
+                         f"{src} → {dst}（迁移 {res.get('artworks', 0)} 个作品）",
+                         res.get("artworks", 0))
+        return jsonify({"status": "ok", **res})
+
     @app.route("/api/library/author-refresh", methods=["POST"])
     def api_library_author_refresh():
         """轻量刷新**单个作者** (定向刷新): 联网核对现用名 + 存续状态。

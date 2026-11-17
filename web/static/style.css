@@ -1882,3 +1882,7 @@ body.ob-open { overflow: hidden; }
   .lb-strip-hint { font-size: 11px; }
 }
 @media (max-width: 380px) { .m-tab span { display: none; } }
+
+/* ===== 作者管理: 重复作者分组 (2026-11-18) ===== */
+.author-dup-group { margin: 12px 0 16px; }
+.author-dup-name { font-weight: 600; margin-bottom: 6px; }

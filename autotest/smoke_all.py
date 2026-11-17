@@ -3050,6 +3050,7 @@ def run_suite() -> SuiteResult:
     suite.add("T147", "✏️ 作品编辑选自定义作者: 下拉带 author_id + 后端接受已存在的非数字作者 ID（单条/批量）+ 不存在的 ID 明确报错 (隔离数据)", t147_custom_author_save)
     suite.add("T148", "🔗 改作者时同名身份合并: 自定义作者 → 同名 pixiv 作者可一键合并（作品迁移/作者行删除/文件夹改名/文件归位）+ 不合并只改这一张也会搬文件 + 不存在的合并 ID 报错 (隔离数据)", t148_author_merge_on_change)
     suite.add("T149", "🛡 作者源头查重: 规范化名字（大小写/全半角/空白/零宽/宣传后缀）+ 同名 pixiv 存在时保存返回 409 让用户选复用/同名新建 + 同名自定义自动复用不重复建 (隔离数据)", t149_author_conflict_guard)
+    suite.add("T150", "🔍 作者管理「重复作者」: 按规范化名字/别名分组 + 跨 pixiv/自定义识别 + 逐组合并（作品/作者行/文件）+ 不存在/相同 ID 报错 + 页面按钮接线 (隔离数据)", t150_author_duplicate_view)
     suite.write_report()
     return suite
 
@@ -10383,7 +10384,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261118c" and _mss.group(1) == "20261118c", \
+    assert _mjs and _mss and _mjs.group(1) == "20261118d" and _mss.group(1) == "20261118d", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10478,7 +10479,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261118c', html) and _re.search(r'app\.js\?v=20261118c', html), \
+    assert _re.search(r'style\.css\?v=20261118d', html) and _re.search(r'app\.js\?v=20261118d', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10872,7 +10873,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261118c" in html and "app.js?v=20261118c" in html, \
+        assert "style.css?v=20261118d" in html and "app.js?v=20261118d" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13242,7 +13243,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261118c" in _h and "style.css?v=20261118c" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261118d" in _h and "style.css?v=20261118d" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13901,6 +13902,97 @@ def t149_author_conflict_guard() -> None:
                 "手打名字不应再按名字自动匹配（同名要交给后端查重）"
         finally:
             upaths.user_data = orig_ud
+
+
+def t150_author_duplicate_view() -> None:
+    """T150: 作者管理「重复作者」视图与通用合并（2026-11-18）。
+
+    覆盖：同名/别名分组（含 pixiv 与自定义跨类型）、逐组确认合并、错误边界、页面接线。
+    """
+    import tempfile
+    import utils.paths as upaths
+    from db.store import PixivDatabase, WSt
+    import web.server as wsrv
+
+    with tempfile.TemporaryDirectory(prefix="t150dupes_") as td:
+        tmp = Path(td)
+        orig_ud = upaths.user_data
+        orig_img = wsrv._config["paths"].get("img_subdir")
+        upaths.user_data = lambda rel: tmp / str(rel)
+        wsrv._config["paths"]["img_subdir"] = "img"
+        try:
+            db = PixivDatabase(str(tmp / "pixiv.db"))
+            db.upsert_author("113227553", "Kloan")
+            db.upsert_author("local_dup", "Kloan")
+            db.upsert_author("local_alias", "旧名")
+            db.update_author("local_alias", aliases=["Kloan"])
+            db.upsert_author("local_solo", "独立画师")
+            db.change_work_status("950001", WSt.DONE, title="a", author_id="113227553",
+                                  total_pages=1)
+            db.change_work_status("950002", WSt.DONE, title="b", author_id="local_dup",
+                                  total_pages=1)
+            db.change_work_status("950003", WSt.DONE, title="c", author_id="local_alias",
+                                  total_pages=1)
+            db.change_work_status("950004", WSt.DONE, title="d", author_id="local_solo",
+                                  total_pages=1)
+            db.close()
+
+            client = wsrv.create_app().test_client()
+
+            # ① 分组：同名 + 别名重合都进同一组；独立作者不出现
+            r = client.get("/api/library/author-duplicates")
+            j = r.get_json()
+            assert r.status_code == 200 and j.get("status") == "ok", j
+            groups = j.get("groups") or []
+            assert len(groups) == 1, groups
+            ids = {str(x["author_id"]) for x in groups[0]["items"]}
+            assert ids == {"113227553", "local_dup", "local_alias"}, ids
+            assert "local_solo" not in ids
+
+            # ② 合并：自定义 → pixiv，作者行删除、作品迁移
+            r = client.post("/api/library/author-merge",
+                            json={"src_id": "local_dup", "dst_id": "113227553"})
+            j = r.get_json()
+            assert r.status_code == 200 and j.get("status") == "ok", j
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                assert db2.get_author("local_dup") is None
+                row = db2.conn.execute(
+                    "SELECT author_id FROM artworks WHERE artwork_id='950002'").fetchone()
+                assert row and str(row[0]) == "113227553", row
+
+            # ③ 别名作者也能并过去，旧名进目标曾用名
+            r = client.post("/api/library/author-merge",
+                            json={"src_id": "local_alias", "dst_id": "113227553"})
+            assert r.status_code == 200 and r.get_json().get("status") == "ok", r.get_json()
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                assert db2.get_author("local_alias") is None
+                row = db2.conn.execute(
+                    "SELECT author_id FROM artworks WHERE artwork_id='950003'").fetchone()
+                assert row and str(row[0]) == "113227553", row
+
+            # ④ 错误边界
+            assert client.post("/api/library/author-merge",
+                               json={"src_id": "local_nope", "dst_id": "113227553"}
+                               ).status_code == 404
+            assert client.post("/api/library/author-merge",
+                               json={"src_id": "113227553", "dst_id": "113227553"}
+                               ).status_code == 400
+
+            # ⑤ 页面接线
+            html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+            js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+            assert 'id="authors-dupes-btn"' in html and "openAuthorDuplicates()" in html, \
+                "作者页缺少「重复作者」入口"
+            for token in ("openAuthorDuplicates", "mergeAuthorGroup", "author-merge"):
+                assert token in js, f"前端缺少重复作者接线: {token}"
+            src = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+            assert "author-duplicates" in src and "author-merge" in src, "后端缺少接口"
+            store = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
+            assert "find_author_duplicate_groups" in store, "缺少分组查询实现"
+        finally:
+            upaths.user_data = orig_ud
+            if orig_img is not None:
+                wsrv._config["paths"]["img_subdir"] = orig_img
 
 
 def main() -> int:
