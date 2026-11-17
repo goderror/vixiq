@@ -354,12 +354,19 @@ class ManagementToolbarTests(unittest.TestCase):
         self.assertEqual(btn.get("onclick"), "cardsToggle()")
 
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+        appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("main.cards-collapsed #tab-library .work-card .w-body", css)
         self.assertIn("main.cards-collapsed #tab-wallpapers .wf-card .wf-meta", css)
         self.assertIn(".card-peek {", css)
+        # 2026-11-18: 抽屉必须低于标签栏/吸顶菜单, 且命中判定要用 elementFromPoint,
+        # 否则卡片滚到菜单下面后鼠标划过菜单也会弹抽屉; 悬停还要停留半秒。
+        self.assertIn("position: fixed; z-index: 19;", css)
+        self.assertIn("elementFromPoint", appjs)
+        self.assertIn("CARD_PEEK_DELAY = 500", appjs)
+        self.assertIn("z-index: 60;", css)
+        self.assertIn("z-index: 50;", css)
         self.assertNotIn("main.cards-collapsed #tab-library .work-card .pages-badge", css)
 
-        appjs = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         for token in ("function cardsToggle", "function cardPeekShow", "function cardPeekHide"):
             self.assertIn(token, appjs, token)
 

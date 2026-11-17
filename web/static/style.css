@@ -27,7 +27,7 @@ body {
   display: flex; align-items: center; gap: 16px;
   padding: 10px 20px; background: var(--panel);
   border-bottom: 1px solid var(--border); box-shadow: var(--shadow);
-  z-index: 5;
+  z-index: 60;
 }
 .brand { font-size: 18px; font-weight: 700; letter-spacing: .5px; white-space: nowrap; }
 .search-wrap { flex: 1; display: flex; gap: 8px; max-width: 720px; margin: 0 auto; }
@@ -77,6 +77,8 @@ body {
 
 /* ===== Tab ===== */
 .tabs {
+  position: relative;
+  z-index: 50;   /* 高于卡片抽屉(.card-peek 19)与吸顶菜单(20): 滚动到下面的卡片不许“透”上来 */
   display: flex; gap: 4px; padding: 8px 20px 0; background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -1801,9 +1803,11 @@ body.ob-open { overflow: hidden; }
 .wf-group-head .muted { font-weight: 400; font-size: 12px; color: var(--muted); }
 
 /* 卡片抽屉: 克隆卡片标题以下的内容, 贴在卡片底边向下滑出; 固定在 body 下, 不参与布局。
-   必须放在所有 .work-card/.wf-card 基础规则之后, 否则 position 会被卡片规则覆盖。 */
+   必须放在所有 .work-card/.wf-card 基础规则之后, 否则 position 会被卡片规则覆盖。
+   z-index 必须**低于**标签栏(50)/吸顶菜单(20): 卡片滚到菜单下面时,
+   抽屉也要一起被菜单遮住, 不能浮在最上面 (2026-11-18)。 */
 .card-peek {
-  position: fixed; z-index: 170; margin: 0;
+  position: fixed; z-index: 19; margin: 0;
   background: var(--panel);
   border: 1px solid var(--border); border-top: 0;
   border-radius: 0 0 var(--radius) var(--radius);

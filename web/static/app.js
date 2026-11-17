@@ -81,8 +81,10 @@ function cardPeekShow(card) {
     clone.style.top = box.bottom + 'px';
     clone.style.maxHeight = below + 'px';
   } else {
+    // 下方空间不够时向上贴底, 但**不许越过卡片自己的顶边** —— 否则抽屉会盖到
+    // 标签栏/吸顶菜单上, 看起来像浮层没被遮住。
     clone.style.bottom = '8px';
-    clone.style.maxHeight = Math.max(160, box.bottom - 8) + 'px';
+    clone.style.maxHeight = Math.max(160, window.innerHeight - 8 - box.top) + 'px';
   }
   document.body.appendChild(clone);
   cardPeekEl = clone;
@@ -95,23 +97,34 @@ function cardPeekShow(card) {
   // 用 mousemove + elementFromPoint 判断鼠标下的卡片, 不用 mouseover/mouseout:
   // 浮层插入/移走会让浏览器的命中目标在卡片和 body 之间反复跳, 那两个事件会形成
   // 「浮层出现 → 判定离开 → 移走浮层 → 再次出现」的闪烁循环 (2026-11-17 实际踩到)。
-  var peekX = 0, peekY = 0, peekRaf = 0;
+  // 停留 500ms 才展开: 鼠标只是路过标题条不算"想看详情" (2026-11-18 用户要求)
+  const CARD_PEEK_DELAY = 500;
+  var peekX = 0, peekY = 0, peekRaf = 0, peekTimer = 0, peekCandidate = null;
+
+  function cancelPeekTimer() {
+    if (peekTimer) { clearTimeout(peekTimer); peekTimer = 0; }
+    peekCandidate = null;
+  }
+
   function cardAtPoint(x, y) {
+    // 用**实际命中元素**判断, 而不是只比卡片矩形:
+    // 卡片滚到吸顶菜单/标签栏下面时, 它的标题条矩形仍在视口里, 只比矩形会让
+    // 鼠标划过菜单栏也把抽屉弹出来 (2026-11-18 用户反馈)。
+    const hit = document.elementFromPoint(x, y);
+    if (!hit) return null;
     // 鼠标在抽屉里时保持当前展开 (抽屉可点击操作)
-    if (cardPeekEl && cardPeekSrc) {
-      const pr = cardPeekEl.getBoundingClientRect();
-      if (x >= pr.left && x <= pr.right && y >= pr.top && y <= pr.bottom) return cardPeekSrc;
-    }
-    const cards = document.querySelectorAll('#tab-library .work-card, #tab-wallpapers .wf-card');
-    for (let i = 0; i < cards.length; i++) {
-      const card = cards[i];
-      // 只认标题条区域: 鼠标停在缩略图上不展开
-      const label = card.classList.contains('wf-card') ? card.querySelector('.wf-meta') : card.querySelector('.w-body');
-      if (!label) continue;
-      const r = label.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return card;
-    }
-    return null;
+    if (cardPeekEl && cardPeekEl.contains(hit)) return cardPeekSrc;
+    // 被顶栏 / 标签栏 / 吸顶菜单 / 底部导航 / 弹窗遮住 → 不响应
+    if (hit.closest('.topbar, .tabs, .management-toolbar, .mgmt-pull-hint, .m-nav, '
+                   + '.m-sheet, .modal-mask, #lightbox')) return null;
+    const card = hit.closest('#tab-library .work-card, #tab-wallpapers .wf-card');
+    if (!card) return null;
+    // 只认标题条区域: 鼠标停在缩略图上不展开
+    const label = card.classList.contains('wf-card')
+      ? card.querySelector('.wf-meta') : card.querySelector('.w-body');
+    if (!label) return null;
+    const r = label.getBoundingClientRect();
+    return (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) ? card : null;
   }
   document.addEventListener('mousemove', e => {
     if (!cardsCollapsed()) return;
@@ -121,14 +134,25 @@ function cardPeekShow(card) {
     peekRaf = requestAnimationFrame(() => {
       peekRaf = 0;
       const card = cardAtPoint(peekX, peekY);
-      if (card) cardPeekShow(card);
-      else cardPeekHide();
+      // 已经在看这张卡的抽屉 → 保持不变
+      if (card && card === cardPeekSrc && cardPeekEl) { cancelPeekTimer(); return; }
+      if (!card) { cancelPeekTimer(); cardPeekHide(); return; }
+      // 换到另一张卡: 旧抽屉先收起, 重新等半秒
+      if (card !== peekCandidate) {
+        cancelPeekTimer();
+        cardPeekHide();
+        peekCandidate = card;
+        peekTimer = setTimeout(() => {
+          peekTimer = 0;
+          if (peekCandidate === card) cardPeekShow(card);
+        }, CARD_PEEK_DELAY);
+      }
     });
   }, { passive: true });
   const main = document.querySelector('main');
-  if (main) main.addEventListener('scroll', cardPeekHide, { passive: true });
-  document.addEventListener('vixiq:tab-change', cardPeekHide);
-  document.addEventListener('mouseleave', cardPeekHide);
+  if (main) main.addEventListener('scroll', () => { cancelPeekTimer(); cardPeekHide(); }, { passive: true });
+  document.addEventListener('vixiq:tab-change', () => { cancelPeekTimer(); cardPeekHide(); });
+  document.addEventListener('mouseleave', () => { cancelPeekTimer(); cardPeekHide(); });
 })();
 
 // ============ 🖼 当前壁纸 (桌面幻灯片) 信息窗 —— 2026-09-24 ============
