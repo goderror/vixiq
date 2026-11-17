@@ -310,10 +310,19 @@ def _tunnel_from_tray() -> None:
 def _register_tunnel_bridge() -> None:
     """把手机访问的读写交给 web/server.py (web 层碰不到隧道对象)。"""
     try:
-        from web.server import set_tunnel_ctl
+        from web.server import set_tunnel_ctl, set_quit_hook
         set_tunnel_ctl(_tunnel_status, _set_tunnel)
+        set_quit_hook(_prepare_web_quit)
     except Exception as e:
         _app_log(f"手机访问接口钩子未接上: {e}")
+
+
+def _prepare_web_quit() -> None:
+    """网页版「退出程序」的收尾: 那条路是 os._exit 硬退出, atexit/_cleanup 都不会跑,
+    不先摘托盘/关隧道就会留下幽灵图标和孤儿 cloudflared。"""
+    _stop_tunnel()
+    _wall_widget_stop()
+    _tray_stop()
 
 
 def _notify_pages_quit() -> None:

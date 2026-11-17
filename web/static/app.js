@@ -2599,6 +2599,14 @@ async function loadTunnel() {
   paintTunnel();
 }
 
+function _tunnelErrText(e) {
+  const s = String(e || '');
+  // Cloudflare 对同一 IP 的 quick tunnel 有频率限制: 原样英文对普通用户没意义, 说清「等一会再点」
+  if (/failed to request quick Tunnel|forcibly closed/i.test(s))
+    return 'Cloudflare 暂时拒绝了新隧道（短时间内开太多次或网络抖动），等几分钟再点一次';
+  return s;
+}
+
 function paintTunnel() {
   const st = tunnelState || {};
   const btn = $('#tunnel-toggle'), copy = $('#tunnel-copy');
@@ -2614,7 +2622,7 @@ function paintTunnel() {
     if (st.connected === false) state.textContent = '当前版本未接入手机访问组件';
     else if (running && st.url) state.textContent = '已开启';
     else if (running) state.textContent = '正在获取公网地址…';
-    else if (st.error) state.textContent = '未开启：' + st.error;
+    else if (st.error) state.textContent = '未开启：' + _tunnelErrText(st.error);
     else state.textContent = '已关闭（不影响本机使用）';
   }
   if (url) url.textContent = st.url || '';

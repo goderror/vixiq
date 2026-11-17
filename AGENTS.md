@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117j`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117k`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117j`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261117k`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -256,7 +256,7 @@
      会被藏起来；命令行改为字符串 `explorer /select,"<路径>"`（逗号必须在引号外，列表参数在含空格路径下会失效）。
      本轮改了 Python 后端，已重新打包并替换 `dist/vixiq` 与 `D:\Program Files\Vixiq` 的程序文件（config 未动）。
 
-### 4.7 手机访问（Cloudflare 快速隧道，2026-11-17，版本 `20261117j`）
+### 4.7 手机访问（Cloudflare 快速隧道，2026-11-17，版本 `20261117k`）
 
 - 设置页「📱 手机访问」卡片：访问密码（4-12 位数字，写 `web.access_pin`，并**就地更新**
   `web/server.py` 里的 `_config`，否则新密码要等重启才生效）、开关、当前地址、复制地址。

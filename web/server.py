@@ -126,6 +126,17 @@ def set_tunnel_ctl(status_fn, set_fn) -> None:
     _tunnel_status = status_fn
     _tunnel_set = set_fn
 
+
+# 网页版「退出程序」的收尾钩子: /api/app/quit 是 os._exit 硬退出, 不触发 atexit,
+# main._cleanup 也不会跑 —— 托盘图标与手机访问隧道会留成孤儿。main.py 启动时把
+# 「摘托盘 + 关隧道」交进来, 硬退出前先执行。
+_quit_hook = None
+
+
+def set_quit_hook(fn) -> None:
+    global _quit_hook
+    _quit_hook = fn
+
 # ---------------------------------------------------------------------------
 # 🔔 数据域「脏」登记 + 事件驱动刷新 (一套覆盖全库的机制)
 #   问题: 以前每个写接口各自"记得"通知前端刷新, 漏一个就出现"改了但界面没变",
@@ -4187,6 +4198,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             time.sleep(0.8)  # 等 HTTP 响应发回浏览器
             print("🧹 正在清理...", flush=True)
             try:
+                # 0. 摘托盘图标 + 关手机访问隧道 (os._exit 不触发 atexit/_cleanup)
+                if _quit_hook is not None:
+                    try:
+                        _quit_hook()
+                    except Exception:
+                        pass
                 # 1. 停后台循环: 元数据补全 / 缩略图预热
                 _cancel_event.set()
                 try:
