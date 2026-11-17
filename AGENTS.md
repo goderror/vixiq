@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-17（当前前端版本 `20261117t`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118a`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261117t`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261118a`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -385,6 +385,27 @@
   GitHub 已本地提交 `c39ecfa` / `9be8976`，**未推送**。
 - 注意：B 只改"新建/整理去哪"，**不会自动搬已有文件**；根目录那批夹要用户主动点「一键整理」才移动。
 - A 阶段（下一步）：分类字段化、`涩图`→`R18`、`X图`→`普通`（名称可配置）、按规则重排与迁移。
+
+### 4.16 作品编辑选自定义作者不生效（2026-11-18，版本 `20261118a`）
+
+- **现象**：作品编辑里从下拉选已有的自定义作者，点保存提示成功，但作品仍是原作者；
+  作者管理里也搜不到某个自建的自定义作者。
+- **根因**：作者下拉只渲染名字，选中后只回填名字；保存时 `resolveAuthorInput` 按名字反查，
+  拿到 `local_xxx` 形式的 `author_id`。后端 `/api/library/update` 只认「纯数字 pixiv ID」
+  或「作者名」，非数字 `author_id` 两个分支都不进，被静默丢掉 —— 所以界面说保存成功、作者没变。
+  同名作者（自定义 Kloan 与 pixiv Kloan）光看名字也无法区分。
+- **修复**：
+  - `makeEditAuthorCombo` 的选项带 `data-id`，点选后写入 `input.dataset.authorId`；
+    用户再手打名字时（`input` 事件）清除，避免张冠李戴。
+  - `resolveAuthorInput(text, pickedId)` 优先用点选的 ID；作品编辑与批量编辑都传这个 ID。
+  - `/api/library/update` 与 `/api/library/batch-update` 接受**已存在**的非数字作者 ID；
+    不存在的 ID 返回 400，不再假装成功。
+- **验收**：T147（单条/批量/不存在 ID/前端接线），全量 **139/139**；
+  安装版已替换并重启（`/api/version` 前端 `20261118a`，`built_at 2026-11-18 02:30:18`）。
+- **历史数据**：`冯艺VonKunst` 在 `authors` 表里没有记录，磁盘只留 `冯艺VonKunst_local_f571b2433a31`
+  旧夹；作品 `ext_13e01bc59205adda` 现挂在 `Kloan`（113227553）名下，文件仍在旧夹。
+  需要用户确认这张图到底属于谁，再决定「恢复冯艺作者」还是「并入 Kloan 并清理旧夹」。
+  这类「只在磁盘上的孤儿作者夹」目前不会被自动补建，下一步做通用合并/修复入口时处理。
 
 
 
