@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118k`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118l`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261118k`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261118l`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -564,6 +564,10 @@
   标题行注明「按时间倒序 · 最多 12 条」；`/api/wallpaper/usage` 按
   `(artwork_id, page_num, source)` 去重，同一页的旧路径/重复设置只留最新一条。
 - **验收**：T153 增加补登记过滤/不覆盖真实记录/同页去重/前端对齐列断言，全量 **146/146**。
+- **2026-11-18 07:04（版本 `20261118l`）**：按用户要求，壁纸管理页**不再显示「最近设置」**
+  （移除 `#wf-usage`、`wallUsageHtml` 与 `.wf-usage*` 样式）。`/api/wallpaper/usage` 接口、
+  `wallpaper_usage` 表与「设为壁纸」登记**全部保留**，壁纸库统计继续用这些数据；
+  T153 改为断言页面上不再出现该区块。
 
 
 

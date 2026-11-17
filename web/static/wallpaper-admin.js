@@ -51,15 +51,13 @@ function wallOptions(el, options) {
 async function wallFilesLoad() {
   const seq = ++WFA.loading;
   try {
-    const [d, groups, usage] = await Promise.all([
+    const [d, groups] = await Promise.all([
       api('/api/wallpaper/files'),
       api('/api/wallpaper/groups'),
-      api('/api/wallpaper/usage?limit=20').catch(() => null),
     ]);
     if (seq !== WFA.loading) return;
     if (!d?.ok || !groups?.ok) throw new Error(d?.error || groups?.msg || '读取失败');
     WFD = d; WFA.groups = groups.items || [];
-    WFA.usage = (usage && usage.items) || [];
     const alive = new Set(d.items.map(x => x.name));
     [...WF_SEL].forEach(n => { if (!alive.has(n)) WF_SEL.delete(n); });
     const works = new Map();
@@ -72,28 +70,6 @@ async function wallFilesLoad() {
       `<option value="${g.id}">${esc(g.name)} · ${d.items.filter(x => x.group_id === g.id).length} 张</option>`).join(''));
     wallFilesPaint();
   } catch (e) { if (seq === WFA.loading) $('#wf-result').innerHTML = `<div class="hint err-text">${esc(e.message)}</div>`; }
-}
-
-const WALL_USAGE_SRC = { library: '图库原图', crop: '裁剪版', wall: '壁纸夹' };
-
-function wallUsageHtml(items) {
-  if (!items || !items.length) return '';
-  const rows = items.slice(0, 12).map(u => {
-    const src = WALL_USAGE_SRC[u.source] || u.source || '';
-    const art = u.artwork_id ? `作品 ${u.artwork_id}` : '未归属作品';
-    const page = u.page_num == null ? '' : ` · 第 ${Number(u.page_num) + 1} 张`;
-    const full = String(u.file_path || '');
-    const name = full.split(/[\\/]/).pop();
-    const when = String(u.used_at || '').replace('T', ' ').slice(0, 19);
-    return `<div class="wf-usage-row" title="${esc(full)}">
-      <span class="wf-usage-src wf-tag">${esc(src)}</span>
-      <span class="wf-usage-work">${esc(art + page)}</span>
-      <span class="wf-usage-name">${esc(name)}</span>
-      <time class="wf-usage-time">${esc(when)}</time>
-    </div>`;
-  }).join('');
-  return `<div class="wf-usage"><div class="wf-usage-head"><span>最近设置</span>
-    <span class="hint">按时间倒序 · 最多 12 条</span></div>${rows}</div>`;
 }
 
 function wallFilesCard(f) {
@@ -123,8 +99,6 @@ function wallFilesPaint() {
     ['重复图片', `${stats.dupes || 0} 组`, '同作品同页或内容一致的重复组'],
   ].map(([label, n, tip]) =>
     `<div class="stat-card" title="${esc(tip)}"><div class="num">${n}</div><div class="lbl">${label}</div></div>`).join('');
-  const ubox = $('#wf-usage');
-  if (ubox) ubox.innerHTML = wallUsageHtml(WFA.usage);
   const duplicateNames = new Set((d.groups || []).flatMap(g => g.files));
   const work = $('#wf-work-filter').value, group = $('#wf-group-filter').value;
   let list = (d.items || []).filter(f => {
