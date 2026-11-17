@@ -7450,6 +7450,16 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     # 只填了 pixiv 作者 ID → 联网补现用名 (否则库里作者名空, 显示裸 ID)
                     _fill_author_name_by_id(db, author_id)
                 fields["author_id"] = author_id
+            elif author_id:
+                # 已存在的自定义作者（local_/foreign_ 等非数字 ID）: 直接用选中身份。
+                # 以前这里只认纯数字或名字, 下拉选中的 local_xxx 被静默丢掉 ——
+                # 界面提示「已保存」但作者没变 (2026-11-18 用户实测)。
+                row = db.conn.execute(
+                    "SELECT 1 FROM authors WHERE author_id=?", (author_id,)).fetchone()
+                if row is None:
+                    return jsonify({"status": "error",
+                                    "message": f"作者不存在：{author_id}"}), 400
+                fields["author_id"] = author_id
             elif author_name:
                 fields["author_id"] = db.create_or_get_local_author(author_name)
             db.update_artwork(aid, **fields)
@@ -7492,6 +7502,14 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     db.upsert_author(author_id, author_name)
                 else:
                     _fill_author_name_by_id(db, author_id)
+                fields["author_id"] = author_id
+            elif author_id:
+                # 批量编辑同样要认已存在的自定义作者 ID（不能只认数字或名字）
+                row = db.conn.execute(
+                    "SELECT 1 FROM authors WHERE author_id=?", (author_id,)).fetchone()
+                if row is None:
+                    return jsonify({"status": "error",
+                                    "message": f"作者不存在：{author_id}"}), 400
                 fields["author_id"] = author_id
             elif author_name:
                 fields["author_id"] = db.create_or_get_local_author(author_name)

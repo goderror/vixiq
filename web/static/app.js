@@ -5072,26 +5072,30 @@ function makeEditAuthorCombo(input, list, onPick) {
       String(a.name || '').toLowerCase().includes(q) ||
       String(a.author_id || '').toLowerCase().includes(q) ||
       (a.aliases || []).some(x => String(x).toLowerCase().includes(q)));
+    // data-id: 同名作者（如自定义 Kloan 与 pixiv Kloan）光看名字分不清，
+    // 保存时必须带上选中的 author_id，不能只回填名字再按名字猜 (2026-11-18)。
     list.innerHTML = rows.slice(0, 80).map(a =>
-      `<div class="combo-item" data-v="${esc(a.name)}"><span class="c-label">${esc(a.name)}</span><span class="c-count">${a.count || ''}</span></div>`).join('')
+      `<div class="combo-item" data-v="${esc(a.name)}" data-id="${esc(a.author_id)}"><span class="c-label">${esc(a.name)}</span><span class="c-count">${a.count || ''}</span></div>`).join('')
       || '<div class="combo-empty">无匹配作者，可手动输入新名字</div>';
     list.classList.add('open');
   }
-  function pick(name) {
+  function pick(name, id) {
     if (!name) return;
     input.value = name;
+    // 记住选中的身份; 用户之后再手打名字时（input 事件）就清掉，避免张冠李戴
+    if (id) input.dataset.authorId = id; else delete input.dataset.authorId;
     list.classList.remove('open');
     input.focus();
-    if (onPick) onPick(name);
+    if (onPick) onPick(name, id);
   }
   input.addEventListener('focus', () => { input.select(); render(); });
   input.addEventListener('click', render);
-  input.addEventListener('input', render);
+  input.addEventListener('input', () => { delete input.dataset.authorId; render(); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { list.classList.remove('open'); input.blur(); }
     else if (e.key === 'Enter') {
       const first = list.querySelector('.combo-item');
-      if (first) pick(first.dataset.v);
+      if (first) pick(first.dataset.v, first.dataset.id);
     }
   });
   input.addEventListener('blur', () => setTimeout(() => list.classList.remove('open'), 120));
@@ -5100,13 +5104,13 @@ function makeEditAuthorCombo(input, list, onPick) {
     const it = e.target.closest('.combo-item');
     if (!it) return;
     e.preventDefault(); down = true;
-    pick(it.dataset.v);
+    pick(it.dataset.v, it.dataset.id);
     setTimeout(() => { down = false; }, 0);
   });
   list.addEventListener('click', (e) => {
     const it = e.target.closest('.combo-item');
     if (!it || down) return;
-    pick(it.dataset.v);
+    pick(it.dataset.v, it.dataset.id);
   });
 }
 
@@ -6472,7 +6476,8 @@ window.saveBatchEdit = async function () {
     : [...libSelected];
   const body = { ids };
   const on = k => $(`#lib-modal .be-chk[data-k="${k}"]`).checked;
-  if (on('author')) Object.assign(body, resolveAuthorInput($('#be-author').value));
+  if (on('author')) Object.assign(body, resolveAuthorInput(
+    $('#be-author').value, $('#be-author').dataset.authorId));
   if (on('type')) body.illust_type = parseInt($('#be-type').value, 10);
   if (on('r18')) body.is_r18 = parseInt($('#be-r18').value, 10);
   if (on('source')) body.source = $('#be-source').value;
@@ -6615,9 +6620,11 @@ async function deleteBackup(rel) {
 }
 
 // 作者输入解析: 「名字_ID」→ pixiv 作者; 纯数字 → pixiv ID; 已知名 → 该作者; 其他 → 本地作者
-function resolveAuthorInput(text) {
+// pickedId: 从下拉里点选的作者 ID（优先用，避免同名作者按名字取错）
+function resolveAuthorInput(text, pickedId) {
   const raw = String(text || '').trim();
   if (!raw) return {};
+  if (pickedId) return { author_id: String(pickedId) };
   const m = raw.match(/^(.+?)_(\d+)$/);
   if (m) return { author_name: m[1].trim(), author_id: m[2] };
   if (/^\d+$/.test(raw)) return { author_id: raw };
@@ -6828,7 +6835,8 @@ async function doSaveLibEdit(aid, body) {
 async function saveLibEdit(aid) {
   const tags = $$('#lib-tag-editor .tag.big').map(t => t.childNodes[0].textContent.trim());
   const urlEl = $('#lib-e-url');
-  const auth = resolveAuthorInput($('#lib-e-author').value);
+  const auth = resolveAuthorInput(
+    $('#lib-e-author').value, $('#lib-e-author').dataset.authorId);
   const body = {
     artwork_id: aid,
     title: $('#lib-e-title').value.trim(),
