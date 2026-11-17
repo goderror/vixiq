@@ -7100,42 +7100,7 @@ window.tidyHelpToggle = function (btn) {
   if (btn) btn.textContent = opened ? '❔ 收起' : '❔ 说明';
 };
 
-// 🏷️ 清理标题里的路径 (2026-11-18): 外部导入曾把标题写成「路径 / 文件名」。
-// 只去路径前缀、保留文件名；图库搜索本身也匹配 pages.local_path，路径关键词照样能定位。
-async function openTitleFixPreview() {
-  try {
-    const r = await api('/api/library/title-fix/preview');
-    const items = r.items || [];
-    if (!items.length) { toast('没有发现标题含路径的作品', 'ok'); return; }
-    const rows = items.slice(0, 50).map(it => `<tr>
-      <td class="mono">${esc(it.artwork_id)}</td>
-      <td class="hint" style="white-space:normal">${esc(it.old)}</td>
-      <td>${esc(it.new)}</td></tr>`).join('');
-    openLibModal(`🏷️ 清理标题（${items.length} 条）`, `
-      <div class="hint">这些作品的标题被写成了「路径 / 文件名」。清理只去掉路径前缀、保留文件名；
-        图库搜索仍会匹配文件路径，不影响用路径关键词定位。</div>
-      <div class="table-wrap"><table class="table lib-list"><thead><tr>
-        <th>作品</th><th>当前标题</th><th>清理后</th>
-      </tr></thead><tbody>${rows}</tbody></table></div>
-      ${items.length > 50 ? `<div class="hint">仅显示前 50 条，执行时会处理全部 ${items.length} 条。</div>` : ''}
-      <div class="modal-actions">
-        <button class="btn accent" onclick="applyTitleFix()">💾 清理这 ${items.length} 条</button>
-        <button class="btn ghost" onclick="closeLibModal()">取消</button>
-      </div>`, { lg: true });
-  } catch (e) { toast('读取标题失败: ' + e.message, 'err'); }
-}
-
-window.applyTitleFix = async function () {
-  try {
-    const r = await api('/api/library/title-fix/apply', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
-    const err = apiErr(r); if (err) throw new Error(err);
-    toast(`已清理 ${r.fixed} 条标题` + (r.backup ? '（数据库已自动备份）' : ''), 'ok');
-    closeLibModal();
-    loadLibrary(); loadLibFacets();
-  } catch (e) { toast('清理失败: ' + e.message, 'err'); }
-};
-
+// ============ 一键整理 (预览后执行) ============
 async function openTidyPreview() {
   try {
     // 「🪄 认领散落 pixiv 页」并入一键整理 (去掉独立按钮):
@@ -8311,7 +8276,6 @@ function bind() {
 
   $('#lib-backup').addEventListener('click', openBackupCenter);
   $('#lib-tidy-btn').addEventListener('click', openTidyPreview);
-  $('#lib-titlefix-btn').addEventListener('click', openTitleFixPreview);
   $('#lib-search-btn').addEventListener('click', searchLibrary);
   $('#lib-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchLibrary(); });
   // 图库搜索框小叉叉: 清空文本并回到第 1 页 (等同全部作品)

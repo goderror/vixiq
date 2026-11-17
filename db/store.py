@@ -1435,7 +1435,8 @@ class PixivDatabase:
         """把无 pixiv ID 的图库文件登记为「其他来源」占位作品, 纳入图库统一管理。
         ext ID = md5('ext|'+相对路径) 稳定键; source 由 guess_foreign_source 按
         路径启发式判定 (bilibili/twitter/ggac/danbooru/other)。
-        title=「文件夹名 / 文件名」便于辨认; 作者列留空归"未知"(反搜识别后可再归档)。
+        title=文件名 (不带文件夹路径 —— 路径是摆放信息, 不是作品标题; 2026-11-18 修)。
+        作者列留空归"未知"(反搜识别后可再归档)。
         已登记过则跳过。返回 ext_id 或 None(已存在)。"""
         import hashlib as _hl
         rel = str(rel).replace("\\", "/")
@@ -1453,8 +1454,8 @@ class PixivDatabase:
         source = guess_foreign_source(rel)
         parsed = parse_foreign_account(rel)
         source_author = parsed[1] if parsed else None
-        folder = p.parent.as_posix()
-        title = f"{folder} / {stem}" if folder not in (".", "") else stem
+        # 标题只写文件名: 文件夹路径是磁盘摆放信息, 写进标题会让图库显示成路径。
+        title = stem
         # 时间戳统一为 UTC + 空格格式, 与 schema 的 DEFAULT datetime('now') 对齐
         # (旧实现用本地时间的 isoformat() → 既差 8 小时又带 'T', 与其它作品混排时
         #  「按入库排序」错乱; 2026-09-16 回填取证时发现 99 条此类历史数据)
@@ -2128,10 +2129,9 @@ class PixivDatabase:
         return (cur.rowcount or 0) > 0
 
     def refresh_ext_titles(self) -> int:
-        """把 ext_ 外来作品的标题从「注册时快照」刷新为当前实际文件夹/文件名
-        (文件被一键整理/同步/反搜归档移动后, 标题里的路径不再过期)。
-        只在标题仍是自动格式 (末尾 = 当前文件名) 时刷新, 用户手动改过的不动。
-        返回更新条数。"""
+        """把 ext_ 外来作品的标题刷新为当前实际文件名（不再写文件夹路径）。
+        只刷新自动格式（空标题 / 纯文件名 / 旧「路径 / 文件名」且文件名一致），
+        用户手动改过的标题不动。返回更新条数。"""
         n = 0
         rows = self.conn.execute(
             "SELECT artwork_id, title FROM artworks "
@@ -2146,13 +2146,12 @@ class PixivDatabase:
             if not rel:
                 continue
             p = Path(rel)
-            folder = p.parent.as_posix()
-            new_title = f"{folder} / {p.stem}" if folder not in (".", "") else p.stem
+            new_title = p.stem
             old = str(old_title or "")
-            # 只刷新自动格式: 标题为空, 或末尾是「/ 当前文件名」, 或就是纯文件名(注册时在根目录)
-            # —— 文件夹搬走但文件没改名; 用户手动改过的不动
-            if old != new_title and (not old or old.endswith(f"/ {p.stem}")
-                                     or old == p.stem):
+            # 只刷新自动格式: 空 / 纯文件名 / 旧「路径 / 文件名」（文件名与当前一致）
+            if old != new_title and (not old or old == p.stem
+                                     or old.endswith(f"/ {p.stem}")
+                                     or title_from_path_like(old) == p.stem):
                 self.conn.execute(
                     "UPDATE artworks SET title=? WHERE artwork_id=?", (new_title, aid))
                 n += 1
@@ -4475,34 +4474,6 @@ class PixivDatabase:
                 f"UPDATE artworks SET {sets}, updated_at=? WHERE artwork_id=?",
                 (*params, now_stamp(), artwork_id),
             )
-
-    def find_path_like_titles(self) -> list:
-        """找出标题被写成「路径 / 文件名」的作品（只读，供预览）。"""
-        rows = self.conn.execute(
-            "SELECT artwork_id, title FROM artworks WHERE title LIKE '% / %'").fetchall()
-        out = []
-        for r in rows:
-            old = str(r["title"] or "")
-            new = title_from_path_like(old)
-            if new and new != old:
-                out.append({"artwork_id": str(r["artwork_id"]), "old": old, "new": new})
-        out.sort(key=lambda x: x["artwork_id"])
-        return out
-
-    def fix_path_like_titles(self, ids: "list[str] | None" = None) -> list:
-        """把标题里的路径前缀去掉（保留文件名）。ids=None 处理全部候选。"""
-        items = self.find_path_like_titles()
-        if ids is not None:
-            want = {str(x) for x in ids if str(x)}
-            items = [x for x in items if x["artwork_id"] in want]
-        if not items:
-            return []
-        with self.conn:
-            for it in items:
-                self.conn.execute(
-                    "UPDATE artworks SET title=?, updated_at=? WHERE artwork_id=?",
-                    (it["new"], now_stamp(), it["artwork_id"]))
-        return items
 
     def list_all_tags(self) -> list[dict]:
         """全部标签 + 各标签作品数 (分类浏览/标签下拉用)。"""

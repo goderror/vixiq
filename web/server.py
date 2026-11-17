@@ -8839,34 +8839,6 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             p = db.backup_to_zip()
         return jsonify({"status": "ok", "path": str(p)})
 
-    @app.route("/api/library/title-fix/preview")
-    def api_library_title_fix_preview():
-        """预览「标题里的路径」清理（只读）。
-
-        外部导入曾把标题写成 `X图/#其他来源# / 文件名`。这里只列出会改成文件名的记录，
-        不写库；图库搜索本身也匹配 pages.local_path，清理后仍可按路径关键词定位。"""
-        with _db() as db:
-            items = db.find_path_like_titles()
-        return jsonify({"status": "ok", "items": items, "total": len(items)})
-
-    @app.route("/api/library/title-fix/apply", methods=["POST"])
-    def api_library_title_fix_apply():
-        """执行标题路径清理（先自动备份数据库，再只改命中记录）。"""
-        data = request.get_json(silent=True) or {}
-        ids = data.get("ids")
-        with _db() as db:
-            backup = None
-            try:
-                backup = str(db.backup_to_zip())
-            except Exception:
-                backup = None
-            fixed = db.fix_path_like_titles(ids)
-        if fixed:
-            audit_log.record("update", "清理标题中的路径",
-                             f"{len(fixed)} 个作品标题恢复为文件名", len(fixed))
-        return jsonify({"status": "ok", "fixed": len(fixed), "items": fixed,
-                        "backup": backup})
-
     @app.route("/api/library/tidy/preview", methods=["POST"])
     def api_library_tidy_preview():
         """一键整理预览: 扫描图库生成规范化计划 (不移动任何文件)。"""
