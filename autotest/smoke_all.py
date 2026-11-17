@@ -3049,6 +3049,7 @@ def run_suite() -> SuiteResult:
     suite.add("T146", "🗂 作者分类夹跟随: 同一作者已在 X图/涩图 下有夹时, 整理/下载不再在图库根另建一个 + 多分类按 R18 选 + 唯一分类直接跟随 (离线)", t146_author_section_follow)
     suite.add("T147", "✏️ 作品编辑选自定义作者: 下拉带 author_id + 后端接受已存在的非数字作者 ID（单条/批量）+ 不存在的 ID 明确报错 (隔离数据)", t147_custom_author_save)
     suite.add("T148", "🔗 改作者时同名身份合并: 自定义作者 → 同名 pixiv 作者可一键合并（作品迁移/作者行删除/文件夹改名/文件归位）+ 不合并只改这一张也会搬文件 + 不存在的合并 ID 报错 (隔离数据)", t148_author_merge_on_change)
+    suite.add("T149", "🛡 作者源头查重: 规范化名字（大小写/全半角/空白/零宽/宣传后缀）+ 同名 pixiv 存在时保存返回 409 让用户选复用/同名新建 + 同名自定义自动复用不重复建 (隔离数据)", t149_author_conflict_guard)
     suite.write_report()
     return suite
 
@@ -10382,7 +10383,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261118b" and _mss.group(1) == "20261118b", \
+    assert _mjs and _mss and _mjs.group(1) == "20261118c" and _mss.group(1) == "20261118c", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10477,7 +10478,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261118b', html) and _re.search(r'app\.js\?v=20261118b', html), \
+    assert _re.search(r'style\.css\?v=20261118c', html) and _re.search(r'app\.js\?v=20261118c', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10871,7 +10872,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261118b" in html and "app.js?v=20261118b" in html, \
+        assert "style.css?v=20261118c" in html and "app.js?v=20261118c" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13241,7 +13242,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261118b" in _h and "style.css?v=20261118b" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261118c" in _h and "style.css?v=20261118c" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13821,6 +13822,85 @@ def t148_author_merge_on_change() -> None:
             upaths.user_data = orig_ud
             if orig_img is not None:
                 wsrv._config["paths"]["img_subdir"] = orig_img
+
+
+def t149_author_conflict_guard() -> None:
+    """T149: 作者源头查重（2026-11-18）。
+
+    目标：不再等到作者管理里才发现重复。保存作品作者时：
+      ① 同名判断用规范化名字（大小写/全半角/空白/零宽/宣传后缀都不算新名字）；
+      ② 库里已有同名 pixiv 作者 → 409 + 候选，前端让用户选「复用 / 同名但另一人」；
+      ③ 同名自定义作者 → 直接复用，不重复建；
+      ④ 显式 force_new_author 才允许同名新建，且 ID 不会撞回原记录。
+    """
+    import tempfile
+    import utils.paths as upaths
+    from db.store import PixivDatabase, WSt
+    from utils.author_naming import normalize_author_name
+    import web.server as wsrv
+
+    # ① 规范化比较
+    assert normalize_author_name("Kloan") == normalize_author_name("ｋｌｏａｎ")
+    assert normalize_author_name("K loan") == "kloan"
+    assert normalize_author_name("Kloan\u200b") == "kloan"
+    assert normalize_author_name("Kloan@画集発売中") == "kloan"
+    assert normalize_author_name("冯艺 VonKunst") == normalize_author_name("冯艺VonKunst")
+
+    with tempfile.TemporaryDirectory(prefix="t149conflict_") as td:
+        tmp = Path(td)
+        orig_ud = upaths.user_data
+        upaths.user_data = lambda rel: tmp / str(rel)
+        try:
+            db = PixivDatabase(str(tmp / "pixiv.db"))
+            db.upsert_author("local_dup", "Kloan")          # 同名自定义
+            db.upsert_author("113227553", "Kloan")          # 同名 pixiv
+            db.upsert_author("local_other", "别人")
+            db.change_work_status("940001", WSt.DONE, title="a", total_pages=1)
+            db.change_work_status("940002", WSt.DONE, title="b", total_pages=1)
+            db.close()
+
+            client = wsrv.create_app().test_client()
+
+            # ② 同名 pixiv 存在 → 409 + 候选（不静默新建）
+            r = client.post("/api/library/update", json={
+                "artwork_id": "940001", "author_name": "kloan"})
+            j = r.get_json()
+            assert r.status_code == 409 and j.get("status") == "conflict", j
+            ids = {str(c["author_id"]) for c in j.get("conflicts") or []}
+            assert "113227553" in ids and "local_dup" in ids, j
+
+            # ③ 用户确认「同名但另一人」→ 允许新建，且 ID 不复用 local_dup
+            r = client.post("/api/library/update", json={
+                "artwork_id": "940001", "author_name": "Kloan", "force_new_author": True})
+            j = r.get_json()
+            assert r.status_code == 200 and j.get("status") == "ok", j
+            new_id = str(j.get("author_id") or "")
+            assert new_id and new_id != "local_dup", j
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                row = db2.conn.execute(
+                    "SELECT author_id FROM artworks WHERE artwork_id='940001'").fetchone()
+                assert row and str(row[0]) == new_id, row
+
+            # ④ 只有同名自定义作者 → 自动复用，不新建
+            r = client.post("/api/library/update", json={
+                "artwork_id": "940002", "author_name": "别人"})
+            j = r.get_json()
+            assert r.status_code == 200 and str(j.get("author_id")) == "local_other", j
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                n = db2.conn.execute(
+                    "SELECT COUNT(*) FROM authors WHERE name='别人'").fetchone()[0]
+                assert n == 1, f"同名自定义作者不应重复建: {n}"
+
+            # ⑤ 前端：冲突弹窗接线 + 手打名字不再前端自动匹配
+            js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+            for token in ("askAuthorConflict", "pickAuthorConflict",
+                          "force_new_author", "status === 'conflict'"):
+                assert token in js, f"前端缺少源头查重接线: {token}"
+            _fn = js.split("function resolveAuthorInput", 1)[1].split("\n}", 1)[0]
+            assert "facetData.authors.find" not in _fn, \
+                "手打名字不应再按名字自动匹配（同名要交给后端查重）"
+        finally:
+            upaths.user_data = orig_ud
 
 
 def main() -> int:

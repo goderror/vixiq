@@ -9,6 +9,7 @@
 """
 
 import re
+import unicodedata
 from pathlib import Path
 
 # 分类夹名关键词 (2026-11-18): 作者夹可能被用户手工分到 X图 / 涩图(R18) 等子目录。
@@ -231,4 +232,16 @@ def pick_default_section(sections, is_r18):
     hints = R18_SECTION_HINTS if is_r18 else GENERAL_SECTION_HINTS
     hits = [n for n in names if any(h in n.lower() for h in hints)]
     return hits[0] if len(hits) == 1 else None
+
+
+def normalize_author_name(name: str) -> str:
+    """用于查重的规范化名字：全半角统一、去空白/零宽、去宣传后缀与污染括号、转小写。
+
+    只用于判断「看起来是不是同一个名字」，不写回数据库、不改显示名。
+    同名不等于同一人，查重结果只用于提示/让用户确认，绝不自动合并。
+    """
+    s = POLLUTE_PAREN.sub("", strip_promo(str(name or "")) or "")
+    s = unicodedata.normalize("NFKC", s)
+    s = re.sub(r"[\s\u200b-\u200d\ufeff\u3164\u00a0\u3000]+", "", s)
+    return s.strip().lower()
 

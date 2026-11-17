@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from utils import paths
+from utils.author_naming import normalize_author_name
 from utils.config import load_config
 from utils.reporter import PrintReporter, Reporter
 
@@ -1793,26 +1794,60 @@ class PixivDatabase:
     # 手动维护: 本地作者 (非 pixiv 作者, 如 danbooru 画师/已注销查无 ID)
     # ==================================================================
     def _find_author_by_name_or_alias(self, name: str) -> "str | None":
-        """按现用名 / 曾用名找同一个人 (不区分大小写)。作者改名后仍能找回原记录,
-        不会因为"显示名变了"再建一条新作者。"""
-        n = str(name or "").strip().lower()
+        """按现用名 / 曾用名找同一个人 (规范化比较: 大小写/全半角/空白/宣传后缀)。
+
+        作者改名后仍能找回原记录, 不会因为"显示名变了"再建一条新作者。"""
+        n = normalize_author_name(name)
         if not n:
             return None
         for r in self.conn.execute(
                 "SELECT author_id, name, aliases_json FROM authors"):
-            if str(r["name"] or "").strip().lower() == n:
+            if normalize_author_name(r["name"]) == n:
                 return str(r["author_id"])
             try:
                 al = json.loads(r["aliases_json"] or "[]") or []
             except Exception:
                 al = []
-            if any(str(x).strip().lower() == n for x in al):
+            if any(normalize_author_name(x) == n for x in al):
                 return str(r["author_id"])
         return None
 
+    def find_author_conflicts(self, name: str, exclude_id: "str | None" = None) -> list:
+        """查「同名/同别名」的其他作者（源头查重用）。
+
+        返回 [{author_id, name, is_pixiv, count, match}]。同名不等于同一人，
+        调用方只把它当提示，让用户选择复用/新建/合并，**绝不自动合并**。
+        """
+        n = normalize_author_name(name)
+        if not n:
+            return []
+        out = []
+        rows = self.conn.execute(
+            "SELECT au.author_id, au.name, au.aliases_json, COUNT(a.artwork_id) AS count "
+            "  FROM authors au LEFT JOIN artworks a ON a.author_id = au.author_id "
+            " GROUP BY au.author_id").fetchall()
+        for r in rows:
+            aid = str(r["author_id"])
+            if exclude_id and aid == str(exclude_id):
+                continue
+            try:
+                al = json.loads(r["aliases_json"] or "[]") or []
+            except Exception:
+                al = []
+            hit = "name" if normalize_author_name(r["name"]) == n else ""
+            if not hit and any(normalize_author_name(x) == n for x in al):
+                hit = "alias"
+            if hit:
+                out.append({"author_id": aid, "name": str(r["name"] or ""),
+                            "is_pixiv": aid.isdigit(), "count": int(r["count"] or 0),
+                            "match": hit})
+        out.sort(key=lambda x: (0 if x["is_pixiv"] else 1, -x["count"]))
+        return out
+
     def create_or_get_local_author(self, name: str, status: "str | None" = None,
                                    source: "str | None" = None,
-                                   handle: "str | None" = None) -> str:
+                                   handle: "str | None" = None,
+                                   force_new: bool = False) -> str:
         """找/建一条**外来源作者**记录 (danbooru/推特/artstation 等, 或 pixiv 已注销查无 ID)。
 
         身份定序 (2026-09-14 修: 同一人被拆成两条记录):
@@ -1822,6 +1857,7 @@ class PixivDatabase:
           ② 只给名字 → 先按**现用名/曾用名**找已存在作者 → 复用 (改名后不再分叉);
           ③ 都没有 → 按名字建 (`local_` + md5(名字)[:12], 原行为)。
         有账号而显示名不可辨认时用账号当名字 (账号至少可读可搜)。
+        force_new=True 只跳过 ② 的名字复用 —— 用户明确确认「同名但确实是另一个人」时才用。
         返回 author_id。"""
         nm = str(name or "").strip()
         src = str(source or "").strip()
@@ -1850,16 +1886,33 @@ class PixivDatabase:
             return _ensure(foreign_author_id(src, hd),
                            nm if folder_author_name_usable(nm) else hd)
 
-        hit = self._find_author_by_name_or_alias(nm)
-        if hit:
-            if status:
-                self.conn.execute(
-                    "UPDATE authors SET status=? WHERE author_id=?", (status, hit))
-                self.conn.commit()
-            return hit
+        if not force_new:
+            hit = self._find_author_by_name_or_alias(nm)
+            if hit:
+                if status:
+                    self.conn.execute(
+                        "UPDATE authors SET status=? WHERE author_id=?", (status, hit))
+                    self.conn.commit()
+                return hit
 
         import hashlib as _hl
+        # force_new: 同名不同人, 用「名字 + 现有条数」派生稳定但不同的 ID,
+        # 避免 md5(名字) 撞回同一个 local_ ID。
+        if force_new:
+            base = "local_" + _hl.md5(nm.encode("utf-8")).hexdigest()[:12]
+            aid = base
+            n = 1
+            while self.conn.execute(
+                    "SELECT 1 FROM authors WHERE author_id=?", (aid,)).fetchone():
+                n += 1
+                aid = f"{base}_{n}"
+            return _ensure(aid, nm)
         return _ensure("local_" + _hl.md5(nm.encode("utf-8")).hexdigest()[:12], nm)
+
+    def ensure_local_author(self, name: str, *, force_new: bool = False,
+                            **kw) -> str:
+        """源头创建自定义作者：默认优先复用同名/同别名作者，force_new 才建新。"""
+        return self.create_or_get_local_author(name, force_new=force_new, **kw)
 
     def set_artworks_author(self, artwork_ids: "list[str]", author_id: str) -> int:
         """批量把作品的作者改成指定 author_id (手动设置作者功能)。返回更新条数。"""

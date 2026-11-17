@@ -7466,7 +7466,20 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                                     "message": f"作者不存在：{author_id}"}), 400
                 fields["author_id"] = author_id
             elif author_name:
-                fields["author_id"] = db.create_or_get_local_author(author_name)
+                # 源头查重: 库里已有同名 pixiv 作者时不许默默新建自定义作者。
+                # 同名不等于同一人, 返回 409 让用户选「复用 pixiv / 确认新建 / 取消」。
+                _conf = db.find_author_conflicts(author_name)
+                _pixivs = [c for c in _conf if c["is_pixiv"]]
+                _force_new = bool(data.get("force_new_author"))
+                if _pixivs and not _force_new:
+                    return jsonify({
+                        "status": "conflict",
+                        "message": f"库里已有同名作者：{_pixivs[0]['name']}"
+                                   f"（pixiv {_pixivs[0]['author_id']}）",
+                        "conflicts": _conf,
+                    }), 409
+                fields["author_id"] = db.ensure_local_author(
+                    author_name, force_new=_force_new)
             if merge_from and fields.get("author_id") \
                     and merge_from != fields["author_id"]:
                 # 用户确认「自定义作者与 pixiv 作者是同一个人」→ 整个身份并过去
@@ -7555,7 +7568,19 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                                     "message": f"作者不存在：{author_id}"}), 400
                 fields["author_id"] = author_id
             elif author_name:
-                fields["author_id"] = db.create_or_get_local_author(author_name)
+                # 批量编辑同样源头查重（显式 force_new_author 才允许同名新建）
+                _conf = db.find_author_conflicts(author_name)
+                _pixivs = [c for c in _conf if c["is_pixiv"]]
+                _force_new = bool(data.get("force_new_author"))
+                if _pixivs and not _force_new:
+                    return jsonify({
+                        "status": "conflict",
+                        "message": f"库里已有同名作者：{_pixivs[0]['name']}"
+                                   f"（pixiv {_pixivs[0]['author_id']}）",
+                        "conflicts": _conf,
+                    }), 409
+                fields["author_id"] = db.ensure_local_author(
+                    author_name, force_new=_force_new)
             # 标签三策略: 替换 / 追加(去重) / 清空
             if tags is not None or tag_mode == "clear":
                 tag_list = [str(t).strip() for t in (tags or []) if str(t).strip()]

@@ -6486,12 +6486,17 @@ window.saveBatchEdit = async function () {
     body.tags = $('#be-tags').value.split(/[,，、;；\s]+/).map(s => s.trim()).filter(Boolean);
   }
   if (Object.keys(body).length <= 1) { toast('请至少勾选一个要修改的字段', 'err'); return; }
-  try {
-    const r = await api('/api/library/batch-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const submit = async (b) => {
+    const r = await api('/api/library/batch-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+    if (r && r.status === 'conflict') {
+      askAuthorConflict(r.conflicts || [], b, submit);
+      return;
+    }
     toast(`已更新 ${r.updated} 个作品 ✓${r.name ? '（作者：' + r.name + '）' : ''}`, 'ok');
     libSelected.clear();    // 批量操作完成后清空选择 (避免残留勾选误导后续操作)
     closeLibModal(); loadLibrary(); loadStats(); loadLibFacets();
-  } catch (e) { toast('批量编辑失败: ' + e.message, 'err'); }
+  };
+  try { await submit(body); } catch (e) { toast('批量编辑失败: ' + e.message, 'err'); }
 };
 
 // ---- 弹窗: 编辑作品 / 编辑标签 ----
@@ -6619,8 +6624,9 @@ async function deleteBackup(rel) {
   } catch (e) { toast('删除失败: ' + e.message, 'err'); }
 }
 
-// 作者输入解析: 「名字_ID」→ pixiv 作者; 纯数字 → pixiv ID; 已知名 → 该作者; 其他 → 本地作者
-// pickedId: 从下拉里点选的作者 ID（优先用，避免同名作者按名字取错）
+// 作者输入解析: 「名字_ID」→ pixiv 作者; 纯数字 → pixiv ID; 其他 → 交给后端查重。
+// pickedId: 从下拉里点选的作者 ID（优先用，避免同名作者按名字取错）。
+// 手打名字不再在前端按名字自动匹配 —— 同名可能是不同人，必须让后端返回候选、用户确认。
 function resolveAuthorInput(text, pickedId) {
   const raw = String(text || '').trim();
   if (!raw) return {};
@@ -6628,8 +6634,6 @@ function resolveAuthorInput(text, pickedId) {
   const m = raw.match(/^(.+?)_(\d+)$/);
   if (m) return { author_name: m[1].trim(), author_id: m[2] };
   if (/^\d+$/.test(raw)) return { author_id: raw };
-  const hit = facetData.authors.find(a => a.name.toLowerCase() === raw.toLowerCase());
-  if (hit) return { author_id: hit.author_id };
   return { author_name: raw };
 }
 
@@ -6808,11 +6812,47 @@ window.pickAuthorCandidate = function (i) {
   applyAuthorCandidate(c, ctx.aid, ctx.saveBody);
 };
 
+// 同名作者冲突: 后端 409 返回候选，让用户明确选「复用已有」还是「同名但另一人」。
+// 这是源头防线 —— 保存时拦住，不留到作者管理里事后补救。
+function askAuthorConflict(conflicts, body, retry) {
+  const rows = (conflicts || []).map((c, i) =>
+    `<li>${esc(c.name)} <code>${esc(c.author_id)}</code>
+       <span class="tag">${c.is_pixiv ? 'pixiv' : '自定义'}</span> · ${c.count || 0} 作品
+       <button class="btn accent" onclick="pickAuthorConflict(${i})">复用这个</button></li>`).join('');
+  window._authorConflict = { conflicts: conflicts || [], body, retry };
+  openSrcModal('同名作者已存在', `
+    <div class="hint">库里已有同名作者。请确认是哪一位：</div>
+    <ul class="health-list">${rows || '<li>（无候选）</li>'}</ul>
+    <div class="btn-row">
+      <button class="btn ghost" onclick="pickAuthorConflict(-1)">同名但确实是另一位（新建自定义作者）</button>
+      <button class="btn ghost" onclick="closeSrcModal()">取消</button>
+    </div>`);
+}
+
+window.pickAuthorConflict = function (i) {
+  const p = window._authorConflict;
+  if (!p) return;
+  closeSrcModal();
+  const nb = Object.assign({}, p.body);
+  if (i >= 0) {
+    const c = p.conflicts[i];
+    nb.author_id = String(c.author_id);
+    delete nb.author_name;
+  } else {
+    nb.force_new_author = true;   // 用户确认「同名但另一人」，后端才允许新建
+  }
+  p.retry(nb);
+};
+
 // 真正落库 (单独拆出来: 「保存」和「先联网确认作者再保存」两条路都走这里)
 async function doSaveLibEdit(aid, body) {
   try {
     const r = await api('/api/library/update', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (r && r.status === 'conflict') {
+      askAuthorConflict(r.conflicts || [], body, (nb) => doSaveLibEdit(aid, nb));
+      return;
+    }
     const err = apiErr(r);
     if (err) throw new Error(err);
     const outAid = String(r.author_id || body.author_id || '');
