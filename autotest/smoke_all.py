@@ -3048,6 +3048,7 @@ def run_suite() -> SuiteResult:
     suite.add("T145", "📱 手机版自适应(高频路径): 底部导航与「更多」+ tabs 桌面/手机切换 + 2 列卡片 + 大图左右滑翻页/双指缩放 + 桌面样式不受影响 (离线静态)", t145_mobile_layout)
     suite.add("T146", "🗂 作者分类夹跟随: 同一作者已在 X图/涩图 下有夹时, 整理/下载不再在图库根另建一个 + 多分类按 R18 选 + 唯一分类直接跟随 (离线)", t146_author_section_follow)
     suite.add("T147", "✏️ 作品编辑选自定义作者: 下拉带 author_id + 后端接受已存在的非数字作者 ID（单条/批量）+ 不存在的 ID 明确报错 (隔离数据)", t147_custom_author_save)
+    suite.add("T148", "🔗 改作者时同名身份合并: 自定义作者 → 同名 pixiv 作者可一键合并（作品迁移/作者行删除/文件夹改名/文件归位）+ 不合并只改这一张也会搬文件 + 不存在的合并 ID 报错 (隔离数据)", t148_author_merge_on_change)
     suite.write_report()
     return suite
 
@@ -10381,7 +10382,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261118a" and _mss.group(1) == "20261118a", \
+    assert _mjs and _mss and _mjs.group(1) == "20261118b" and _mss.group(1) == "20261118b", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10476,7 +10477,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261118a', html) and _re.search(r'app\.js\?v=20261118a', html), \
+    assert _re.search(r'style\.css\?v=20261118b', html) and _re.search(r'app\.js\?v=20261118b', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10870,7 +10871,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261118a" in html and "app.js?v=20261118a" in html, \
+        assert "style.css?v=20261118b" in html and "app.js?v=20261118b" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13240,7 +13241,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261118a" in _h and "style.css?v=20261118a" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261118b" in _h and "style.css?v=20261118b" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -13735,6 +13736,91 @@ def t147_custom_author_save() -> None:
             assert js.count("dataset.authorId") >= 3, "编辑/批量保存都要带选中身份"
         finally:
             upaths.user_data = orig_ud
+
+
+def t148_author_merge_on_change() -> None:
+    """T148: 改作品作者时合并同名身份（2026-11-18）。
+
+    场景：作品原本挂在自定义作者「同名画师」下，用户改选同名的 pixiv 作者。
+    确认合并后要一次做完：作品/队列/曾用名并过去、作者行删除、磁盘文件夹改名、
+    文件归到 pixiv 作者夹；不合并时只改这一张，但文件也要跟着新作者走。
+    """
+    import tempfile
+    import utils.paths as upaths
+    from db.store import PixivDatabase, WSt, PSt
+    import web.server as wsrv
+
+    with tempfile.TemporaryDirectory(prefix="t148merge_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir(parents=True, exist_ok=True)
+        orig_ud = upaths.user_data
+        orig_img = wsrv._config["paths"].get("img_subdir")
+        upaths.user_data = lambda rel: tmp / str(rel)
+        wsrv._config["paths"]["img_subdir"] = "img"
+        try:
+            db = PixivDatabase(str(tmp / "pixiv.db"))
+            db.upsert_author("local_authorA", "同名画师")
+            db.upsert_author("local_authorB", "另一个画师")
+            db.upsert_author("777000", "同名画师")
+
+            def _work(aid, author_id, rel):
+                db.change_work_status(aid, WSt.DONE, title=aid, author_id=author_id,
+                                      total_pages=1)
+                p = img / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(b"x" * 16)
+                db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
+
+            # pixiv 作者已有一个分类夹（X图），合并后文件应归到这里
+            _work("930002", "777000", "X图/同名画师_777000/930002_p0.jpg")
+            _work("930001", "local_authorA", "同名画师_local_authorA/930001_p0.jpg")
+            _work("930003", "local_authorB", "另一个画师_local_authorB/930003_p0.jpg")
+            db.close()
+
+            client = wsrv.create_app().test_client()
+
+            # ① 确认合并：作品迁到 777000，自定义作者行删除，文件归位
+            r = client.post("/api/library/update", json={
+                "artwork_id": "930001", "author_id": "777000",
+                "merge_author_id": "local_authorA"})
+            j = r.get_json()
+            assert r.status_code == 200 and j.get("status") == "ok", j
+            assert j.get("merged") and int(j["merged"].get("artworks") or 0) >= 1, j
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                assert db2.get_author("local_authorA") is None, "合并后自定义作者行应删除"
+                row = db2.conn.execute(
+                    "SELECT author_id FROM artworks WHERE artwork_id='930001'").fetchone()
+                assert row and str(row[0]) == "777000", row
+            assert (img / "X图" / "同名画师_777000" / "930001_p0.jpg").is_file(), \
+                "合并后文件应归到 pixiv 作者夹"
+
+            # ② 不合并：只改这一张，作者行保留，但文件也要跟到新作者夹
+            r = client.post("/api/library/update", json={
+                "artwork_id": "930003", "author_id": "777000"})
+            j = r.get_json()
+            assert r.status_code == 200 and j.get("status") == "ok", j
+            assert int(j.get("files_gathered") or 0) >= 1, f"不合并也要搬文件: {j}"
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                assert db2.get_author("local_authorB") is not None, "不合并不得删除作者行"
+            assert (img / "X图" / "同名画师_777000" / "930003_p0.jpg").is_file(), \
+                "不合并时文件也要归到新作者夹"
+
+            # ③ 不存在的合并 ID → 明确报错
+            r = client.post("/api/library/update", json={
+                "artwork_id": "930001", "author_id": "777000",
+                "merge_author_id": "local_nope"})
+            assert r.status_code == 400, (r.status_code, r.get_json())
+
+            # ④ 前端：同名发现 + 确认弹窗 + merge_author_id 接线
+            js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+            for token in ("sameNameLocalAuthor", "askAuthorMerge", "confirmAuthorMerge",
+                          "merge_author_id", "只改这张，不合并"):
+                assert token in js, f"前端缺少合并流程: {token}"
+        finally:
+            upaths.user_data = orig_ud
+            if orig_img is not None:
+                wsrv._config["paths"]["img_subdir"] = orig_img
 
 
 def main() -> int:

@@ -6698,6 +6698,7 @@ async function openLibEdit(aid) {
   $('#lib-e-source').addEventListener('change', e => onSourceCustom(e.target));
   makeEditAuthorCombo($('#lib-e-author'), $('#lib-e-author-combo'));
   makeEditTagSuggest($('#lib-tag-input'), $('#lib-tag-combo'));
+  window._libEditW = w;   // 保存时判断「自定义作者 → 同名 pixiv 作者」是否需要合并
 }
 
 // 「作品页已失效」标记的人工纠正 (客观事实自动来自 404; 这里给一条纠错路径)
@@ -6816,7 +6817,14 @@ async function doSaveLibEdit(aid, body) {
     if (err) throw new Error(err);
     const outAid = String(r.author_id || body.author_id || '');
     const isPixiv = /^\d+$/.test(outAid);
-    if (r.name) {
+    if (r.merged) {
+      const m = r.merged;
+      toast(`已合并作者 ✓ 迁移 ${m.artworks || 0} 个作品`
+        + (m.folder_renamed ? '，文件夹已改名' : '')
+        + (m.files_gathered ? `，${m.files_gathered} 个文件已归位` : ''), 'ok');
+    } else if (r.files_gathered) {
+      toast(`已保存 ✓ 文件已归位 ${r.files_gathered} 个`, 'ok');
+    } else if (r.name) {
       toast(`已保存 ✓（作者：${r.name}${isPixiv ? ' · pixiv ' + outAid : ' · 自定义作者'}）`, 'ok');
     } else if (isPixiv) {
       // 只关联了 ID、名字还没拿到: 说清楚去哪补, 别让用户以为"没生效"
@@ -6847,6 +6855,9 @@ async function saveLibEdit(aid) {
     tags,
     ...auth,
   };
+  // 从自定义作者切到同名的 pixiv 作者 → 先问"是不是同一个人"，别静默留下两个身份
+  const mergeFrom = sameNameLocalAuthor(window._libEditW, auth);
+  if (mergeFrom) { askAuthorMerge(aid, body, mergeFrom); return; }
   // 只写了一个库里没有的名字 → 先问"这位是 pixiv 作者吗", 别默默建成自定义作者
   if (auth.author_name && !auth.author_id) {
     const nm = String(auth.author_name).toLowerCase();
@@ -6856,6 +6867,51 @@ async function saveLibEdit(aid) {
   }
   await doSaveLibEdit(aid, body);
 }
+
+// 当前作品挂在自定义作者下，而新选的是同名的 pixiv 作者 → 返回自定义作者 ID。
+// 同名不等于同一人，所以只负责"发现"，合并必须用户点确认。
+function sameNameLocalAuthor(w, auth) {
+  if (!w || !auth || !auth.author_id) return '';
+  const target = String(auth.author_id);
+  if (!/^\d+$/.test(target)) return '';
+  const cur = String(w.author_id || '');
+  if (!cur || /^\d+$/.test(cur)) return '';
+  const curA = (facetData.authors || []).find(a => String(a.author_id) === cur);
+  if (!curA) return '';
+  const tgtA = (facetData.authors || []).find(a => String(a.author_id) === target);
+  const curName = String(curA.name || '').trim().toLowerCase();
+  const tgtName = String((tgtA && tgtA.name) || auth.author_name || '').trim().toLowerCase();
+  return (curName && curName === tgtName) ? cur : '';
+}
+
+function askAuthorMerge(aid, body, mergeFrom) {
+  const curA = (facetData.authors || []).find(a => String(a.author_id) === mergeFrom) || {};
+  const tgtA = (facetData.authors || []).find(a => String(a.author_id) === String(body.author_id)) || {};
+  window._pendingAuthorMerge = { aid, body, mergeFrom };
+  openSrcModal('作者身份合并', `
+    <div class="hint">当前作品挂在自定义作者「<b>${esc(curA.name || mergeFrom)}</b>」下，
+      新选的是同名 pixiv 作者「<b>${esc(tgtA.name || body.author_id)}</b>」。<br>
+      · <b>是同一人</b> → 合并：自定义作者名下所有作品、曾用名和链接迁到 pixiv 作者，磁盘文件夹一起改名；<br>
+      · <b>不是同一人</b> → 只改这一张图，不合并。</div>
+    <div class="btn-row">
+      <button class="btn accent" onclick="confirmAuthorMerge()">🔗 是同一人，合并</button>
+      <button class="btn ghost" onclick="confirmAuthorMergeNo()">只改这张，不合并</button>
+      <button class="btn ghost" onclick="closeSrcModal()">取消</button>
+    </div>`);
+}
+
+window.confirmAuthorMerge = function () {
+  const p = window._pendingAuthorMerge;
+  if (!p) return;
+  closeSrcModal();
+  doSaveLibEdit(p.aid, Object.assign({}, p.body, { merge_author_id: p.mergeFrom }));
+};
+window.confirmAuthorMergeNo = function () {
+  const p = window._pendingAuthorMerge;
+  if (!p) return;
+  closeSrcModal();
+  doSaveLibEdit(p.aid, p.body);
+};
 
 async function openLibTags(aid) {
   let w;

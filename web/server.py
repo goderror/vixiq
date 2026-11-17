@@ -7441,7 +7441,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         fields = {k: v for k, v in data.items() if k != "artwork_id"}
         author_id = str(fields.pop("author_id", "") or "").strip()
         author_name = str(fields.pop("author_name", "") or "").strip()
+        merge_from = str(data.get("merge_author_id") or "").strip()
+        merge_res = None
+        files_gathered = 0
         with _db() as db:
+            old_meta = db.get_artwork_metadata(aid) or {}
+            old_author = str(old_meta.get("author_id") or "")
             # 作者: 纯数字=pixiv ID; 给名字=本地作者 (danbooru/已注销), 同名 pixiv 作者自动复用
             if author_id.isdigit():
                 if author_name:
@@ -7462,18 +7467,56 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 fields["author_id"] = author_id
             elif author_name:
                 fields["author_id"] = db.create_or_get_local_author(author_name)
+            if merge_from and fields.get("author_id") \
+                    and merge_from != fields["author_id"]:
+                # 用户确认「自定义作者与 pixiv 作者是同一个人」→ 整个身份并过去
+                # (作品/队列/曾用名/链接), 再做磁盘收尾。同名绝不自动合并, 必须显式传。
+                if db.get_author(merge_from) is None:
+                    return jsonify({"status": "error",
+                                    "message": f"要合并的作者不存在：{merge_from}"}), 400
+                merge_res = db.merge_author_into(merge_from, fields["author_id"])
             db.update_artwork(aid, **fields)
             name = None
             if fields.get("author_id"):
                 row = db.conn.execute(
                     "SELECT name FROM authors WHERE author_id=?", (fields["author_id"],)).fetchone()
                 name = row[0] if row else author_name
+            if merge_res:
+                dst_name = str((db.get_author(fields["author_id"]) or {}).get("name")
+                               or author_name or name or "")
+                try:
+                    merge_res["folder_renamed"] = _sync_author_folder(
+                        db, fields["author_id"], dst_name, old_id=merge_from)
+                except Exception:
+                    merge_res["folder_renamed"] = 0
+                try:
+                    _g = _gather_works_into_author_folder(
+                        db, merge_res.get("artwork_ids") or [])
+                    merge_res["files_gathered"] = int(_g.get("moved") or 0)
+                    merge_res["gather_failed"] = _g.get("failed") or []
+                except Exception as e:
+                    merge_res["files_gathered"] = 0
+                    merge_res["gather_failed"] = [f"{type(e).__name__}: {e}"]
+            elif fields.get("author_id") and old_author \
+                    and old_author != fields["author_id"]:
+                # 只改这一张、不合并: 文件也要跟着新作者走, 不能只改库
+                try:
+                    _g = _gather_works_into_author_folder(db, [aid])
+                    files_gathered = int(_g.get("moved") or 0)
+                except Exception:
+                    files_gathered = 0
         audit_log.record("update", "编辑作品",
-                         f"{_labels_inline([aid])} 改动字段: {', '.join(fields) or '(无)'}",
+                         f"{_labels_inline([aid])} 改动字段: {', '.join(fields) or '(无)'}"
+                         + (f"（合并作者 {merge_from} → {fields.get('author_id')}）"
+                            if merge_res else ""),
                          1, ids=[aid])
         # 回author_id: 前端据此说明"已关联到 pixiv 作者 ID"(名字可能还没联网补上)
-        return jsonify({"status": "ok", "name": name,
-                        "author_id": fields.get("author_id")})
+        out = {"status": "ok", "name": name, "author_id": fields.get("author_id")}
+        if merge_res:
+            out["merged"] = merge_res
+        if files_gathered:
+            out["files_gathered"] = files_gathered
+        return jsonify(out)
 
     @app.route("/api/library/batch-update", methods=["POST"])
     def api_library_batch_update():
