@@ -214,10 +214,10 @@
   // 只累计距离还不够「像下拉刷新」—— 必须让列表跟着手指/滚轮往下走一段,
   // 到阈值才展开, 没到就弹回去 (2026-11-17 用户反馈"没有阻力")。
   var RESULT_IDS = { library: 'lib-result', authors: 'authors-result', wallpapers: 'wf-result' };
-  var PULL_DAMP = 0.5;        // 阻尼: 累计 100px 只位移 50px
-  var PULL_MAX_OFF = 72;      // 视觉位移上限
-  var PULL_WHEEL_NEED = 260;  // 滚轮: 约 3 格才展开 (一格 100px, 一格就开等于没有拖拽)
-  var PULL_TOUCH_NEED = 120;  // 触屏: 手指拉这么远即可
+  var PULL_DAMP = 0.4;        // 阻尼: 累计 100px 只位移 40px
+  var PULL_MAX_OFF = 120;     // 视觉位移上限 (4 格时刚好走满)
+  var PULL_WHEEL_NEED = 400;  // 滚轮: 约 4 格才展开 (一格 100px)
+  var PULL_TOUCH_NEED = 160;  // 触屏: 手指拉这么远即可
   var pullIdleTimer = 0;
 
   function pullResultEl() {
