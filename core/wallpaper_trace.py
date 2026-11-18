@@ -543,13 +543,23 @@ def trace_current_wallpaper(*, deep: bool = False, wall_path=_UNSET, db_factory=
     deep = deep or cached_deep is not None      # 算过一次就一直沿用, 界面不来回跳
     ww, wh = wallpaper_size(f)
     in_lib = (f == img_root) or (img_root in f.parents)
+    # root=img 的 /api/local-img 只认「相对 data/img 的路径」，壁纸夹才是夹内文件名。
+    # 只传文件名会让图库内的当前壁纸缩略图 404（2026-11-18 用户实测）。
+    rel = ""
+    if in_lib:
+        try:
+            rel = str(f.relative_to(img_root)).replace("\\", "/")
+        except ValueError:
+            rel = ""
+    thumb_p = rel if rel else f.name
     info = {
         "status": "ok", "active": True, "deep": deep,
         "file": {
             "name": f.name, "dir": str(f.parent), "path": str(f),
             "size": st.st_size, "mtime": int(st.st_mtime), "ext": f.suffix.lower(),
             "width": ww, "height": wh, "in_library": 1 if in_lib else 0,
-            "thumb": (f"/api/local-img?p={quote(f.name)}"
+            "rel": rel,
+            "thumb": (f"/api/local-img?p={quote(thumb_p)}"
                       f"&root={'img' if in_lib else 'wall'}&thumb=1"
                       f"&v={st.st_mtime_ns}-{st.st_size}"),
         },
@@ -562,9 +572,8 @@ def trace_current_wallpaper(*, deep: bool = False, wall_path=_UNSET, db_factory=
     # 壁纸夹里的位置 (第几张/共几张) —— 小控件底部那条进度线要用 (widget_window.folder_frac)
     _idx, _tot = wallpaper_position(f)
     info["folder"] = {"index": _idx, "total": _tot}
-    rel = aid = orb_rel = ""
+    aid = orb_rel = ""
     if in_lib:
-        rel = str(f.relative_to(img_root)).replace("\\", "/")
         info["match"].update(kind="library", confidence=1.0, rel=rel, exact=True)
 
     # ── 第一段 (需要 DB): 三条秒回的路 —— 文件在库内 / MD5 字节一致 / 文件名作品ID ──

@@ -846,7 +846,8 @@ function renderWallCard(d) {
   const f = d.file, m = d.match || {}, a = d.artwork, st = wallState(d);
   const r18 = a ? a.is_r18 : 0;
   const dim = (f.width && f.height) ? (f.width + '×' + f.height) : '尺寸未知';
-  wallImgUrl = '/api/local-img?p=' + encodeURIComponent(f.name)
+  // root=img 只认相对图库根的路径, root=wall 才是夹内文件名
+  wallImgUrl = '/api/local-img?p=' + encodeURIComponent(f.in_library && f.rel ? f.rel : f.name)
              + '&root=' + (f.in_library ? 'img' : 'wall');
   const srcTxt = wallSourceText(d);
   const pos = (d.folder && d.folder.index > 0 && d.folder.total)
