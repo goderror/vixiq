@@ -14297,19 +14297,19 @@ def t154_tidy_rmdir_safety() -> None:
             db.mark_page_status("980001", 0, PSt.DONE,
                                 local_path="作者甲_66/980001_p0.jpg")
             # 目标分类夹已存在但是空的；另有一个真正的空夹
-            (img / "X图" / "作者甲_66").mkdir(parents=True)
+            (img / "普通" / "作者甲_66").mkdir(parents=True)
             (img / "空夹_999").mkdir()
 
             plans = ws._tidy_build_plans(db, img)
             moves = {p["from"]: p["to"] for p in plans if p["type"] == "move"}
-            assert moves.get("作者甲_66") == "X图/作者甲_66", moves
+            assert moves.get("作者甲_66") == "普通/作者甲_66", moves
             rmdirs = {p["from"] for p in plans if p["type"] == "rmdir"}
-            assert "X图/作者甲_66" not in rmdirs, f"move 目标夹被列成空夹: {rmdirs}"
-            assert "X图" not in rmdirs, f"move 目标的上级被列成空夹: {rmdirs}"
+            assert "普通/作者甲_66" not in rmdirs, f"move 目标夹被列成空夹: {rmdirs}"
+            assert "普通" not in rmdirs, f"move 目标的上级被列成空夹: {rmdirs}"
             assert "空夹_999" in rmdirs, rmdirs
 
             ws._tidy_apply_plans(db, img)
-            assert (img / "X图" / "作者甲_66" / "980001_p0.jpg").is_file(), \
+            assert (img / "普通" / "作者甲_66" / "980001_p0.jpg").is_file(), \
                 "move 后文件被空夹清理误删"
             assert not (img / "空夹_999").exists(), "真正的空夹应被清理"
 
