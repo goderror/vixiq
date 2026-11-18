@@ -5310,6 +5310,134 @@ async function loadLibFacets() {
   } catch (e) { /* 静默 */ }
 }
 
+// ---- 标签维度 / 分区管理（2026-11-19）----
+let TAGCATS = [];
+
+async function openTagCategoryManager() {
+  try { TAGCATS = (await api('/api/tags/categories')).items || []; }
+  catch (e) { toast('读取标签维度失败: ' + e.message, 'err'); return; }
+  const rows = TAGCATS.map(c => `<tr data-cid="${esc(c.category_id)}">
+      <td><input class="tagcat-name" value="${esc(c.name)}" style="width:100px"></td>
+      <td><input class="tagcat-dir" value="${esc(c.dir_name || '')}" placeholder="不绑定" style="width:110px"></td>
+      <td><input class="tagcat-sort" type="number" value="${Number(c.sort_order) || 0}" style="width:56px"></td>
+      <td>${c.tag_count}</td>
+      <td><button class="btn ghost" onclick="saveTagCategory('${esc(c.category_id)}')">保存</button>
+        ${c.category_id === 'uncategorized' ? ''
+          : `<button class="btn danger" onclick="deleteTagCategory('${esc(c.category_id)}')">删除</button>`}</td>
+    </tr>`).join('');
+  const opts = TAGCATS.map(c =>
+    `<option value="${esc(c.category_id)}">${esc(c.name)} · ${c.tag_count}</option>`).join('');
+  openLibModal('🏷️ 标签维度与分区', `
+    <p class="hint">维度绑定目录后，作品会按命中的标签维度落到对应分区目录；不绑定目录的维度只用于筛选。</p>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>显示名</th><th>分区目录</th><th>排序</th><th>标签数</th><th>操作</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="field-row" style="margin-top:8px">
+      <input id="tagcat-new-id" placeholder="维度 ID（英文）" style="width:130px">
+      <input id="tagcat-new-name" placeholder="显示名" style="width:100px">
+      <input id="tagcat-new-dir" placeholder="分区目录（可空）" style="width:130px">
+      <button class="btn" onclick="createTagCategory()">新增维度</button>
+    </div>
+    <h4 style="margin:12px 0 6px">标签归类</h4>
+    <div class="field-row">
+      <select id="tagcat-filter" onchange="loadTagCategoryTags()">
+        <option value="">全部标签</option>${opts}
+      </select>
+      <input id="tagcat-search" placeholder="搜索标签名" style="width:180px">
+      <button class="btn ghost" onclick="loadTagCategoryTags()">搜索</button>
+    </div>
+    <div id="tagcat-tags" class="hint">加载中…</div>
+  `, { lg: true });
+  loadTagCategoryTags();
+}
+
+async function loadTagCategoryTags() {
+  const cid = ($('#tagcat-filter') || {}).value || '';
+  const q = ($('#tagcat-search') || {}).value || '';
+  const box = $('#tagcat-tags');
+  if (!box) return;
+  let items = [];
+  try {
+    items = (await api('/api/tags?limit=100&category_id=' + encodeURIComponent(cid)
+      + '&q=' + encodeURIComponent(q))).items || [];
+  } catch (e) {
+    box.innerHTML = `<div class="hint err-text">${esc(e.message)}</div>`;
+    return;
+  }
+  box.innerHTML = items.length ? items.map(t => {
+    const checks = TAGCATS.map(c => `<label class="tagcat-pick"><input type="checkbox"
+        data-cat="${esc(c.category_id)}" ${t.categories.includes(c.category_id) ? 'checked' : ''}
+        onchange="setTagCategories(${t.tag_id}, this)"> ${esc(c.name)}</label>`).join('');
+    return `<div class="tagcat-row"><span class="tagcat-tag">${esc(t.tag_name)}
+      <span class="muted">${t.count}</span></span><span class="tagcat-cats">${checks}</span></div>`;
+  }).join('') : '<div class="hint">没有匹配的标签</div>';
+}
+
+async function setTagCategories(tagId, el) {
+  const row = el.closest('.tagcat-row');
+  const ids = [...row.querySelectorAll('input[type=checkbox]:checked')].map(x => x.dataset.cat);
+  try {
+    const r = await api('/api/tags/' + tagId + '/categories', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category_ids: ids }),
+    });
+    if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
+  } catch (e) { toast('保存标签维度失败: ' + e.message, 'err'); }
+}
+
+async function saveTagCategory(cid) {
+  const tr = $(`#lib-modal-body tr[data-cid="${cid}"]`);
+  if (!tr) return;
+  const body = {
+    name: tr.querySelector('.tagcat-name').value.trim(),
+    dir_name: tr.querySelector('.tagcat-dir').value.trim(),
+    sort_order: Number(tr.querySelector('.tagcat-sort').value) || 0,
+  };
+  try {
+    const r = await api('/api/tags/categories/' + encodeURIComponent(cid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
+    toast('维度已保存', 'ok');
+    await openTagCategoryManager();
+  } catch (e) { toast('保存维度失败: ' + e.message, 'err'); }
+}
+
+async function createTagCategory() {
+  const body = {
+    category_id: $('#tagcat-new-id').value.trim(),
+    name: $('#tagcat-new-name').value.trim(),
+    dir_name: $('#tagcat-new-dir').value.trim(),
+  };
+  try {
+    const r = await api('/api/tags/categories', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r || !r.ok) throw new Error((r && r.msg) || '新增失败');
+    toast('维度已新增', 'ok');
+    await openTagCategoryManager();
+  } catch (e) { toast('新增维度失败: ' + e.message, 'err'); }
+}
+
+async function deleteTagCategory(cid) {
+  if (!confirm('删除这个维度？只有没有标签的空维度才能删除。')) return;
+  try {
+    const r = await api('/api/tags/categories/' + encodeURIComponent(cid), { method: 'DELETE' });
+    if (!r || !r.ok) throw new Error((r && r.msg) || '删除失败');
+    toast('维度已删除', 'ok');
+    await openTagCategoryManager();
+  } catch (e) { toast('删除维度失败: ' + e.message, 'err'); }
+}
+
+window.openTagCategoryManager = openTagCategoryManager;
+window.loadTagCategoryTags = loadTagCategoryTags;
+window.setTagCategories = setTagCategories;
+window.saveTagCategory = saveTagCategory;
+window.createTagCategory = createTagCategory;
+window.deleteTagCategory = deleteTagCategory;
+
 // 用 DB 实际来源(含自定义)重建图库+作者管理两个来源下拉; 保留当前选中值
 function rebuildSourceFilters(dbSources) {
   const merged = [];
@@ -8341,6 +8469,7 @@ function bind() {
   $('#lib-recent-btn').addEventListener('click', loadLibraryRecent);
   $('#lib-selfcheck-btn').addEventListener('click', runSelfCheck);
   $('#lib-src-manage').addEventListener('click', openSourceManager);
+  $('#lib-tagcat-manage').addEventListener('click', openTagCategoryManager);
   $$('#lib-view-toggle .view-btn').forEach(b => b.addEventListener('click', () => setLibView(b.dataset.view)));
   $$('#lib-data-toggle .view-btn').forEach(b => b.addEventListener('click', () => setLibDataView(b.dataset.view)));
 

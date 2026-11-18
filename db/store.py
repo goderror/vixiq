@@ -4607,6 +4607,123 @@ class PixivDatabase:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    # ---- 标签维度 / 分区（2026-11-19）----
+    def list_tag_categories(self) -> list[dict]:
+        """标签维度列表 + 每个维度下的标签数。dir_name 非空 = 该维度绑定为分区目录。"""
+        rows = self.conn.execute(
+            "SELECT c.category_id, c.name, c.dir_name, c.sort_order, c.status, "
+            "       (SELECT COUNT(*) FROM category_tags ct "
+            "         WHERE ct.category_id=c.category_id) AS tag_count "
+            "  FROM tag_categories c ORDER BY c.sort_order, c.category_id").fetchall()
+        return [dict(r) for r in rows]
+
+    def create_tag_category(self, category_id: str, name: str,
+                            dir_name: str = "", sort_order: int = 0) -> None:
+        cid = str(category_id or "").strip()
+        nm = str(name or "").strip()
+        if not cid or not re.fullmatch(r"[a-zA-Z0-9_\-]+", cid):
+            raise ValueError("维度 ID 只能包含字母、数字、下划线或短横线")
+        if not nm:
+            raise ValueError("维度名称不能为空")
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO tag_categories(category_id, name, dir_name, sort_order) "
+                "VALUES(?,?,?,?)", (cid, nm, str(dir_name or "").strip(), int(sort_order)))
+
+    def update_tag_category(self, category_id: str, *, name: "str | None" = None,
+                            dir_name: "str | None" = None,
+                            sort_order: "int | None" = None,
+                            status: "str | None" = None) -> None:
+        cid = str(category_id or "")
+        if not cid:
+            raise ValueError("缺少维度 ID")
+        fields, params = [], []
+        if name is not None:
+            nm = str(name).strip()
+            if not nm:
+                raise ValueError("维度名称不能为空")
+            fields.append("name=?")
+            params.append(nm)
+        if dir_name is not None:
+            dn = str(dir_name).strip().strip("/\\")
+            if dn and (dn in (".", "..") or "/" in dn or "\\" in dn):
+                raise ValueError("分区目录只能是单层目录名")
+            fields.append("dir_name=?")
+            params.append(dn)
+        if sort_order is not None:
+            fields.append("sort_order=?")
+            params.append(int(sort_order))
+        if status is not None:
+            st = str(status)
+            if st not in ("active", "disabled"):
+                raise ValueError("维度状态只能是 active / disabled")
+            fields.append("status=?")
+            params.append(st)
+        if not fields:
+            return
+        params.append(cid)
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE tag_categories SET {', '.join(fields)} WHERE category_id=?",
+                params)
+
+    def delete_tag_category(self, category_id: str) -> None:
+        cid = str(category_id or "")
+        if cid == "uncategorized":
+            raise ValueError("「未分类」维度不能删除")
+        n = self.conn.execute(
+            "SELECT COUNT(*) FROM category_tags WHERE category_id=?", (cid,)).fetchone()[0]
+        if n:
+            raise ValueError("该维度下还有标签，先把标签移走后才能删除")
+        with self.conn:
+            self.conn.execute("DELETE FROM tag_categories WHERE category_id=?", (cid,))
+
+    def assign_tag_categories(self, tag_id: int, category_ids) -> None:
+        """替换一个标签的维度归属；一个标签可以属于多个维度，至少归入「未分类」。"""
+        ids = [str(x) for x in (category_ids or []) if str(x).strip()]
+        if not ids:
+            ids = ["uncategorized"]
+        with self.conn:
+            self.conn.execute("DELETE FROM category_tags WHERE tag_id=?", (int(tag_id),))
+            for cid in ids:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO category_tags(category_id, tag_id) VALUES(?,?)",
+                    (cid, int(tag_id)))
+
+    def list_tags(self, category_id: str = "", q: str = "",
+                  limit: int = 500) -> list[dict]:
+        """按维度/关键词列标签（默认按使用次数倒序）。cats 是所属维度 ID 列表。"""
+        cid = str(category_id or "").strip()
+        kw = str(q or "").strip()
+        rows = self.conn.execute(
+            "SELECT t.tag_id, t.tag_name, t.tag_name_zh, t.tag_name_en, t.quality, "
+            "       (SELECT COUNT(*) FROM artwork_tags at WHERE at.tag_id=t.tag_id) AS count, "
+            "       (SELECT GROUP_CONCAT(ct.category_id) FROM category_tags ct "
+            "         WHERE ct.tag_id=t.tag_id) AS cats "
+            "  FROM tags t "
+            " WHERE (?='' OR EXISTS (SELECT 1 FROM category_tags ct "
+            "                          WHERE ct.tag_id=t.tag_id AND ct.category_id=?)) "
+            "   AND (?='' OR t.tag_name LIKE ?) "
+            " ORDER BY count DESC, t.tag_name LIMIT ?",
+            (cid, cid, kw, f"%{kw}%", max(1, int(limit)))).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["categories"] = [x for x in str(d.pop("cats") or "").split(",") if x]
+            out.append(d)
+        return out
+
+    def artwork_section_dir(self, artwork_id: str) -> str:
+        """按标签维度计算作品应落的分区目录；没有命中分区维度 → 空串（根目录）。"""
+        row = self.conn.execute(
+            "SELECT c.dir_name FROM artwork_tags at "
+            "JOIN category_tags ct ON ct.tag_id=at.tag_id "
+            "JOIN tag_categories c ON c.category_id=ct.category_id "
+            "WHERE at.artwork_id=? AND c.dir_name<>'' AND c.status='active' "
+            "ORDER BY c.sort_order, c.category_id LIMIT 1",
+            (str(artwork_id),)).fetchone()
+        return str(row["dir_name"]) if row else ""
+
     def list_sources(self) -> list[dict]:
         """图库实际用到的全部来源 + 各来源作品数 (筛选下拉/统计用, 含自定义来源)。"""
         rows = self.conn.execute(

@@ -1895,3 +1895,11 @@ body.ob-open { overflow: hidden; }
 /* ===== 作者管理: 重复作者分组 (2026-11-18) ===== */
 .author-dup-group { margin: 12px 0 16px; }
 .author-dup-name { font-weight: 600; margin-bottom: 6px; }
+
+/* ===== 标签维度 / 分区管理 (2026-11-19) ===== */
+.tagcat-row { display: flex; gap: 10px; align-items: center; padding: 4px 0;
+  border-top: 1px dashed var(--border); font-size: 12px; }
+.tagcat-row:first-child { border-top: none; }
+.tagcat-tag { min-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tagcat-cats { display: flex; flex-wrap: wrap; gap: 10px; }
+.tagcat-pick { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }

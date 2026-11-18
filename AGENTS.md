@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 146 用例，必须全过，2026-11-18 已 146/146 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 148 用例，必须全过，2026-11-19 已 148/148 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，146 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，148 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 146 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 148 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -625,7 +625,35 @@
   同步更新。复查 2188 页缺失 **0**、错位页 **0**；壁纸库仍 1180。
   说明：一键整理不会把作品从一个分类搬到另一个分类（它只保证「夹内/作者夹」正确），
   跨分类重排必须走这个专门脚本。
-- **未做**：分类管理 UI（改名/规则编辑）与图库分类筛选。
+- **未做**：分类管理 UI 方案已回退，改为「标签维度 + 分区」方案，见 §4.28。
+
+### 4.28 标签维度、标签清洗与分区绑定（2026-11-19，版本 `20261118q`）
+
+- **目录统一回根目录**：`普通/`、`R18/` 下 460 个顶层项、2193 个文件合并回
+  `F:\Vixiq\data\img\`，0 冲突；2188 页缺失 **0**；`library_sections.dir_name` 清空、
+  `artworks.section_id` 清空；备份 `F:\Vixiq\data\backups\root-merge-20261119-002619.db`。
+  `.old-涩图` 空目录被系统占用删不掉（点开头，不会被识别为分类目录）。
+- **标签清洗（真实库已执行）**：`_dev_runtime/diagnostics/clean_tags.py`
+  - 合并 20 组规范重复（22 个标签），保留频次最高者，迁移 `artwork_tags`。
+  - 删除 246 个噪音标签：`xxxxusers入り` 收藏数、单字符、纯数字/符号。
+  - 结果：2844 → **2576 个标签**，关联 10347 → **9026**；
+    备份 `F:\Vixiq\data\backups\tag-clean-20261119-002750.db`。
+- **迁移 027**：`tag_categories`（角色/风格/未分类，`dir_name` 为空=纯逻辑）、
+  `category_tags` 多对多（一个标签可属多个维度）、`tags` 增加 `quality` 与
+  `normalized_name`；现有标签全部先归入「未分类」。
+- **数据层**（`db/store.py`）：`list_tag_categories / create_tag_category /
+  update_tag_category / delete_tag_category / assign_tag_categories / list_tags /
+  artwork_section_dir`。分区计算取作品命中的分区维度（`dir_name` 非空）中
+  `sort_order` 最前的一个；未命中 → 根目录。
+- **接口**：`GET/POST /api/tags/categories`、`POST/DELETE /api/tags/categories/<cid>`、
+  `GET /api/tags?category_id=&q=`、`POST /api/tags/<tag_id>/categories`（多维度）。
+- **前端**：图库筛选行新增 🏷️ 按钮，弹窗内可新增/改名/绑定分区目录/排序/删除空维度，
+  并按维度勾选标签（多选即时保存）。维度绑定目录只是「分区配置」，
+  **按标签把文件搬进分区目录的迁移向导尚未做**。
+- **验收**：T156（数据层/多维度/分区计算/删除边界）、T157（接口与前端接线），
+  全量 **148/148**。
+- **未做**：分区应用向导（预览/备份/移动）、图库按标签维度筛选、来源字典迁移、
+  标签维度的批量归类。
 
 
 

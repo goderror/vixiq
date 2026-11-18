@@ -6012,6 +6012,71 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         with _db() as db:
             return jsonify({"count": db.count_missing_metadata()})
 
+    # ---------------- 🏷 标签维度 / 分区（2026-11-19） ----------------
+    @app.route("/api/tags/categories")
+    def api_tag_categories():
+        """标签维度列表（dir_name 非空 = 该维度绑定为分区目录）。"""
+        with _db() as db:
+            return jsonify({"ok": True, "items": db.list_tag_categories()})
+
+    @app.route("/api/tags/categories", methods=["POST"])
+    def api_tag_categories_create():
+        body = request.get_json(silent=True) or {}
+        try:
+            with _db() as db:
+                db.create_tag_category(
+                    body.get("category_id"), body.get("name"),
+                    body.get("dir_name") or "", int(body.get("sort_order") or 0))
+        except Exception as e:
+            return jsonify({"ok": False, "msg": str(e)}), 400
+        mark_dirty("artworks", "stats", "facets")
+        return jsonify({"ok": True})
+
+    @app.route("/api/tags/categories/<cid>", methods=["POST"])
+    def api_tag_categories_update(cid):
+        body = request.get_json(silent=True) or {}
+        try:
+            with _db() as db:
+                db.update_tag_category(
+                    cid, name=body.get("name"), dir_name=body.get("dir_name"),
+                    sort_order=body.get("sort_order"), status=body.get("status"))
+        except Exception as e:
+            return jsonify({"ok": False, "msg": str(e)}), 400
+        mark_dirty("artworks", "stats", "facets")
+        return jsonify({"ok": True})
+
+    @app.route("/api/tags/categories/<cid>", methods=["DELETE"])
+    def api_tag_categories_delete(cid):
+        try:
+            with _db() as db:
+                db.delete_tag_category(cid)
+        except Exception as e:
+            return jsonify({"ok": False, "msg": str(e)}), 400
+        mark_dirty("artworks", "stats", "facets")
+        return jsonify({"ok": True})
+
+    @app.route("/api/tags")
+    def api_tags():
+        """按维度/关键词列标签（带使用次数与所属维度）。"""
+        try:
+            limit = int(request.args.get("limit") or 100)
+        except Exception:
+            limit = 100
+        with _db() as db:
+            return jsonify({"ok": True, "items": db.list_tags(
+                request.args.get("category_id", ""), request.args.get("q", ""), limit)})
+
+    @app.route("/api/tags/<int:tag_id>/categories", methods=["POST"])
+    def api_tag_set_categories(tag_id):
+        body = request.get_json(silent=True) or {}
+        try:
+            with _db() as db:
+                db.assign_tag_categories(tag_id, body.get("category_ids") or [])
+        except Exception as e:
+            return jsonify({"ok": False, "msg": str(e)}), 400
+        mark_dirty("artworks", "facets")
+        return jsonify({"ok": True})
+
     @app.route("/api/library/items")
     def api_library_items():
         """图库通用查询: 筛选(q/类型/R18/作者/标签/缺元数据/缺文件) + 排序 + 分页。
