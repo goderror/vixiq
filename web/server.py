@@ -6012,36 +6012,6 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         with _db() as db:
             return jsonify({"count": db.count_missing_metadata()})
 
-    @app.route("/api/library/sections")
-    def api_library_sections():
-        """图库分类列表 + 每类作品数（分类筛选下拉与分类管理弹窗共用）。"""
-        with _db() as db:
-            items = db.list_sections()
-            counts = {str(r["sid"] or ""): int(r["n"] or 0) for r in db.conn.execute(
-                "SELECT COALESCE(section_id, '') AS sid, COUNT(*) AS n FROM artworks "
-                "WHERE trashed_at IS NULL GROUP BY sid")}
-        for it in items:
-            it["count"] = counts.get(str(it.get("section_id") or ""), 0)
-        return jsonify({"ok": True, "items": items, "none_count": counts.get("", 0)})
-
-    @app.route("/api/library/sections", methods=["POST"])
-    def api_library_sections_save():
-        """改分类显示名 / R18 规则。磁盘目录名需要迁移文件，不在这里改。"""
-        body = request.get_json(silent=True) or {}
-        sid = str(body.get("section_id") or "").strip()
-        if not sid:
-            return jsonify({"ok": False, "msg": "缺少分类 ID"}), 400
-        match = body.get("match")
-        if match is not None and not isinstance(match, dict):
-            return jsonify({"ok": False, "msg": "规则格式不正确"}), 400
-        try:
-            with _db() as db:
-                db.update_section(sid, name=body.get("name"), match=match)
-        except ValueError as e:
-            return jsonify({"ok": False, "msg": str(e)}), 400
-        mark_dirty("artworks", "stats", "facets")
-        return jsonify({"ok": True})
-
     @app.route("/api/library/items")
     def api_library_items():
         """图库通用查询: 筛选(q/类型/R18/作者/标签/缺元数据/缺文件) + 排序 + 分页。
@@ -6068,8 +6038,6 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             source=args.get("source", "") or None,
             # 「仅查看该作品」 精确 ID 硬过滤, 覆盖其他条件
             only_aid=args.get("only", "") or None,
-            # 图库分类筛选: general / r18 / __none__（未分类）
-            section_id=args.get("section", "") or None,
         )
         with _db() as db:
             if view == "image":

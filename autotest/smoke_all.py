@@ -3055,7 +3055,6 @@ def run_suite() -> SuiteResult:
     suite.add("T152", "🗂 图库分类基础(A1/A2): 分类表/作品 section_id + 按现有 普通/R18 回填（兼容 X图/涩图）+ 整理按分类目录走 + 下载按 R18 落分类 (隔离数据)", t152_library_sections_base)
     suite.add("T153", "🖼 壁纸使用记录: 原图只登记不复制 / 裁剪版同时进壁纸夹 / 同键去重 + 最近设置接口与壁纸管理页展示 + 设置壁纸不再等 ORB 深查 (隔离数据)", t153_wallpaper_usage)
     suite.add("T154", "🧹 一键整理空夹安全: move 的目标夹不得同时列为 rmdir（先移入后 rmtree 会删文件）+ 执行前二次检查非空夹不删 (隔离数据)", t154_tidy_rmdir_safety)
-    suite.add("T155", "🗂 图库分类筛选与管理: sections 接口/作品数 + section/__none__ 筛选 + 显示名与规则编辑 + 前端下拉与弹窗接线 (隔离数据)", t155_library_sections_filter_and_admin)
     suite.write_report()
     return suite
 
@@ -10389,7 +10388,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261118p" and _mss.group(1) == "20261118p", \
+    assert _mjs and _mss and _mjs.group(1) == "20261118o" and _mss.group(1) == "20261118o", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10484,7 +10483,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261118p', html) and _re.search(r'app\.js\?v=20261118p', html), \
+    assert _re.search(r'style\.css\?v=20261118o', html) and _re.search(r'app\.js\?v=20261118o', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10892,7 +10891,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261118p" in html and "app.js?v=20261118p" in html, \
+        assert "style.css?v=20261118o" in html and "app.js?v=20261118o" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13272,7 +13271,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261118p" in _h and "style.css?v=20261118p" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261118o" in _h and "style.css?v=20261118o" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14270,84 +14269,6 @@ def t153_wallpaper_usage() -> None:
             upaths.user_data = orig_ud
 
 
-def t155_library_sections_filter_and_admin() -> None:
-    """T155: 图库分类筛选 + 分类管理（2026-11-18 A2-3）。
-
-    ① GET /api/library/sections 返回分类与作品数；
-    ② /api/library/items?section=... 只返回该分类作品；__none__ 只返回未分类；
-    ③ POST /api/library/sections 可改显示名与 R18 规则，空名字 400；
-    ④ 前端接线：分类下拉、管理弹窗、查询参数。
-    """
-    import tempfile
-    import utils.paths as upaths
-    from db.store import PixivDatabase, WSt, PSt
-    import web.server as wsrv
-
-    with tempfile.TemporaryDirectory(prefix="t155sec_") as td:
-        tmp = Path(td)
-        img = tmp / "img"
-        img.mkdir(parents=True, exist_ok=True)
-        orig_ud = upaths.user_data
-        orig_img = wsrv._config["paths"].get("img_subdir")
-        upaths.user_data = lambda rel: tmp / str(rel)
-        wsrv._config["paths"]["img_subdir"] = "img"
-        try:
-            db = PixivDatabase(str(tmp / "pixiv.db"))
-            db.upsert_author("77", "作者乙")
-            specs = (("880001", 0, "普通/作者乙_77/880001_p0.jpg"),
-                     ("880002", 1, "R18/作者乙_77/880002_p0.jpg"),
-                     ("880003", None, "880003_p0.jpg"))
-            for aid, r18, rel in specs:
-                db.change_work_status(aid, WSt.DONE, title=aid, author_id="77",
-                                      total_pages=1)
-                if r18 is not None:
-                    db.update_artwork(aid, is_r18=r18)
-                p = img / rel
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(b"x" * 8)
-                db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
-            db.backfill_sections()
-            db.close()
-
-            client = wsrv.create_app().test_client()
-            secs = client.get("/api/library/sections").get_json()
-            by_id = {i["section_id"]: i for i in secs["items"]}
-            assert secs["ok"] and by_id["general"]["count"] == 1, secs
-            assert by_id["r18"]["count"] == 1 and secs["none_count"] == 1, secs
-
-            def _ids(q):
-                j = client.get("/api/library/items?" + q).get_json()
-                return {str(x["artwork_id"]) for x in j["items"]}
-
-            assert _ids("section=general") == {"880001"}
-            assert _ids("section=r18") == {"880002"}
-            assert _ids("section=__none__") == {"880003"}
-            assert _ids("section=") == {"880001", "880002", "880003"}
-
-            r = client.post("/api/library/sections",
-                            json={"section_id": "r18", "name": "成人",
-                                  "match": {"is_r18": 1}})
-            assert r.status_code == 200 and r.get_json().get("ok"), r.get_json()
-            by_id = {i["section_id"]: i
-                     for i in client.get("/api/library/sections").get_json()["items"]}
-            assert by_id["r18"]["name"] == "成人", by_id
-            r = client.post("/api/library/sections",
-                            json={"section_id": "r18", "name": "   "})
-            assert r.status_code == 400, r.get_json()
-
-            html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-            js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
-            assert 'id="lib-f-section"' in html and 'id="lib-section-manage"' in html
-            assert "function loadLibSections()" in js and "function openSectionManager()" in js
-            assert "p.set('section'" in js and "libFilters.section" in js, \
-                "分类筛选没接上查询参数"
-            assert "/api/library/sections" in js
-        finally:
-            upaths.user_data = orig_ud
-            if orig_img is not None:
-                wsrv._config["paths"]["img_subdir"] = orig_img
-
-
 def t154_tidy_rmdir_safety() -> None:
     """T154: 一键整理「空夹清理」不得删掉刚移入的文件（2026-11-18 严重 bug 回归）。
 
@@ -14376,19 +14297,19 @@ def t154_tidy_rmdir_safety() -> None:
             db.mark_page_status("980001", 0, PSt.DONE,
                                 local_path="作者甲_66/980001_p0.jpg")
             # 目标分类夹已存在但是空的；另有一个真正的空夹
-            (img / "普通" / "作者甲_66").mkdir(parents=True)
+            (img / "X图" / "作者甲_66").mkdir(parents=True)
             (img / "空夹_999").mkdir()
 
             plans = ws._tidy_build_plans(db, img)
             moves = {p["from"]: p["to"] for p in plans if p["type"] == "move"}
-            assert moves.get("作者甲_66") == "普通/作者甲_66", moves
+            assert moves.get("作者甲_66") == "X图/作者甲_66", moves
             rmdirs = {p["from"] for p in plans if p["type"] == "rmdir"}
-            assert "普通/作者甲_66" not in rmdirs, f"move 目标夹被列成空夹: {rmdirs}"
-            assert "普通" not in rmdirs, f"move 目标的上级被列成空夹: {rmdirs}"
+            assert "X图/作者甲_66" not in rmdirs, f"move 目标夹被列成空夹: {rmdirs}"
+            assert "X图" not in rmdirs, f"move 目标的上级被列成空夹: {rmdirs}"
             assert "空夹_999" in rmdirs, rmdirs
 
             ws._tidy_apply_plans(db, img)
-            assert (img / "普通" / "作者甲_66" / "980001_p0.jpg").is_file(), \
+            assert (img / "X图" / "作者甲_66" / "980001_p0.jpg").is_file(), \
                 "move 后文件被空夹清理误删"
             assert not (img / "空夹_999").exists(), "真正的空夹应被清理"
 

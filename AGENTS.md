@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118p`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-18（当前前端版本 `20261118o`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 147 用例，必须全过，2026-11-18 已 147/147 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 146 用例，必须全过，2026-11-18 已 146/146 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，147 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，146 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 147 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 146 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261118p`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261118o`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -625,22 +625,7 @@
   同步更新。复查 2188 页缺失 **0**、错位页 **0**；壁纸库仍 1180。
   说明：一键整理不会把作品从一个分类搬到另一个分类（它只保证「夹内/作者夹」正确），
   跨分类重排必须走这个专门脚本。
-- **未做**：分类管理 UI 与图库分类筛选已在 §4.28 完成。
-
-### 4.28 图库分类筛选与分类管理（2026-11-18，版本 `20261118p`）
-
-- **接口**：
-  - `GET /api/library/sections`：分类列表 + 每类作品数 + 未分类数。
-  - `POST /api/library/sections`：改显示名 `name` 与 R18 规则 `match={"is_r18":0|1}`；
-    空名字 400。**磁盘目录名 `dir_name` 不在这里改**（改名需要迁移文件，见 §4.27）。
-  - `/api/library/items` 新增 `section` 参数：`general` / `r18` / `__none__`（未分类）/
-    空 = 全部；`list_artworks`、`count_artworks_filtered`、`list_images`、
-    `count_images_filtered` 四个查询都支持。
-- **前端**：图库筛选行新增分类下拉 `#lib-f-section`（选项带作品数）与「分类管理」按钮
-  `#lib-section-manage`；`libFilters.section` 参与查询参数；
-  管理弹窗列出显示名（可编辑）/ 目录名（只读）/ 规则（普通/R18）/ 作品数，保存后刷新下拉与列表。
-- **验收**：T155（sections 接口/计数、三种筛选、改名与规则保存、空名 400、前端接线），
-  全量 **147/147**。
+- **未做**：分类管理 UI（改名/规则编辑）与图库分类筛选。
 
 
 

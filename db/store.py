@@ -2170,8 +2170,7 @@ class PixivDatabase:
                       trashed: bool = False,
                       author_status: "str | None" = None,
                       source: "str | None" = None,
-                      only_aid: "str | None" = None,
-                      section_id: "str | None" = None) -> list[dict]:
+                      only_aid: "str | None" = None) -> list[dict]:
         """图库通用查询: 关键词(q, 匹配标题/作者名/ID/标签) + 类型 + R18 + AI + 作者 + 标签 + 缺元数据 多条件筛选,
         支持排序(sort: date/title/author/id/bookmark)与分页。返回带 tags/作者名的完整行。
         file_missing_ids: 给定则只返回这些 artwork_id (磁盘文件缺失筛选, 与其他条件 AND)。
@@ -2239,13 +2238,6 @@ class PixivDatabase:
             # NULL 视为 pixiv, 'other' 只匹配真正未归类的外来作品
             where.append("COALESCE(a.source, 'pixiv') = ?")
             params.append(str(source))
-        if section_id:
-            # '__none__' = 未分类（旧库遗留、尚未回填的作品）
-            if str(section_id) == "__none__":
-                where.append("COALESCE(a.section_id, '') = ''")
-            else:
-                where.append("a.section_id = ?")
-                params.append(str(section_id))
         if ai == '2':
             where.append("a.ai_type = 2")
         elif ai == '0':
@@ -2292,7 +2284,6 @@ class PixivDatabase:
                                 author_status: "str | None" = None,
                                 source: "str | None" = None,
                                 only_aid: "str | None" = None,
-                                section_id: "str | None" = None,
                                 summary: bool = False) -> "int | dict":
         """list_artworks 同条件的结果总数 (分页/统计用)。"""
         where, params = [], []
@@ -2352,13 +2343,6 @@ class PixivDatabase:
             # NULL 视为 pixiv, 'other' 只匹配真正未归类的外来作品
             where.append("COALESCE(a.source, 'pixiv') = ?")
             params.append(str(source))
-        if section_id:
-            # '__none__' = 未分类（旧库遗留、尚未回填的作品）
-            if str(section_id) == "__none__":
-                where.append("COALESCE(a.section_id, '') = ''")
-            else:
-                where.append("a.section_id = ?")
-                params.append(str(section_id))
         if ai == '2':
             where.append("a.ai_type = 2")
         elif ai == '0':
@@ -2409,7 +2393,6 @@ class PixivDatabase:
                     deleted: bool = False, author_status: "str | None" = None,
                     source: "str | None" = None,
                     only_aid: "str | None" = None,
-                    section_id: "str | None" = None,
                     file_missing_ids: "set | list | None" = None) -> list[dict]:
         """图片视图: 以「页」为单位列出图库里所有图片 (pages 有 local_path 的页)。
 
@@ -2471,13 +2454,6 @@ class PixivDatabase:
         if source:
             where.append("COALESCE(a.source, 'pixiv') = ?")
             params.append(str(source))
-        if section_id:
-            # '__none__' = 未分类（旧库遗留、尚未回填的作品）
-            if str(section_id) == "__none__":
-                where.append("COALESCE(a.section_id, '') = ''")
-            else:
-                where.append("a.section_id = ?")
-                params.append(str(section_id))
         if ai == '2':
             where.append("a.ai_type = 2")
         elif ai == '0':
@@ -2524,7 +2500,6 @@ class PixivDatabase:
                               author_status: "str | None" = None,
                               source: "str | None" = None,
                               only_aid: "str | None" = None,
-                              section_id: "str | None" = None,
                               summary: bool = False,
                               file_missing_ids: "set | list | None" = None) -> "int | dict":
         """list_images 同条件的图片总数 (分页用, 按页去重计数)。"""
@@ -2583,13 +2558,6 @@ class PixivDatabase:
         if source:
             where.append("COALESCE(a.source, 'pixiv') = ?")
             params.append(str(source))
-        if section_id:
-            # '__none__' = 未分类（旧库遗留、尚未回填的作品）
-            if str(section_id) == "__none__":
-                where.append("COALESCE(a.section_id, '') = ''")
-            else:
-                where.append("a.section_id = ?")
-                params.append(str(section_id))
         if ai == '2':
             where.append("a.ai_type = 2")
         elif ai == '0':
@@ -4521,27 +4489,6 @@ class PixivDatabase:
                 d["match"] = {}
             out.append(d)
         return out
-
-    def update_section(self, section_id: str, *, name: "str | None" = None,
-                       match: "dict | None" = None) -> None:
-        """改分类的显示名 / 匹配规则（目录名不在这里改：那需要磁盘迁移）。"""
-        fields, params = [], []
-        if name is not None:
-            nm = str(name).strip()
-            if not nm:
-                raise ValueError("分类名称不能为空")
-            fields.append("name=?")
-            params.append(nm)
-        if match is not None:
-            fields.append("match_json=?")
-            params.append(json.dumps(match, ensure_ascii=False))
-        if not fields:
-            return
-        params.append(str(section_id))
-        with self.conn:
-            self.conn.execute(
-                f"UPDATE library_sections SET {', '.join(fields)} WHERE section_id=?",
-                params)
 
     def section_dir_for_r18(self, is_r18) -> str:
         """按分类规则返回作品该落的顶层目录名；认不出时用默认分类。"""
