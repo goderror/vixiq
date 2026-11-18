@@ -3052,7 +3052,7 @@ def run_suite() -> SuiteResult:
     suite.add("T149", "🛡 作者源头查重: 规范化名字（大小写/全半角/空白/零宽/宣传后缀）+ 同名 pixiv 存在时保存返回 409 让用户选复用/同名新建 + 同名自定义自动复用不重复建 (隔离数据)", t149_author_conflict_guard)
     suite.add("T150", "🔍 作者管理「重复作者」: 按规范化名字/别名分组 + 跨 pixiv/自定义识别 + 逐组合并（作品/作者行/文件）+ 不存在/相同 ID 报错 + 页面按钮接线 (隔离数据)", t150_author_duplicate_view)
     suite.add("T151", "🏷️ 标题源头修复: 外部登记只写文件名（不再「文件夹 / 文件名」）+ 历史路径标题识别与一次性清理 + 正常标题不误伤 + 不保留常驻按钮/接口 (隔离数据)", t151_title_path_cleanup)
-    suite.add("T152", "🗂 图库分类基础(A1): 分类表/作品 section_id + 按现有 X图/涩图 回填 + 整理按分类目录走 + 下载按 R18 落分类 (隔离数据)", t152_library_sections_base)
+    suite.add("T152", "🗂 图库分类基础(A1/A2): 分类表/作品 section_id + 按现有 普通/R18 回填（兼容 X图/涩图）+ 整理按分类目录走 + 下载按 R18 落分类 (隔离数据)", t152_library_sections_base)
     suite.add("T153", "🖼 壁纸使用记录: 原图只登记不复制 / 裁剪版同时进壁纸夹 / 同键去重 + 最近设置接口与壁纸管理页展示 + 设置壁纸不再等 ORB 深查 (隔离数据)", t153_wallpaper_usage)
     suite.add("T154", "🧹 一键整理空夹安全: move 的目标夹不得同时列为 rmdir（先移入后 rmtree 会删文件）+ 执行前二次检查非空夹不删 (隔离数据)", t154_tidy_rmdir_safety)
     suite.write_report()
@@ -14093,10 +14093,10 @@ def t151_title_path_cleanup() -> None:
 
 
 def t152_library_sections_base() -> None:
-    """T152: A1 分类基础（2026-11-18）。
+    """T152: A1/A2 分类基础（2026-11-18）。
 
     分类从磁盘目录升级为数据库配置：library_sections 表 + artworks.section_id。
-    现有 X图/涩图 回填成「普通 / R18」；整理和下载按分类目录走，目录名暂不改。
+    默认目录名 普通 / R18；回填同时兼容旧的 X图 / 涩图 目录名。
     """
     import tempfile
     import utils.paths as upaths
@@ -14119,11 +14119,11 @@ def t152_library_sections_base() -> None:
             db.upsert_author("66", "作者甲")
             secs = {s["section_id"]: s for s in db.list_sections()}
             assert set(secs) >= {"general", "r18"}, secs
-            assert secs["general"]["dir_name"] == "X图", secs
-            assert secs["r18"]["dir_name"] == "涩图", secs
-            assert db.section_dir_for_r18(False) == "X图"
-            assert db.section_dir_for_r18(True) == "涩图"
-            assert db.section_dir_for_r18(None) == "X图", "未知 R18 用默认分类"
+            assert secs["general"]["dir_name"] == "普通", secs
+            assert secs["r18"]["dir_name"] == "R18", secs
+            assert db.section_dir_for_r18(False) == "普通"
+            assert db.section_dir_for_r18(True) == "R18"
+            assert db.section_dir_for_r18(None) == "普通", "未知 R18 用默认分类"
 
             def _work(aid, rel, r18):
                 db.change_work_status(aid, WSt.DONE, title=aid, author_id="66",
@@ -14134,8 +14134,8 @@ def t152_library_sections_base() -> None:
                 p.write_bytes(b"x" * 16)
                 db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
 
-            _work("970001", "X图/作者甲_66/970001_p0.jpg", False)
-            _work("970002", "涩图/作者甲_66/970002_p0.jpg", True)
+            _work("970001", "普通/作者甲_66/970001_p0.jpg", False)
+            _work("970002", "R18/作者甲_66/970002_p0.jpg", True)
             _work("970003", "970003_p0.jpg", False)
 
             # ① 按现有顶层目录回填 section_id
@@ -14148,10 +14148,10 @@ def t152_library_sections_base() -> None:
                 assert got["970002"] == "r18", got
                 assert got["970003"] == "", got
 
-            # ② 一键整理：根目录作品进默认分类「X图」；已在分类的不动
+            # ② 一键整理：根目录作品进默认分类「普通」；已在分类的不动
             plans = wsrv._tidy_build_plans(db, img)
             moved = {f: p["to"] for p in plans if p["type"] == "move" for f in p["files"]}
-            assert moved.get("970003_p0.jpg") == "X图/作者甲_66", moved
+            assert moved.get("970003_p0.jpg") == "普通/作者甲_66", moved
             assert not any(f.endswith("970001_p0.jpg") for p in plans for f in p["files"]), \
                 "已在分类作者夹的作品不应再产生计划"
 
@@ -14162,8 +14162,8 @@ def t152_library_sections_base() -> None:
                 fake, "88", "新作者", "970010", "新作者_88", is_r18=False)
             d_r = PixivDownloader._pick_author_dir(
                 fake, "88", "新作者", "970011", "新作者_88", is_r18=True)
-            assert Path(d_x).as_posix().endswith("X图/新作者_88"), d_x
-            assert Path(d_r).as_posix().endswith("涩图/新作者_88"), d_r
+            assert Path(d_x).as_posix().endswith("普通/新作者_88"), d_x
+            assert Path(d_r).as_posix().endswith("R18/新作者_88"), d_r
             db.close()
         finally:
             if db is not None:
