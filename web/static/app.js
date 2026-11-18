@@ -20,7 +20,7 @@ window.switchTab = function (name) {
   $$('.tabpage').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   document.dispatchEvent(new CustomEvent('vixiq:tab-change', { detail: { name } }));
   actPush('NAV', '切换页面 → ' + name, {});   // 活动日志: 记下用户去哪一页了
-  if (name === 'library') { libSync(); loadStats(); loadLibrary(); loadLibFacets(); loadTrashBadge(); }
+  if (name === 'library') { libSync(); loadStats(); loadLibrary(); loadLibFacets(); loadLibSections(); loadTrashBadge(); }
   else if (name === 'trash') loadTrash();
   else if (name === 'authors') loadAuthors();
   else if (name === 'wallpapers') { wallFilesEnter(); wallWatch(); }
@@ -3291,10 +3291,10 @@ window.libFilterByAuthor = function (authorId, elOrName) {
   libFilters.author = aid;
   libFilters.missing = false;
   libFilters.missingMode = '';
-  libFilters.source = ''; libFilters.type = ''; libFilters.tag = ''; libFilters.ai = '';
+  libFilters.source = ''; libFilters.type = ''; libFilters.section = ''; libFilters.tag = ''; libFilters.ai = '';
   const anomalySel = $('#lib-f-anomaly');
   if (anomalySel) anomalySel.value = '';
-  ['#lib-f-source', '#lib-f-type', '#lib-f-ai']
+  ['#lib-f-source', '#lib-f-type', '#lib-f-section', '#lib-f-ai']
     .forEach(id => { const el2 = $(id); if (el2) el2.value = ''; });
   // 清空搜索框 + 标签框, 并把作者框回填成这位作者 —— 全部走 combo 自己的方法,
   // **不能派发假 input 事件**: input 事件是下拉面板的展开触发器, 会一并把
@@ -3721,7 +3721,7 @@ let libDataView = 'artwork';     // 图库数据粒度: artwork 作品视图(一
 let libSelected = new Set();     // 批量选中项的主键: 作品视图=作品ID; 图片视图=「作品ID|页码」(一张图一项)
 // 图库默认只显示非 R18 (r18='0'), 需看全部/仅 R18 时可手动切换下拉 (安全模式无关, 始终生效)
 // 默认排序 sort='updated' (按修改时间): 刚入库(pages 变动会 bump updated_at)或刚改动的作品都排最前
-let libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
+let libFilters = { q: '', type: '', section: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
 let libPage = 1;                 // 图库当前页码 (从 1 起)
 const LIB_PAGE_SIZE = 60;        // 每页固定张数 (网格/列表)
 let libCounts = { artworks: 0, images: 0 };
@@ -4851,8 +4851,8 @@ window.libFocusArtwork = async function (aid) {
   switchTab('library');
   libFilters.missing = false;
   libFilters.missingMode = '';
-  libFilters.source = ''; libFilters.type = ''; libFilters.author = ''; libFilters.tag = '';
-  ['#lib-f-source', '#lib-f-type', '#lib-f-anomaly'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  libFilters.source = ''; libFilters.type = ''; libFilters.section = ''; libFilters.author = ''; libFilters.tag = '';
+  ['#lib-f-source', '#lib-f-type', '#lib-f-section', '#lib-f-anomaly'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   ['#lib-f-author-input', '#lib-f-tag-input'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   const q = $('#lib-search-input');
   if (q) q.value = aid;
@@ -4888,6 +4888,7 @@ async function loadLibrary(opts = {}) {
   } else {
   p.set('q', libFilters.q);
   p.set('type', libFilters.type);
+  p.set('section', libFilters.section || '');
   p.set('status', libFilters.status || '');
   p.set('source', libFilters.source || '');
   p.set('r18', libFilters.r18);
@@ -5309,6 +5310,70 @@ async function loadLibFacets() {
     comboTag.setByValue(libFilters.tag || '');
   } catch (e) { /* 静默 */ }
 }
+
+// 图库分类下拉（普通 / R18 / 未分类）+ 分类管理弹窗
+async function loadLibSections() {
+  try {
+    const d = await api('/api/library/sections');
+    const sel = $('#lib-f-section');
+    if (!sel) return;
+    const cur = libFilters.section || '';
+    sel.innerHTML = '<option value="">分类: 全部</option>'
+      + (d.items || []).map(s =>
+        `<option value="${esc(s.section_id)}">${esc(s.name)} · ${s.count ?? 0}</option>`).join('')
+      + (d.none_count ? `<option value="__none__">未分类 · ${d.none_count}</option>` : '');
+    sel.value = cur;
+  } catch (e) { /* 静默 */ }
+}
+
+async function openSectionManager() {
+  let d = null;
+  try { d = await api('/api/library/sections'); }
+  catch (e) { toast('读取分类失败: ' + e.message, 'err'); return; }
+  const rows = (d.items || []).map(s => {
+    const r18 = Number((s.match || {}).is_r18);
+    return `<tr data-sid="${esc(s.section_id)}">
+      <td><input class="section-name" value="${esc(s.name)}" maxlength="20" style="width:120px"></td>
+      <td class="mono">${esc(s.dir_name)}</td>
+      <td><select class="section-rule">
+        <option value="0"${r18 === 0 ? ' selected' : ''}>普通</option>
+        <option value="1"${r18 === 1 ? ' selected' : ''}>R18</option>
+      </select></td>
+      <td>${s.count ?? 0}</td>
+    </tr>`;
+  }).join('');
+  openLibModal('🗂️ 分类管理', `
+    <p class="hint">这里改分类的显示名与 R18 规则；磁盘目录名不在这里改（改名需要迁移文件）。</p>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>显示名</th><th>目录名</th><th>规则</th><th>作品数</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="btn-row" style="justify-content:flex-end;margin-top:10px">
+      <button class="btn ghost" onclick="closeLibModal()">取消</button>
+      <button class="btn accent" onclick="saveSections()">保存</button>
+    </div>`, { lg: true });
+}
+
+async function saveSections() {
+  const rows = $$('#lib-modal-body tbody tr[data-sid]');
+  try {
+    for (const tr of rows) {
+      const name = tr.querySelector('.section-name').value.trim();
+      const rule = Number(tr.querySelector('.section-rule').value);
+      const r = await api('/api/library/sections', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section_id: tr.dataset.sid, name, match: { is_r18: rule } }),
+      });
+      if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
+    }
+    toast('分类已保存', 'ok');
+    closeLibModal();
+    loadLibSections();
+    loadLibrary();
+  } catch (e) { toast('保存分类失败: ' + e.message, 'err'); }
+}
+window.loadLibSections = loadLibSections;
+window.openSectionManager = openSectionManager;
+window.saveSections = saveSections;
 
 // 用 DB 实际来源(含自定义)重建图库+作者管理两个来源下拉; 保留当前选中值
 function rebuildSourceFilters(dbSources) {
@@ -7125,9 +7190,9 @@ async function searchLibrary() { loadLibrary(); }
 async function loadLibraryRecent() {
   // 重置同时退出「仅查看该作品」特殊筛选 (否则列表仍被 only 过滤住)
   if (libOnlyAid) { libOnlyAid = null; libOnlyPrev = null; renderOnlyBanner(); _paintLibViewToggles(); }
-  libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
+  libFilters = { q: '', type: '', section: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
   $('#lib-search-input').value = '';
-  ['#lib-f-type', '#lib-f-status', '#lib-f-source'].forEach(sel => { $(sel).value = ''; });
+  ['#lib-f-type', '#lib-f-section', '#lib-f-status', '#lib-f-source'].forEach(sel => { $(sel).value = ''; });
   $('#lib-f-sort').value = 'updated';   // 默认排序: 按修改时间 (2026-09-16 默认)
   $('#lib-f-r18').value = '0';   // 默认非 R18
   $('#lib-f-ai').value = '';     // 默认 AI: 全部 (不隐藏任何作品)
@@ -8341,13 +8406,14 @@ function bind() {
   $('#lib-recent-btn').addEventListener('click', loadLibraryRecent);
   $('#lib-selfcheck-btn').addEventListener('click', runSelfCheck);
   $('#lib-src-manage').addEventListener('click', openSourceManager);
+  $('#lib-section-manage').addEventListener('click', openSectionManager);
   $$('#lib-view-toggle .view-btn').forEach(b => b.addEventListener('click', () => setLibView(b.dataset.view)));
   $$('#lib-data-toggle .view-btn').forEach(b => b.addEventListener('click', () => setLibDataView(b.dataset.view)));
 
   // 图库筛选 / 排序 / 批量操作
-  ['#lib-f-type', '#lib-f-status', '#lib-f-source', '#lib-f-r18', '#lib-f-ai', '#lib-f-sort'].forEach(sel => {
+  ['#lib-f-type', '#lib-f-section', '#lib-f-status', '#lib-f-source', '#lib-f-r18', '#lib-f-ai', '#lib-f-sort'].forEach(sel => {
     $(sel).addEventListener('change', (e) => {
-      const map = { '#lib-f-type': 'type', '#lib-f-status': 'status', '#lib-f-source': 'source', '#lib-f-r18': 'r18', '#lib-f-ai': 'ai', '#lib-f-sort': 'sort' };
+      const map = { '#lib-f-type': 'type', '#lib-f-section': 'section', '#lib-f-status': 'status', '#lib-f-source': 'source', '#lib-f-r18': 'r18', '#lib-f-ai': 'ai', '#lib-f-sort': 'sort' };
       libFilters[map[sel]] = e.target.value;
       loadLibrary();
     });

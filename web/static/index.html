@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261118o">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261118o">
+<link rel="stylesheet" href="/static/style.css?v=20261118p">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261118p">
 </head>
 <body>
 
@@ -290,6 +290,10 @@
         <div class="management-extra-inner">
       <div class="field-row lib-filters" id="lib-filters">
         <select id="lib-f-type" title="按类型筛选"><option value="">类型: 全部</option><option value="0">插画</option><option value="1">漫画</option><option value="2">动图</option></select>
+        <select id="lib-f-section" title="按图库分类筛选"><option value="">分类: 全部</option></select>
+        <button id="lib-section-manage" class="btn ghost" title="管理图库分类（显示名 / R18 规则）">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        </button>
         <select id="lib-f-status" title="按作者存续状态筛选"><option value="">状态: 全部</option><option value="alive">作者活跃中</option><option value="gone">作者已注销</option><option value="unknown">未知作者</option></select>
         <select id="lib-f-source" title="按来源筛选"><option value="">来源: 全部</option><option value="pixiv">pixiv</option><option value="danbooru">danbooru</option><option value="twitter">X（推特）</option><option value="bilibili">bilibili</option><option value="ggac">GGAC</option><option value="artstation">ArtStation</option><option value="deviantart">DeviantArt</option><option value="niconico">Nico静画</option><option value="skeb">Skeb</option><option value="yandere">yande.re</option><option value="konachan">Konachan</option><option value="gelbooru">Gelbooru</option><option value="sankaku">Sankaku</option><option value="other">未知来源</option></select>
         <button id="lib-src-manage" class="btn ghost" title="管理来源分类">
@@ -844,10 +848,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261118o"></script>
-<script src="/static/wallpaper-admin.js?v=20261118o"></script>
-<script src="/static/management-drawer-state.js?v=20261118o"></script>
-<script src="/static/management-toolbar.js?v=20261118o"></script>
+<script src="/static/app.js?v=20261118p"></script>
+<script src="/static/wallpaper-admin.js?v=20261118p"></script>
+<script src="/static/management-drawer-state.js?v=20261118p"></script>
+<script src="/static/management-toolbar.js?v=20261118p"></script>
 </body>
 </html>
 
