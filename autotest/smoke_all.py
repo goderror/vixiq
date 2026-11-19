@@ -3057,6 +3057,7 @@ def run_suite() -> SuiteResult:
     suite.add("T154", "🧹 一键整理空夹安全: move 的目标夹不得同时列为 rmdir（先移入后 rmtree 会删文件）+ 执行前二次检查非空夹不删 (隔离数据)", t154_tidy_rmdir_safety)
     suite.add("T156", "🏷 标签维度与分区: 角色/风格/未分类 + 标签多维度关联 + 维度绑定目录 + 分区计算按 sort_order + 删除边界 (隔离数据)", t156_tag_categories_and_section)
     suite.add("T157", "🏷 标签维度接口: 分类查询/新增/改名/绑定目录/删除空维度 + 标签多维度 + 有标签拒绝删除 + 前端接线 (隔离数据)", t157_tag_category_api)
+    suite.add("T158", "🏷 标签管理工作台: 服务端分页/搜索 + 跨页选择 + 批量加入/移出类别 + 停用恢复 + 编辑 + 文件夹选择(本机/远程) (隔离数据)", t158_tag_workspace)
     suite.write_report()
     return suite
 
@@ -10390,7 +10391,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261118q" and _mss.group(1) == "20261118q", \
+    assert _mjs and _mss and _mjs.group(1) == "20261119a" and _mss.group(1) == "20261119a", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10485,7 +10486,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261118q', html) and _re.search(r'app\.js\?v=20261118q', html), \
+    assert _re.search(r'style\.css\?v=20261119a', html) and _re.search(r'app\.js\?v=20261119a', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10893,7 +10894,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261118q" in html and "app.js?v=20261118q" in html, \
+        assert "style.css?v=20261119a" in html and "app.js?v=20261119a" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13273,7 +13274,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261118q" in _h and "style.css?v=20261118q" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261119a" in _h and "style.css?v=20261119a" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14358,8 +14359,10 @@ def t157_tag_category_api() -> None:
         img.mkdir(parents=True, exist_ok=True)
         orig_ud = upaths.user_data
         orig_img = wsrv._config["paths"].get("img_subdir")
+        orig_snap = wsrv._paths_snapshot
         upaths.user_data = lambda rel: tmp / str(rel)
         wsrv._config["paths"]["img_subdir"] = "img"
+        wsrv._paths_snapshot = lambda: {"effective": {"img": str(img)}}
         try:
             db = PixivDatabase(str(tmp / "pixiv.db"))
             db.change_work_status("910001", WSt.DONE, title="t", author_id="")
@@ -14370,6 +14373,8 @@ def t157_tag_category_api() -> None:
                     "INSERT INTO artwork_tags(artwork_id, tag_id) VALUES('910001',?)", (tid,))
             db.close()
 
+            (img / "测试区").mkdir(parents=True, exist_ok=True)
+            (img / "测试区2").mkdir(parents=True, exist_ok=True)
             client = wsrv.create_app().test_client()
             cats = client.get("/api/tags/categories").get_json()
             assert cats["ok"] and {c["category_id"] for c in cats["items"]} >= {
@@ -14381,6 +14386,9 @@ def t157_tag_category_api() -> None:
             r = client.post("/api/tags/categories/test",
                             json={"name": "测试2", "dir_name": "测试区2", "sort_order": 9})
             assert r.status_code == 200, r.get_json()
+            r = client.post("/api/tags/categories/test",
+                            json={"dir_name": "../越界"})
+            assert r.status_code == 400, "图库外的目录不应允许绑定"
             cats = {c["category_id"]: c for c in
                     client.get("/api/tags/categories").get_json()["items"]}
             assert cats["test"]["name"] == "测试2" and cats["test"]["dir_name"] == "测试区2", cats
@@ -14403,11 +14411,242 @@ def t157_tag_category_api() -> None:
             js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
             css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
             assert 'id="lib-tagcat-manage"' in html
-            for fn in ("openTagCategoryManager", "loadTagCategoryTags",
-                       "setTagCategories", "saveTagCategory", "createTagCategory"):
+            for fn in ("openTagCategoryManager", "tagwsRefresh", "tagwsRenderList",
+                       "tagwsConfirmAdd", "tagwsSaveTag", "tagwsRenderSettings",
+                       "tagwsPickFolder"):
                 assert f"function {fn}" in js, f"前端缺 {fn}"
-            assert ".tagcat-row" in css and "/api/tags/categories" in js
+            assert ".tagws-row" in css and "/api/tags/categories" in js
         finally:
+            wsrv._paths_snapshot = orig_snap
+            upaths.user_data = orig_ud
+            if orig_img is not None:
+                wsrv._config["paths"]["img_subdir"] = orig_img
+
+
+def t158_tag_workspace() -> None:
+    """T158: 标签管理工作台（2026-11-19）。
+
+    ① 服务端分页（>100 条）/ 总数 / 末页条数；
+    ② 搜索中文、原名、英文；全部/未分类/类别/已停用视图计数；
+    ③ 跨页选择按 id 集合查询；批量加入多类别保留旧归属；移出最后一个类别回未分类；
+    ④ 停用后主列表与筛选推荐不可见、已停用可恢复；
+    ⑤ 编辑显示名与归属、同名（含全半角）拒绝；
+    ⑥ 选择文件夹：本机选择/初始定位/取消/越界、保存/解除绑定/越界路径；
+    ⑦ 远程访问拒绝原生选择器；前端工作台接线与版本串。
+    """
+    import tempfile
+    import utils.paths as upaths
+    import utils.folder_dialog as foldlg
+    import web.server as wsrv
+    from db.store import PixivDatabase, WSt
+
+    with tempfile.TemporaryDirectory(prefix="t158tagws_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        (img / "分区A").mkdir(parents=True)
+        (img / "分区B").mkdir()
+        outside = tmp / "outside"
+        outside.mkdir()
+        orig_ud = upaths.user_data
+        orig_img = wsrv._config["paths"].get("img_subdir")
+        orig_pick = foldlg.pick_folder
+        orig_snap = wsrv._paths_snapshot
+        upaths.user_data = lambda rel: tmp / str(rel)
+        wsrv._config["paths"]["img_subdir"] = "img"
+        wsrv._paths_snapshot = lambda: {"effective": {"img": str(img)}}
+        try:
+            db = PixivDatabase(str(tmp / "pixiv.db"))
+            try:
+                with db.conn:
+                    for i in range(130):
+                        zh = f"中文{i:03d}" if i < 3 else ""
+                        en = f"eng{i:03d}" if i < 3 else ""
+                        db.conn.execute(
+                            "INSERT INTO tags(tag_name, tag_name_zh, tag_name_en) "
+                            "VALUES(?,?,?)", (f"tag{i:03d}", zh, en))
+                    ids = {r[0]: int(r[1]) for r in db.conn.execute(
+                        "SELECT tag_name, tag_id FROM tags").fetchall()}
+                    for k in range(5):
+                        db.change_work_status(f"92000{k}", WSt.DONE, title="t", author_id="")
+                        db.conn.execute(
+                            "INSERT INTO artwork_tags(artwork_id, tag_id) VALUES(?,?)",
+                            (f"92000{k}", ids["tag000"]))
+                    db.change_work_status("920009", WSt.DONE, title="t", author_id="")
+                    db.conn.execute(
+                        "INSERT INTO artwork_tags(artwork_id, tag_id) VALUES(?,?)",
+                        ("920009", ids["tag001"]))
+            finally:
+                db.close()
+            T0, T1, T2 = ids["tag000"], ids["tag001"], ids["tag002"]
+            client = wsrv.create_app().test_client()
+
+            # ① 分页与总数（130 条 > 100）
+            r = client.get("/api/tags/page?page=1&page_size=20").get_json()
+            assert r["ok"] and r["total"] == 130 and r["pages"] == 7, r
+            assert len(r["items"]) == 20 and r["items"][0]["tag_name"] == "tag000", r["items"][0]
+            assert r["items"][0]["count"] == 5, "作品数应为 5"
+            assert r["counts"]["all_active"] == 130 and r["counts"]["unclassified"] == 130, r["counts"]
+            r7 = client.get("/api/tags/page?page=7&page_size=20").get_json()
+            assert r7["page"] == 7 and len(r7["items"]) == 10, "末页应为 10 条"
+
+            # ② 搜索中文 / 原名 / 英文
+            for q, want in (("中文001", "tag001"), ("eng002", "tag002"), ("tag003", "tag003")):
+                got = client.get(f"/api/tags/page?q={q}").get_json()
+                assert got["total"] == 1 and got["items"][0]["tag_name"] == want, (q, got)
+            got = client.get("/api/tags/page?q=tag12").get_json()
+            assert got["total"] == 10, got["total"]
+
+            # ③ 跨页选择：按 id 集合查询（不受分页影响）
+            got = client.get(f"/api/tags/page?ids={T0},{T1}&page_size=20").get_json()
+            assert got["total"] == 2 and {x["tag_id"] for x in got["items"]} == {T0, T1}, got
+
+            # 批量加入两个类别（一次多个）
+            r = client.post("/api/tags/batch", json={
+                "action": "add", "tag_ids": [T0], "category_ids": ["character", "style"]})
+            assert r.status_code == 200 and r.get_json()["ok"], r.get_json()
+            row = next(x for x in client.get(
+                f"/api/tags/page?ids={T0}&page_size=20").get_json()["items"])
+            assert set(row["categories"]) == {"character", "style"}, row
+
+            # 加入别的类别时保留旧归属
+            r = client.post("/api/tags/batch", json={
+                "action": "add", "tag_ids": [T0], "category_ids": ["character"]})
+            assert r.status_code == 200
+            row = next(x for x in client.get(
+                f"/api/tags/page?ids={T0}&page_size=20").get_json()["items"])
+            assert set(row["categories"]) == {"character", "style"}, "重复加入不应丢旧类别"
+
+            # 未分类自动退出；类别计数随之更新
+            assert client.get("/api/tags/page?view=unclassified").get_json()["total"] == 129
+            assert client.get("/api/tags/page?view=character").get_json()["total"] == 1
+            cats = {c["category_id"]: c for c in
+                    client.get("/api/tags/categories").get_json()["items"]}
+            assert cats["character"]["tag_count"] == 1, cats["character"]
+
+            # 移出当前类别：只去掉这一个；失去最后一个类别才回未分类
+            client.post("/api/tags/batch", json={
+                "action": "remove", "tag_ids": [T0], "category_id": "character"})
+            row = next(x for x in client.get(
+                f"/api/tags/page?ids={T0}&page_size=20").get_json()["items"])
+            assert set(row["categories"]) == {"style"}, "移出一个类别不应影响其他类别"
+            client.post("/api/tags/batch", json={
+                "action": "remove", "tag_ids": [T0], "category_id": "style"})
+            row = next(x for x in client.get(
+                f"/api/tags/page?ids={T0}&page_size=20").get_json()["items"])
+            assert row["categories"] == ["uncategorized"], "失去最后一个类别应回未分类"
+
+            # ④ 停用 / 恢复
+            r = client.post("/api/tags/batch", json={"action": "disable", "tag_ids": [T0]})
+            assert r.status_code == 200
+            normal = client.get("/api/tags/page?page_size=200").get_json()
+            assert not any(x["tag_id"] == T0 for x in normal["items"]), "停用标签不应出现在主列表"
+            assert normal["counts"]["all_active"] == 129 and normal["counts"]["inactive"] == 1
+            inactive = client.get("/api/tags/page?view=inactive").get_json()
+            assert inactive["total"] == 1 and inactive["items"][0]["tag_id"] == T0
+            assert inactive["items"][0]["count"] == 5, "停用仍保留作品关联数"
+            facets = client.get("/api/library/facets").get_json()
+            assert not any(x["tag_name"] == "tag000" for x in facets["tags"]), \
+                "停用标签不应进入筛选推荐"
+            r = client.post("/api/tags/batch", json={"action": "restore", "tag_ids": [T0]})
+            assert r.status_code == 200
+            assert any(x["tag_id"] == T0 for x in
+                       client.get("/api/tags/page?page_size=200").get_json()["items"])
+
+            # ⑤ 编辑显示名与归属
+            r = client.post(f"/api/tags/{T1}/edit",
+                            json={"name": "新的标签", "category_ids": ["character"]})
+            assert r.status_code == 200, r.get_json()
+            row = next(x for x in client.get(
+                f"/api/tags/page?ids={T1}&page_size=20").get_json()["items"])
+            assert row["tag_name"] == "新的标签" and set(row["categories"]) == {"character"}, row
+            assert client.post(f"/api/tags/{T2}/edit",
+                               json={"name": "新的标签"}).status_code == 400, "同名标签应拒绝"
+            # 空类别 → 回未分类
+            client.post(f"/api/tags/{T1}/edit", json={"name": "新的标签", "category_ids": []})
+            row = next(x for x in client.get(
+                f"/api/tags/page?ids={T1}&page_size=20").get_json()["items"])
+            assert row["categories"] == ["uncategorized"], row
+
+            # 全半角同名（旧 normalized_name 未做 NFKC，编辑时实算）
+            db2 = PixivDatabase(str(tmp / "pixiv.db"))
+            try:
+                with db2.conn:
+                    db2.conn.execute("INSERT INTO tags(tag_name) VALUES('ＡＢＣ')")
+                    db2.conn.execute("INSERT INTO tags(tag_name) VALUES('abc')")
+                abc_id = int(db2.conn.execute(
+                    "SELECT tag_id FROM tags WHERE tag_name='abc'").fetchone()[0])
+            finally:
+                db2.close()
+            assert client.post(f"/api/tags/{abc_id}/edit",
+                               json={"name": "ＡＢＣ"}).status_code == 400, "全半角同名应拒绝"
+
+            # ⑥ 选择文件夹（本机原生选择器用替身）
+            seen = {}
+
+            def _pick(title="", initial=None):
+                seen["initial"] = initial
+                return str(img / "分区A")
+
+            foldlg.pick_folder = _pick
+            r = client.post("/api/tags/pick-folder", json={"rel": ""}).get_json()
+            assert r["ok"] and r["rel"] == "分区A", r
+            assert Path(seen["initial"]).resolve() == img.resolve(), \
+                "未绑定时应定位到图库根目录"
+            seen.clear()
+            r = client.post("/api/tags/pick-folder", json={"rel": "分区A"}).get_json()
+            assert r["ok"] and Path(seen["initial"]).resolve() == (img / "分区A").resolve(), \
+                "已有绑定时应定位到当前文件夹"
+
+            foldlg.pick_folder = lambda title="", initial=None: None
+            r = client.post("/api/tags/pick-folder", json={}).get_json()
+            assert r.get("cancelled"), "取消应返回 cancelled"
+
+            foldlg.pick_folder = lambda title="", initial=None: str(outside)
+            r = client.post("/api/tags/pick-folder", json={})
+            assert r.status_code == 400 and not r.get_json()["ok"], "图库外的文件夹应拒绝"
+
+            # 保存 / 解除绑定 / 越界路径
+            r = client.post("/api/tags/categories/character", json={"dir_name": "分区A"})
+            assert r.status_code == 200, r.get_json()
+            cat = {c["category_id"]: c for c in
+                   client.get("/api/tags/categories").get_json()["items"]}["character"]
+            assert cat["dir_name"] == "分区A", cat
+            r = client.post("/api/tags/categories/character", json={"dir_name": ""})
+            assert r.status_code == 200
+            cat = {c["category_id"]: c for c in
+                   client.get("/api/tags/categories").get_json()["items"]}["character"]
+            assert cat["dir_name"] == "", "解除绑定应清空目录"
+            assert client.post("/api/tags/categories/character",
+                               json={"dir_name": "../outside"}).status_code == 400
+            assert client.post("/api/tags/categories/character",
+                               json={"dir_name": str(outside)}).status_code == 400
+
+            # ⑦ 远程访问拒绝原生选择器（CF 头也视为远程）
+            r = client.post("/api/tags/pick-folder", json={},
+                            environ_base={"REMOTE_ADDR": "192.168.1.9"})
+            assert r.status_code == 403 and r.get_json().get("remote"), r.get_json()
+            r = client.post("/api/tags/pick-folder", json={},
+                            environ_base={"REMOTE_ADDR": "127.0.0.1",
+                                          "HTTP_CF_CONNECTING_IP": "1.2.3.4"})
+            assert r.status_code == 403 and r.get_json().get("remote"), r.get_json()
+
+            # 前端接线与版本串
+            html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+            js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+            css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+            assert 'id="lib-tagcat-manage"' in html and "标签管理" in html
+            for fn in ("openTagCategoryManager", "tagwsRefresh", "tagwsRenderList",
+                       "tagwsConfirmAdd", "tagwsConfirmRemove", "tagwsSaveTag",
+                       "tagwsRenderSettings", "tagwsPickFolder", "tagwsSetStatus"):
+                assert f"function {fn}" in js, f"前端缺 {fn}"
+            for path in ("/api/tags/page", "/api/tags/batch", "/api/tags/pick-folder",
+                         "/edit"):
+                assert path in js, f"前端缺接口 {path}"
+            assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
+            assert "style.css?v=20261119a" in html and "app.js?v=20261119a" in html
+        finally:
+            foldlg.pick_folder = orig_pick
+            wsrv._paths_snapshot = orig_snap
             upaths.user_data = orig_ud
             if orig_img is not None:
                 wsrv._config["paths"]["img_subdir"] = orig_img

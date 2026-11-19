@@ -5310,133 +5310,677 @@ async function loadLibFacets() {
   } catch (e) { /* 静默 */ }
 }
 
-// ---- 标签维度 / 分区管理（2026-11-19）----
-let TAGCATS = [];
+// ---- 🏷️ 标签管理工作台（2026-11-19）----
+// 左侧：全部 / 未分类 / 各标签类别 / 已停用；右侧：服务端分页标签列表。
+// 跨页勾选保留在 TAGWS.selected；切换类别清空。加入类别是追加，移出只去掉当前类别。
+const TAGWS = {
+  cats: [], counts: {}, view: 'all', q: '', page: 1, pageSize: 20,
+  order: 'desc', items: [], total: 0, pages: 1, selected: new Set(),
+  onlySelected: false, panel: null, status: '', statusErr: false,
+  showSettings: false, folderDraft: {}, nameDraft: {}, newCatDraft: false,
+  newCatName: '', busy: false,
+  searchTimer: null,
+};
+
+function tagwsCatName(cid) {
+  const c = TAGWS.cats.find(x => x.category_id === cid);
+  return c ? c.name : cid;
+}
+
+function tagwsViewLabel(view) {
+  if (view === 'all') return '全部标签';
+  if (view === 'unclassified') return '未分类';
+  if (view === 'inactive') return '已停用';
+  return tagwsCatName(view);
+}
+
+function tagwsAlias(t) {
+  return [t.tag_name_zh, t.tag_name_en]
+    .filter(x => x && String(x).trim() && x !== t.tag_name)
+    .join(' · ');
+}
+
+function tagwsStatus(text, isErr = false) {
+  TAGWS.status = String(text || '');
+  TAGWS.statusErr = !!isErr;
+  const box = TAGWS.showSettings ? $('#tagws-settings-status') : $('#tagws-feedback');
+  if (box) {
+    box.textContent = TAGWS.status;
+    box.hidden = !TAGWS.status;
+    box.classList.toggle('is-err', TAGWS.statusErr);
+  }
+}
 
 async function openTagCategoryManager() {
-  try { TAGCATS = (await api('/api/tags/categories')).items || []; }
-  catch (e) { toast('读取标签维度失败: ' + e.message, 'err'); return; }
-  const rows = TAGCATS.map(c => `<tr data-cid="${esc(c.category_id)}">
-      <td><input class="tagcat-name" value="${esc(c.name)}" style="width:100px"></td>
-      <td><input class="tagcat-dir" value="${esc(c.dir_name || '')}" placeholder="不绑定" style="width:110px"></td>
-      <td><input class="tagcat-sort" type="number" value="${Number(c.sort_order) || 0}" style="width:56px"></td>
-      <td>${c.tag_count}</td>
-      <td><button class="btn ghost" onclick="saveTagCategory('${esc(c.category_id)}')">保存</button>
-        ${c.category_id === 'uncategorized' ? ''
-          : `<button class="btn danger" onclick="deleteTagCategory('${esc(c.category_id)}')">删除</button>`}</td>
-    </tr>`).join('');
-  const opts = TAGCATS.map(c =>
-    `<option value="${esc(c.category_id)}">${esc(c.name)} · ${c.tag_count}</option>`).join('');
-  openLibModal('🏷️ 标签维度与分区', `
-    <p class="hint">维度绑定目录后，作品会按命中的标签维度落到对应分区目录；不绑定目录的维度只用于筛选。</p>
-    <div class="table-wrap"><table class="table">
-      <thead><tr><th>显示名</th><th>分区目录</th><th>排序</th><th>标签数</th><th>操作</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>
-    <div class="field-row" style="margin-top:8px">
-      <input id="tagcat-new-id" placeholder="维度 ID（英文）" style="width:130px">
-      <input id="tagcat-new-name" placeholder="显示名" style="width:100px">
-      <input id="tagcat-new-dir" placeholder="分区目录（可空）" style="width:130px">
-      <button class="btn" onclick="createTagCategory()">新增维度</button>
+  TAGWS.view = 'all';
+  TAGWS.q = '';
+  TAGWS.page = 1;
+  TAGWS.order = 'desc';
+  TAGWS.selected.clear();
+  TAGWS.onlySelected = false;
+  TAGWS.panel = null;
+  TAGWS.status = '';
+  TAGWS.statusErr = false;
+  TAGWS.showSettings = false;
+  TAGWS.folderDraft = {};
+  TAGWS.nameDraft = {};
+  TAGWS.newCatDraft = false;
+  TAGWS.newCatName = '';
+  TAGWS.busy = false;
+  openLibModal('🏷️ 标签管理', `
+    <div class="tagws" id="tagws">
+      <nav class="tagws-nav" id="tagws-nav" aria-label="标签类别"></nav>
+      <section class="tagws-main">
+        <div class="tagws-view">
+          <div class="tagws-heading"><h3 id="tagws-title">全部标签</h3><span id="tagws-total"></span>
+            <button type="button" class="btn ghost tagws-settings-btn" data-tw="settings">标签类别设置</button>
+          </div>
+          <input id="tagws-search" class="tagws-search" type="search"
+                 placeholder="搜索标签名称" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="tagws-actions" class="tagws-actions"></div>
+        <div id="tagws-editor" class="tagws-editor" hidden></div>
+        <div id="tagws-feedback" class="tagws-feedback" role="status" hidden></div>
+        <div class="tagws-table">
+          <div class="tagws-row tagws-table-head">
+            <label class="tagws-check"><input type="checkbox" id="tagws-page-check" aria-label="全选本页"></label>
+            <span>标签</span><span class="tagws-col-cats">所属类别</span>
+            <button type="button" class="tagws-sort" data-tw="sort">作品数 <span id="tagws-sort-arrow">↓</span></button>
+          </div>
+          <div id="tagws-items"></div>
+        </div>
+        <div id="tagws-pager" class="tagws-pager"></div>
+      </section>
     </div>
-    <h4 style="margin:12px 0 6px">标签归类</h4>
-    <div class="field-row">
-      <select id="tagcat-filter" onchange="loadTagCategoryTags()">
-        <option value="">全部标签</option>${opts}
-      </select>
-      <input id="tagcat-search" placeholder="搜索标签名" style="width:180px">
-      <button class="btn ghost" onclick="loadTagCategoryTags()">搜索</button>
-    </div>
-    <div id="tagcat-tags" class="hint">加载中…</div>
-  `, { lg: true });
-  loadTagCategoryTags();
+    <div id="tagws-settings" class="tagws-settings" hidden></div>
+  `, { xl: true });
+  const body = $('#lib-modal-body');
+  body.onclick = tagwsOnClick;
+  body.onchange = tagwsOnChange;
+  body.oninput = tagwsOnInput;
+  await tagwsRefresh();
 }
 
-async function loadTagCategoryTags() {
-  const cid = ($('#tagcat-filter') || {}).value || '';
-  const q = ($('#tagcat-search') || {}).value || '';
-  const box = $('#tagcat-tags');
-  if (!box) return;
-  let items = [];
+async function tagwsRefresh() {
+  const params = new URLSearchParams();
+  params.set('view', TAGWS.onlySelected ? 'all' : TAGWS.view);
+  params.set('q', TAGWS.q);
+  params.set('page', String(TAGWS.page));
+  params.set('order', TAGWS.order);
+  params.set('page_size', TAGWS.onlySelected
+    ? String(Math.max(20, Math.min(200, TAGWS.selected.size || 20))) : '20');
+  if (TAGWS.onlySelected) params.set('ids', [...TAGWS.selected].join(','));
+  let r = null;
   try {
-    items = (await api('/api/tags?limit=100&category_id=' + encodeURIComponent(cid)
-      + '&q=' + encodeURIComponent(q))).items || [];
+    r = await api('/api/tags/page?' + params.toString());
   } catch (e) {
-    box.innerHTML = `<div class="hint err-text">${esc(e.message)}</div>`;
+    if ($('#tagws')) tagwsStatus('读取标签失败: ' + e.message, true);
     return;
   }
-  box.innerHTML = items.length ? items.map(t => {
-    const checks = TAGCATS.map(c => `<label class="tagcat-pick"><input type="checkbox"
-        data-cat="${esc(c.category_id)}" ${t.categories.includes(c.category_id) ? 'checked' : ''}
-        onchange="setTagCategories(${t.tag_id}, this)"> ${esc(c.name)}</label>`).join('');
-    return `<div class="tagcat-row"><span class="tagcat-tag">${esc(t.tag_name)}
-      <span class="muted">${t.count}</span></span><span class="tagcat-cats">${checks}</span></div>`;
-  }).join('') : '<div class="hint">没有匹配的标签</div>';
+  if (!r || !r.ok) {
+    if ($('#tagws')) tagwsStatus((r && r.msg) || '读取标签失败', true);
+    return;
+  }
+  TAGWS.items = r.items || [];
+  TAGWS.total = r.total || 0;
+  TAGWS.page = r.page || 1;
+  TAGWS.pages = r.pages || 1;
+  TAGWS.cats = r.categories || [];
+  TAGWS.counts = r.counts || {};
+  tagwsRenderAll();
 }
 
-async function setTagCategories(tagId, el) {
-  const row = el.closest('.tagcat-row');
-  const ids = [...row.querySelectorAll('input[type=checkbox]:checked')].map(x => x.dataset.cat);
+async function tagwsLoadCats() {
   try {
-    const r = await api('/api/tags/' + tagId + '/categories', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category_ids: ids }),
-    });
-    if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
-  } catch (e) { toast('保存标签维度失败: ' + e.message, 'err'); }
+    const r = await api('/api/tags/categories');
+    if (r && r.ok) TAGWS.cats = r.items || [];
+  } catch (e) { /* 设置页保留旧数据 */ }
 }
 
-async function saveTagCategory(cid) {
-  const tr = $(`#lib-modal-body tr[data-cid="${cid}"]`);
-  if (!tr) return;
-  const body = {
-    name: tr.querySelector('.tagcat-name').value.trim(),
-    dir_name: tr.querySelector('.tagcat-dir').value.trim(),
-    sort_order: Number(tr.querySelector('.tagcat-sort').value) || 0,
-  };
+function tagwsRenderAll() {
+  if (TAGWS.showSettings) {
+    if ($('#tagws')) $('#tagws').hidden = true;
+    const box = $('#tagws-settings');
+    if (box) { box.hidden = false; tagwsRenderSettings(); }
+    return;
+  }
+  if ($('#tagws')) $('#tagws').hidden = false;
+  const settings = $('#tagws-settings');
+  if (settings) settings.hidden = true;
+  tagwsRenderNav();
+  tagwsRenderList();
+  tagwsRenderActions();
+  tagwsRenderEditor();
+  const title = $('#tagws-title');
+  if (title) title.textContent = tagwsViewLabel(TAGWS.view);
+  const total = $('#tagws-total');
+  if (total) total.textContent = `${TAGWS.total} 个标签`;
+  const arrow = $('#tagws-sort-arrow');
+  if (arrow) arrow.textContent = TAGWS.order === 'desc' ? '↓' : '↑';
+  tagwsStatus(TAGWS.status, TAGWS.statusErr);
+}
+
+function tagwsRenderNav() {
+  const nav = $('#tagws-nav');
+  if (!nav) return;
+  const counts = TAGWS.counts || {};
+  const item = (value, label, count) => `<button type="button" class="tagws-nav-btn"
+      data-tw="view" data-value="${esc(value)}"
+      aria-current="${TAGWS.view === value && !TAGWS.onlySelected ? 'true' : 'false'}">
+      <span>${esc(label)}</span><span class="tagws-count">${Number(count) || 0}</span></button>`;
+  const inactive = Number(counts.inactive) || 0;
+  nav.innerHTML = `<div class="tagws-nav-list">
+    ${item('all', '全部标签', counts.all_active)}
+    ${item('unclassified', '未分类', counts.unclassified)}
+    <span class="tagws-nav-label">标签类别</span>
+    ${TAGWS.cats.map(c => item(c.category_id, c.name, c.tag_count)).join('')}
+    ${(inactive || TAGWS.view === 'inactive') ? item('inactive', '已停用', inactive) : ''}
+  </div>`;
+}
+
+function tagwsRenderList() {
+  const box = $('#tagws-items');
+  if (!box) return;
+  const picked = TAGWS.selected;
+  box.innerHTML = TAGWS.items.length ? TAGWS.items.map(t => {
+    const realCats = (t.categories || []).filter(c => c !== 'uncategorized');
+    const pills = realCats.length
+      ? realCats.map(c => `<span class="tagws-pill">${esc(tagwsCatName(c))}</span>`).join('')
+      : '<span class="tagws-empty-dim">未归类</span>';
+    const alias = tagwsAlias(t);
+    return `<div class="tagws-row${picked.has(t.tag_id) ? ' is-picked' : ''}${t.status === 'disabled' ? ' is-disabled' : ''}" data-row-id="${t.tag_id}">
+      <label class="tagws-check"><input type="checkbox" data-tag-id="${t.tag_id}"
+        aria-label="选择 ${esc(t.tag_name)}" ${picked.has(t.tag_id) ? 'checked' : ''}></label>
+      <div class="tagws-tag-cell">
+        <button type="button" class="tagws-tag" data-tw="edit" data-value="${t.tag_id}">${esc(t.tag_name)}</button>
+        ${alias ? `<div class="tagws-alias">${esc(alias)}</div>` : ''}
+      </div>
+      <div class="tagws-dims">${pills}</div>
+      <div class="tagws-works" title="${Number(t.count) || 0} 个作品">${Number(t.count) || 0}</div>
+    </div>`;
+  }).join('') : `<div class="tagws-empty">${TAGWS.q ? '没有匹配的标签' : '这里暂时没有标签'}</div>`;
+  const pageCheck = $('#tagws-page-check');
+  if (pageCheck) {
+    const pageIds = TAGWS.items.map(t => t.tag_id);
+    const onPage = pageIds.filter(id => picked.has(id)).length;
+    pageCheck.disabled = !pageIds.length;
+    pageCheck.checked = pageIds.length > 0 && onPage === pageIds.length;
+    pageCheck.indeterminate = onPage > 0 && onPage < pageIds.length;
+  }
+  const pager = $('#tagws-pager');
+  if (pager) {
+    pager.innerHTML = TAGWS.pages > 1
+      ? `<button type="button" class="btn ghost" data-tw="page" data-value="-1"
+           ${TAGWS.page <= 1 ? 'disabled' : ''}>上一页</button>
+         <span>第 ${TAGWS.page} / ${TAGWS.pages} 页</span>
+         <button type="button" class="btn ghost" data-tw="page" data-value="1"
+           ${TAGWS.page >= TAGWS.pages ? 'disabled' : ''}>下一页</button>`
+      : '';
+  }
+}
+
+function tagwsRenderActions() {
+  const box = $('#tagws-actions');
+  if (!box) return;
+  const n = TAGWS.selected.size;
+  box.classList.toggle('has-selection', n > 0);
+  if (!n) {
+    box.innerHTML = '<span class="tagws-note">勾选标签可批量归类</span>';
+    return;
+  }
+  const inCategory = TAGWS.view !== 'all' && TAGWS.view !== 'unclassified'
+    && TAGWS.view !== 'inactive' && TAGWS.cats.some(c => c.category_id === TAGWS.view);
+  box.innerHTML = `<div class="tagws-action-group">
+      <strong>已选 ${n} 个标签</strong>
+      <button type="button" class="tagws-link" data-tw="selected">${TAGWS.onlySelected ? '显示结果' : '查看已选'}</button>
+      <button type="button" class="tagws-link" data-tw="clear">清空</button>
+    </div>
+    <div class="tagws-action-group">
+      ${TAGWS.view === 'inactive'
+        ? '<button type="button" class="btn" data-tw="restore">恢复标签</button>'
+        : `${inCategory ? '<button type="button" class="btn ghost" data-tw="remove">移出当前类别</button>' : ''}
+           <button type="button" class="btn" data-tw="add">加入类别</button>`}
+    </div>`;
+}
+
+function tagwsCatChecks(selectedIds) {
+  return TAGWS.cats.map(c => `<label class="tagws-option"><input type="checkbox"
+      data-cat-check value="${esc(c.category_id)}"
+      ${(selectedIds || []).includes(c.category_id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('');
+}
+
+function tagwsRenderEditor() {
+  const box = $('#tagws-editor');
+  if (!box) return;
+  const panel = TAGWS.panel;
+  box.hidden = !panel;
+  if (!panel) { box.innerHTML = ''; return; }
+  const err = '<p class="tagws-error" id="tagws-editor-error" hidden></p>';
+  if (panel.kind === 'add') {
+    box.innerHTML = `<div class="tagws-editor-head"><h4>加入类别 · 已选 ${TAGWS.selected.size} 个标签</h4></div>
+      <p class="tagws-note">保留已有类别；未分类标签有了首个归属后会自动退出「未分类」。</p>
+      <div class="tagws-options">${tagwsCatChecks([])}</div>
+      <div class="tagws-action-group"><button type="button" class="btn" data-tw="confirmAdd">确认加入</button>
+        <button type="button" class="btn ghost" data-tw="closeEditor">取消</button></div>${err}`;
+    return;
+  }
+  if (panel.kind === 'remove') {
+    box.innerHTML = `<div class="tagws-editor-head"><h4>从「${esc(tagwsViewLabel(TAGWS.view))}」移出 ${TAGWS.selected.size} 个标签？</h4></div>
+      <p class="tagws-note">移出后仍可在「全部标签」找到；没有其他类别的标签会回到「未分类」。</p>
+      <div class="tagws-action-group"><button type="button" class="btn" data-tw="confirmRemove">确认移出</button>
+        <button type="button" class="btn ghost" data-tw="closeEditor">取消</button></div>${err}`;
+    return;
+  }
+  const t = panel.tag;
+  if (!t) { box.hidden = true; return; }
+  if (panel.kind === 'inactive') {
+    box.innerHTML = `<div class="tagws-editor-head"><h4>停用「${esc(t.tag_name)}」？</h4></div>
+      <p class="tagws-note">保留 ${Number(t.count) || 0} 个作品的标签关联，可在「已停用」中恢复。</p>
+      <div class="tagws-action-group"><button type="button" class="btn danger" data-tw="disable">确认停用</button>
+        <button type="button" class="btn ghost" data-tw="edit" data-value="${t.tag_id}">返回编辑</button></div>${err}`;
+    return;
+  }
+  box.innerHTML = `<div class="tagws-editor-head"><h4>编辑标签</h4>
+      ${t.status === 'disabled' ? '' : '<button type="button" class="tagws-link danger" data-tw="confirmDisable">停用标签</button>'}</div>
+    <label class="tagws-field-label">显示名<input id="tagws-edit-name" class="tagws-field"
+      value="${esc(t.tag_name)}" maxlength="60"></label>
+    <p class="tagws-note">用于 ${Number(t.count) || 0} 个作品</p>
+    <div class="tagws-options">${tagwsCatChecks(t.categories || [])}</div>
+    <div class="tagws-action-group"><button type="button" class="btn" data-tw="saveTag">保存标签</button>
+      <button type="button" class="btn ghost" data-tw="closeEditor">取消</button></div>${err}`;
+}
+
+function tagwsEditorError(message) {
+  const el = $('#tagws-editor-error');
+  if (el) { el.textContent = message; el.hidden = false; }
+}
+
+function tagwsRenderSettings() {
+  const box = $('#tagws-settings');
+  if (!box) return;
+  const rows = TAGWS.cats.map((c, i) => {
+    const draft = TAGWS.folderDraft[c.category_id] !== undefined
+      ? TAGWS.folderDraft[c.category_id] : (c.dir_name || '');
+    const nameDraft = TAGWS.nameDraft[c.category_id] !== undefined
+      ? TAGWS.nameDraft[c.category_id] : c.name;
+    return `<div class="tagws-setting" data-cid="${esc(c.category_id)}">
+      <label class="tagws-field-label">显示名<input class="tagws-field tagws-cat-name"
+        value="${esc(nameDraft)}" maxlength="24"></label>
+      <div class="tagws-folder-field"><span class="tagws-note">绑定文件夹</span>
+        <output class="tagws-folder-display">${esc(draft || '未绑定')}</output>
+        <div class="tagws-action-group">
+          <button type="button" class="btn ghost" data-tw="pickFolder" ${TAGWS.busy ? 'disabled' : ''}>${draft ? '更换文件夹' : '选择文件夹'}</button>
+          ${draft ? '<button type="button" class="tagws-link" data-tw="unbindFolder">解除绑定</button>' : ''}
+        </div></div>
+      <div class="tagws-setting-actions">
+        <button type="button" class="btn" data-tw="saveCategory">保存</button>
+        ${i > 0 ? '<button type="button" class="btn ghost" data-tw="moveUp">上移</button>' : ''}
+        ${c.category_id === 'uncategorized' ? ''
+          : '<button type="button" class="btn danger" data-tw="deleteCategory">删除</button>'}
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML = `<div class="tagws-settings-head">
+      <h3>标签类别设置</h3>
+      <div class="tagws-action-group">
+        <button type="button" class="btn" data-tw="settingsNew">新建标签类别</button>
+        <button type="button" class="btn ghost" data-tw="backToTags">返回标签</button>
+      </div>
+    </div>
+    <p class="tagws-note">命中多个已绑定文件夹的类别时，按以下顺序取第一个。保存只修改分区规则，不移动文件。</p>
+    ${TAGWS.newCatDraft ? `<div class="tagws-setting tagws-new-cat">
+      <label class="tagws-field-label">新类别名称<input id="tagws-new-cat-name" class="tagws-field" maxlength="24" placeholder="例如：题材" value="${esc(TAGWS.newCatName || '')}"></label>
+      <div class="tagws-setting-actions"><button type="button" class="btn" data-tw="createCategory">创建</button>
+        <button type="button" class="btn ghost" data-tw="cancelNewCat">取消</button></div>
+    </div>` : ''}
+    ${rows}
+    <p class="tagws-note">「未分类」自动收纳没有类别的标签。</p>
+    <p class="tagws-feedback${TAGWS.statusErr ? ' is-err' : ''}" id="tagws-settings-status" role="status" ${TAGWS.status ? '' : 'hidden'}>${esc(TAGWS.status)}</p>`;
+}
+
+async function tagwsSetView(view) {
+  TAGWS.view = view;
+  TAGWS.page = 1;
+  TAGWS.q = '';
+  const search = $('#tagws-search');
+  if (search) search.value = '';
+  TAGWS.selected.clear();
+  TAGWS.onlySelected = false;
+  TAGWS.panel = null;
+  TAGWS.status = '';
+  TAGWS.statusErr = false;
+  await tagwsRefresh();
+}
+
+function tagwsOnInput(e) {
+  const el = e.target;
+  if (!el) return;
+  if (el.id === 'tagws-search') {
+    clearTimeout(TAGWS.searchTimer);
+    TAGWS.searchTimer = setTimeout(() => {
+      TAGWS.q = el.value.trim();
+      TAGWS.page = 1;
+      tagwsRefresh();
+    }, 220);
+    return;
+  }
+  // 设置页的输入先存草稿: 选择文件夹/上移等重渲染不能把已输入的名字冲掉
+  if (el.id === 'tagws-new-cat-name') { TAGWS.newCatName = el.value; return; }
+  if (el.classList && el.classList.contains('tagws-cat-name')) {
+    const cid = el.closest('[data-cid]')?.dataset.cid;
+    if (cid) TAGWS.nameDraft[cid] = el.value;
+  }
+}
+
+function tagwsOnChange(e) {
+  const cb = e.target;
+  if (!cb) return;
+  if (cb.id === 'tagws-page-check') {
+    for (const t of TAGWS.items) {
+      if (cb.checked) TAGWS.selected.add(t.tag_id);
+      else TAGWS.selected.delete(t.tag_id);
+    }
+    if (!TAGWS.selected.size) TAGWS.onlySelected = false;
+    tagwsRenderAll();
+    return;
+  }
+  if (cb.matches('[data-tag-id]')) {
+    const id = Number(cb.dataset.tagId);
+    if (cb.checked) TAGWS.selected.add(id);
+    else TAGWS.selected.delete(id);
+    if (!TAGWS.selected.size) TAGWS.onlySelected = false;
+    tagwsRenderAll();
+  }
+}
+
+async function tagwsOnClick(e) {
+  const el = e.target.closest('[data-tw]');
+  if (!el) return;
+  const act = el.dataset.tw;
+  if (act === 'view') { await tagwsSetView(el.dataset.value); return; }
+  if (act === 'sort') {
+    TAGWS.order = TAGWS.order === 'desc' ? 'asc' : 'desc';
+    TAGWS.page = 1;
+    await tagwsRefresh();
+    return;
+  }
+  if (act === 'page') {
+    TAGWS.page = Math.max(1, TAGWS.page + Number(el.dataset.value || 0));
+    await tagwsRefresh();
+    return;
+  }
+  if (act === 'selected') {
+    if (!TAGWS.selected.size) return;
+    TAGWS.onlySelected = !TAGWS.onlySelected;
+    TAGWS.page = 1;
+    await tagwsRefresh();
+    return;
+  }
+  if (act === 'clear') {
+    TAGWS.selected.clear();
+    TAGWS.onlySelected = false;
+    TAGWS.panel = null;
+    tagwsRenderAll();
+    return;
+  }
+  if (act === 'add') { TAGWS.panel = { kind: 'add' }; tagwsRenderEditor(); return; }
+  if (act === 'remove') { TAGWS.panel = { kind: 'remove' }; tagwsRenderEditor(); return; }
+  if (act === 'closeEditor') { TAGWS.panel = null; tagwsRenderEditor(); return; }
+  if (act === 'restore') { await tagwsSetStatus('restore'); return; }
+  if (act === 'edit') {
+    const t = TAGWS.items.find(x => String(x.tag_id) === String(el.dataset.value));
+    if (t) { TAGWS.panel = { kind: 'edit', tag: t }; tagwsRenderEditor(); }
+    return;
+  }
+  if (act === 'confirmAdd') { await tagwsConfirmAdd(); return; }
+  if (act === 'confirmRemove') { await tagwsConfirmRemove(); return; }
+  if (act === 'saveTag') { await tagwsSaveTag(); return; }
+  if (act === 'confirmDisable') {
+    const name = $('#tagws-edit-name');
+    const t = TAGWS.panel && TAGWS.panel.tag;
+    if (t && name) t.tag_name = name.value.trim() || t.tag_name;
+    if (t) { TAGWS.panel = { kind: 'inactive', tag: t }; tagwsRenderEditor(); }
+    return;
+  }
+  if (act === 'disable') { await tagwsSetStatus('disable'); return; }
+  if (act === 'settings') { TAGWS.showSettings = true; tagwsRenderAll(); return; }
+  if (act === 'backToTags') {
+    TAGWS.showSettings = false;
+    TAGWS.status = '';
+    TAGWS.folderDraft = {};
+    TAGWS.nameDraft = {};
+    TAGWS.newCatDraft = false;
+    TAGWS.newCatName = '';
+    tagwsRenderAll();
+    return;
+  }
+  if (act === 'settingsNew') {
+    TAGWS.newCatDraft = true;
+    TAGWS.newCatName = '';
+    tagwsRenderSettings();
+    focusNewCat();
+    return;
+  }
+  if (act === 'cancelNewCat') {
+    TAGWS.newCatDraft = false;
+    TAGWS.newCatName = '';
+    tagwsRenderSettings();
+    return;
+  }
+  if (act === 'createCategory') { await tagwsCreateCategory(); return; }
+  if (act === 'saveCategory') { await tagwsSaveCategory(el.closest('[data-cid]')?.dataset.cid); return; }
+  if (act === 'pickFolder') { await tagwsPickFolder(el.closest('[data-cid]')?.dataset.cid); return; }
+  if (act === 'unbindFolder') {
+    const cid = el.closest('[data-cid]')?.dataset.cid;
+    if (cid) { TAGWS.folderDraft[cid] = ''; tagwsStatus('已解除绑定，点保存生效'); tagwsRenderSettings(); }
+    return;
+  }
+  if (act === 'moveUp') { await tagwsMoveUp(el.closest('[data-cid]')?.dataset.cid); return; }
+  if (act === 'deleteCategory') { await tagwsDeleteCategory(el.closest('[data-cid]')?.dataset.cid); return; }
+}
+
+function focusNewCat() {
+  const input = $('#tagws-new-cat-name');
+  if (input) input.focus();
+}
+
+async function tagwsConfirmAdd() {
+  const cats = [...document.querySelectorAll('#tagws-editor [data-cat-check]:checked')]
+    .map(x => x.value);
+  if (!cats.length) { tagwsEditorError('请选择至少一个标签类别'); return; }
+  const ids = [...TAGWS.selected];
+  let r = null;
   try {
-    const r = await api('/api/tags/categories/' + encodeURIComponent(cid), {
+    r = await api('/api/tags/batch', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ action: 'add', tag_ids: ids, category_ids: cats }),
     });
-    if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
-    toast('维度已保存', 'ok');
-    await openTagCategoryManager();
-  } catch (e) { toast('保存维度失败: ' + e.message, 'err'); }
+  } catch (e) { tagwsEditorError('保存失败: ' + e.message); return; }
+  if (!r || !r.ok) { tagwsEditorError((r && r.msg) || '保存失败'); return; }
+  TAGWS.panel = null;
+  TAGWS.selected.clear();
+  TAGWS.onlySelected = false;
+  TAGWS.status = `已更新 ${ids.length} 个标签的类别`;
+  await tagwsRefresh();
 }
 
-async function createTagCategory() {
-  const body = {
-    category_id: $('#tagcat-new-id').value.trim(),
-    name: $('#tagcat-new-name').value.trim(),
-    dir_name: $('#tagcat-new-dir').value.trim(),
-  };
+async function tagwsConfirmRemove() {
+  const ids = [...TAGWS.selected];
+  let r = null;
   try {
-    const r = await api('/api/tags/categories', {
+    r = await api('/api/tags/batch', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ action: 'remove', tag_ids: ids, category_id: TAGWS.view }),
     });
-    if (!r || !r.ok) throw new Error((r && r.msg) || '新增失败');
-    toast('维度已新增', 'ok');
-    await openTagCategoryManager();
-  } catch (e) { toast('新增维度失败: ' + e.message, 'err'); }
+  } catch (e) { tagwsEditorError('移出失败: ' + e.message); return; }
+  if (!r || !r.ok) { tagwsEditorError((r && r.msg) || '移出失败'); return; }
+  TAGWS.panel = null;
+  TAGWS.selected.clear();
+  TAGWS.onlySelected = false;
+  TAGWS.status = `已从「${tagwsViewLabel(TAGWS.view)}」移出 ${ids.length} 个标签`;
+  await tagwsRefresh();
 }
 
-async function deleteTagCategory(cid) {
-  if (!confirm('删除这个维度？只有没有标签的空维度才能删除。')) return;
+async function tagwsSaveTag() {
+  const t = TAGWS.panel && TAGWS.panel.tag;
+  if (!t) return;
+  const name = ($('#tagws-edit-name') || {}).value || '';
+  const cats = [...document.querySelectorAll('#tagws-editor [data-cat-check]:checked')]
+    .map(x => x.value);
+  let r = null;
+  try {
+    r = await api('/api/tags/' + t.tag_id + '/edit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), category_ids: cats }),
+    });
+  } catch (e) { tagwsEditorError('保存失败: ' + e.message); return; }
+  if (!r || !r.ok) { tagwsEditorError((r && r.msg) || '保存失败'); return; }
+  TAGWS.panel = null;
+  TAGWS.selected.clear();
+  TAGWS.onlySelected = false;
+  TAGWS.status = '标签已保存';
+  await tagwsRefresh();
+}
+
+async function tagwsSetStatus(action) {
+  const ids = action === 'restore' ? [...TAGWS.selected] : [TAGWS.panel?.tag?.tag_id];
+  const tagIds = ids.filter(Boolean);
+  if (!tagIds.length) return;
+  let r = null;
+  try {
+    r = await api('/api/tags/batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, tag_ids: tagIds }),
+    });
+  } catch (e) { tagwsStatus('操作失败: ' + e.message, true); return; }
+  if (!r || !r.ok) { tagwsStatus((r && r.msg) || '操作失败', true); return; }
+  TAGWS.panel = null;
+  TAGWS.selected.clear();
+  TAGWS.onlySelected = false;
+  TAGWS.status = action === 'restore' ? `已恢复 ${tagIds.length} 个标签` : '标签已停用';
+  await tagwsRefresh();
+}
+
+async function tagwsCreateCategory() {
+  const input = $('#tagws-new-cat-name');
+  const name = ((input && input.value) || TAGWS.newCatName || '').trim();
+  if (!name) { tagwsStatus('请填写类别名称', true); return; }
+  const maxSort = TAGWS.cats.reduce(
+    (m, c) => Math.max(m, Number(c.sort_order) || 0), -1);
+  let r = null;
+  try {
+    r = await api('/api/tags/categories', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category_id: 'cat_' + Date.now().toString(36), name,
+                                       sort_order: maxSort + 1 }),
+    });
+  } catch (e) { tagwsStatus('创建失败: ' + e.message, true); return; }
+  if (!r || !r.ok) { tagwsStatus((r && r.msg) || '创建失败', true); return; }
+  TAGWS.newCatDraft = false;
+  TAGWS.newCatName = '';
+  TAGWS.status = '已新建标签类别';
+  await tagwsLoadCats();
+  tagwsRenderSettings();
+}
+
+async function tagwsSaveCategory(cid) {
+  if (!cid) return;
+  const row = document.querySelector(`#tagws-settings [data-cid="${cid}"]`);
+  if (!row) return;
+  const c = TAGWS.cats.find(x => x.category_id === cid) || {};
+  const name = TAGWS.nameDraft[cid] !== undefined ? TAGWS.nameDraft[cid]
+    : ((row.querySelector('.tagws-cat-name') || {}).value || '');
+  const dir = TAGWS.folderDraft[cid] !== undefined ? TAGWS.folderDraft[cid] : (c.dir_name || '');
+  let r = null;
+  try {
+    r = await api('/api/tags/categories/' + encodeURIComponent(cid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), dir_name: dir, sort_order: c.sort_order }),
+    });
+  } catch (e) { tagwsStatus('保存失败: ' + e.message, true); tagwsRenderSettings(); return; }
+  if (!r || !r.ok) { tagwsStatus((r && r.msg) || '保存失败', true); tagwsRenderSettings(); return; }
+  TAGWS.status = '已保存分区规则';
+  TAGWS.statusErr = false;
+  delete TAGWS.folderDraft[cid];
+  delete TAGWS.nameDraft[cid];
+  await tagwsLoadCats();
+  tagwsRenderSettings();
+}
+
+async function tagwsPickFolder(cid) {
+  if (!cid || TAGWS.busy) return;
+  const c = TAGWS.cats.find(x => x.category_id === cid) || {};
+  const current = TAGWS.folderDraft[cid] !== undefined ? TAGWS.folderDraft[cid] : (c.dir_name || '');
+  TAGWS.busy = true;
+  tagwsRenderSettings();
+  let r = null;
+  try {
+    r = await api('/api/tags/pick-folder', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rel: current }),
+    });
+  } catch (e) {
+    TAGWS.busy = false;
+    tagwsStatus('选择文件夹失败: ' + e.message, true);
+    tagwsRenderSettings();
+    return;
+  }
+  TAGWS.busy = false;
+  if (r && r.ok) {
+    TAGWS.folderDraft[cid] = r.rel;
+    TAGWS.status = '已选择文件夹，点保存生效';
+    TAGWS.statusErr = false;
+  } else if (r && r.cancelled) {
+    TAGWS.status = '已取消选择';
+    TAGWS.statusErr = false;
+  } else if (r && r.remote) {
+    TAGWS.status = r.msg || '选择文件夹只支持在本机操作';
+    TAGWS.statusErr = true;
+  } else {
+    TAGWS.status = (r && (r.error || r.msg)) || '选择文件夹失败';
+    TAGWS.statusErr = true;
+  }
+  tagwsRenderSettings();
+}
+
+async function tagwsMoveUp(cid) {
+  const i = TAGWS.cats.findIndex(x => x.category_id === cid);
+  if (i <= 0) return;
+  const ordered = TAGWS.cats.slice();
+  [ordered[i - 1], ordered[i]] = [ordered[i], ordered[i - 1]];
+  try {
+    for (let k = 0; k < ordered.length; k++) {
+      await api('/api/tags/categories/' + encodeURIComponent(ordered[k].category_id), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sort_order: k }),
+      });
+    }
+    TAGWS.status = '已更新分区顺序';
+    TAGWS.statusErr = false;
+  } catch (e) { TAGWS.status = '调整顺序失败: ' + e.message; TAGWS.statusErr = true; }
+  await tagwsLoadCats();
+  tagwsRenderSettings();
+}
+
+async function tagwsDeleteCategory(cid) {
+  if (!cid) return;
+  const c = TAGWS.cats.find(x => x.category_id === cid);
+  if (!c) return;
+  if (!confirm(`删除标签类别「${c.name}」？只有没有标签的空类别才能删除。`)) return;
   try {
     const r = await api('/api/tags/categories/' + encodeURIComponent(cid), { method: 'DELETE' });
-    if (!r || !r.ok) throw new Error((r && r.msg) || '删除失败');
-    toast('维度已删除', 'ok');
-    await openTagCategoryManager();
-  } catch (e) { toast('删除维度失败: ' + e.message, 'err'); }
+    if (!r || !r.ok) { TAGWS.status = (r && r.msg) || '删除失败'; TAGWS.statusErr = true; }
+    else {
+      TAGWS.status = '类别已删除'; TAGWS.statusErr = false;
+      delete TAGWS.nameDraft[cid];
+      delete TAGWS.folderDraft[cid];
+    }
+  } catch (e) { TAGWS.status = '删除失败: ' + e.message; TAGWS.statusErr = true; }
+  await tagwsLoadCats();
+  tagwsRenderSettings();
 }
 
 window.openTagCategoryManager = openTagCategoryManager;
-window.loadTagCategoryTags = loadTagCategoryTags;
-window.setTagCategories = setTagCategories;
-window.saveTagCategory = saveTagCategory;
-window.createTagCategory = createTagCategory;
-window.deleteTagCategory = deleteTagCategory;
 
 // 用 DB 实际来源(含自定义)重建图库+作者管理两个来源下拉; 保留当前选中值
 function rebuildSourceFilters(dbSources) {
@@ -6745,7 +7289,10 @@ window.saveBatchEdit = async function () {
 function openLibModal(title, bodyHtml, opts) {
   // 大号弹窗 (opts.lg): 一键整理预览/来源管理等表格类内容用, 更宽更高好读
   const box = $('#lib-modal .modal-box');
-  if (box) box.classList.toggle('modal-lg', !!(opts && opts.lg));
+  if (box) {
+    box.classList.toggle('modal-lg', !!(opts && opts.lg));
+    box.classList.toggle('modal-xl', !!(opts && opts.xl));
+  }
   $('#lib-modal-title').textContent = title;
   $('#lib-modal-body').innerHTML = bodyHtml;
   $('#lib-modal').style.display = 'flex';

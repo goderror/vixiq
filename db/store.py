@@ -27,6 +27,7 @@ import re
 import shutil
 import sqlite3
 import traceback
+import unicodedata
 import zipfile
 from collections import namedtuple
 from dataclasses import dataclass, field
@@ -4601,6 +4602,7 @@ class PixivDatabase:
             SELECT tg.tag_name, COUNT(atg.artwork_id) AS count
               FROM tags tg
          LEFT JOIN artwork_tags atg ON atg.tag_id = tg.tag_id
+             WHERE tg.status = 'active'
           GROUP BY tg.tag_id
           ORDER BY count DESC, tg.tag_name ASC
             """
@@ -4613,7 +4615,8 @@ class PixivDatabase:
         rows = self.conn.execute(
             "SELECT c.category_id, c.name, c.dir_name, c.sort_order, c.status, "
             "       (SELECT COUNT(*) FROM category_tags ct "
-            "         WHERE ct.category_id=c.category_id) AS tag_count "
+            "          JOIN tags t ON t.tag_id=ct.tag_id "
+            "         WHERE ct.category_id=c.category_id AND t.status='active') AS tag_count "
             "  FROM tag_categories c ORDER BY c.sort_order, c.category_id").fetchall()
         return [dict(r) for r in rows]
 
@@ -4645,9 +4648,11 @@ class PixivDatabase:
             fields.append("name=?")
             params.append(nm)
         if dir_name is not None:
-            dn = str(dir_name).strip().strip("/\\")
-            if dn and (dn in (".", "..") or "/" in dn or "\\" in dn):
-                raise ValueError("分区目录只能是单层目录名")
+            dn = str(dir_name).strip().replace("\\", "/").strip("/")
+            if dn:
+                parts = dn.split("/")
+                if any((not p) or p in (".", "..") or ":" in p for p in parts):
+                    raise ValueError("分区目录必须是图库内的相对路径")
             fields.append("dir_name=?")
             params.append(dn)
         if sort_order is not None:
@@ -4719,10 +4724,172 @@ class PixivDatabase:
             "SELECT c.dir_name FROM artwork_tags at "
             "JOIN category_tags ct ON ct.tag_id=at.tag_id "
             "JOIN tag_categories c ON c.category_id=ct.category_id "
+            "JOIN tags t ON t.tag_id=at.tag_id "
             "WHERE at.artwork_id=? AND c.dir_name<>'' AND c.status='active' "
+            "  AND t.status='active' "
             "ORDER BY c.sort_order, c.category_id LIMIT 1",
             (str(artwork_id),)).fetchone()
         return str(row["dir_name"]) if row else ""
+
+    # ---- 标签工作台（2026-11-19）----
+    def tag_workspace_counts(self) -> dict:
+        """工作台导航计数：正常标签 / 未分类 / 已停用。类别计数见 list_tag_categories。"""
+        row = self.conn.execute(
+            "SELECT "
+            " (SELECT COUNT(*) FROM tags WHERE status='active') AS all_active, "
+            " (SELECT COUNT(*) FROM tags t WHERE t.status='active' AND NOT EXISTS ("
+            "   SELECT 1 FROM category_tags ct WHERE ct.tag_id=t.tag_id "
+            "    AND ct.category_id<>'uncategorized')) AS unclassified, "
+            " (SELECT COUNT(*) FROM tags WHERE status='disabled') AS inactive").fetchone()
+        return dict(row)
+
+    def list_tags_page(self, view: str = "all", q: str = "", page: int = 1,
+                       page_size: int = 20, order: str = "desc",
+                       ids: "list[int] | None" = None) -> dict:
+        """标签工作台分页；view=all/unclassified/inactive/<category_id>。
+
+        ids 非空时按 id 集合查（「查看已选」用），此时忽略 view 过滤。"""
+        size = max(1, min(200, int(page_size or 20)))
+        cur_page = max(1, int(page or 1))
+        kw = str(q or "").strip()
+        where, params = [], []
+        id_list = []
+        for x in (ids or []):
+            try:
+                id_list.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        if id_list:
+            where.append("t.tag_id IN (%s)" % ",".join("?" * len(id_list)))
+            params += id_list
+        elif view == "inactive":
+            where.append("t.status='disabled'")
+        else:
+            where.append("t.status='active'")
+            if view == "unclassified":
+                where.append(
+                    "NOT EXISTS (SELECT 1 FROM category_tags ct "
+                    "WHERE ct.tag_id=t.tag_id AND ct.category_id<>'uncategorized')")
+            elif view and view != "all":
+                where.append(
+                    "EXISTS (SELECT 1 FROM category_tags ct "
+                    "WHERE ct.tag_id=t.tag_id AND ct.category_id=?)")
+                params.append(str(view))
+        if kw:
+            where.append("(t.tag_name LIKE ? OR t.tag_name_zh LIKE ? OR t.tag_name_en LIKE ?)")
+            like = f"%{kw}%"
+            params += [like, like, like]
+        w = " AND ".join(where) or "1=1"
+        total = int(self.conn.execute(
+            f"SELECT COUNT(*) FROM tags t WHERE {w}", params).fetchone()[0])
+        pages = max(1, (total + size - 1) // size)
+        cur_page = min(pages, cur_page)
+        order_sql = "count ASC" if str(order).lower() == "asc" else "count DESC"
+        rows = self.conn.execute(
+            f"SELECT t.tag_id, t.tag_name, t.tag_name_zh, t.tag_name_en, "
+            f"       t.status, t.quality, "
+            f"       (SELECT COUNT(*) FROM artwork_tags at WHERE at.tag_id=t.tag_id) AS count, "
+            f"       (SELECT GROUP_CONCAT(ct.category_id) FROM category_tags ct "
+            f"         WHERE ct.tag_id=t.tag_id) AS cats "
+            f"  FROM tags t WHERE {w} "
+            f" ORDER BY {order_sql}, t.tag_name LIMIT ? OFFSET ?",
+            params + [size, (cur_page - 1) * size]).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r)
+            d["categories"] = [x for x in str(d.pop("cats") or "").split(",") if x]
+            items.append(d)
+        return {"items": items, "total": total, "page": cur_page,
+                "pages": pages, "page_size": size}
+
+    def batch_tag_categories(self, tag_ids, mode: str = "add",
+                             category_ids=None, category_id: str = "") -> int:
+        """批量加入/移出类别。加入保留原归属；移出最后一个类别后回到「未分类」。"""
+        ids = []
+        for x in (tag_ids or []):
+            try:
+                ids.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            raise ValueError("没有选中标签")
+        mode = str(mode or "add")
+        cats = [str(x) for x in (category_ids or []) if str(x).strip()]
+        with self.conn:
+            if mode == "add":
+                if not cats:
+                    raise ValueError("请选择至少一个标签类别")
+                for tid in ids:
+                    for cid in cats:
+                        self.conn.execute(
+                            "INSERT OR IGNORE INTO category_tags(category_id, tag_id) "
+                            "VALUES(?,?)", (cid, tid))
+                    if any(c != "uncategorized" for c in cats):
+                        self.conn.execute(
+                            "DELETE FROM category_tags WHERE tag_id=? "
+                            "AND category_id='uncategorized'", (tid,))
+            elif mode == "remove":
+                cid = str(category_id or "")
+                if not cid:
+                    raise ValueError("缺少要移出的类别")
+                for tid in ids:
+                    self.conn.execute(
+                        "DELETE FROM category_tags WHERE tag_id=? AND category_id=?",
+                        (tid, cid))
+                    left = self.conn.execute(
+                        "SELECT COUNT(*) FROM category_tags WHERE tag_id=?",
+                        (tid,)).fetchone()[0]
+                    if not left:
+                        self.conn.execute(
+                            "INSERT OR IGNORE INTO category_tags(category_id, tag_id) "
+                            "VALUES('uncategorized',?)", (tid,))
+            else:
+                raise ValueError("未知的批量操作")
+        return len(ids)
+
+    def update_tag_meta(self, tag_id: int, name: str, category_ids=None) -> None:
+        """改标签显示名并替换类别归属；空类别回到「未分类」。"""
+        tid = int(tag_id)
+        nm = str(name or "").strip()
+        if not nm:
+            raise ValueError("标签名称不能为空")
+        norm = unicodedata.normalize("NFKC", nm).strip().lower()
+        # 旧数据的 normalized_name 只做过 lower/trim，这里按 NFKC 实算，避免全半角漏判
+        for row in self.conn.execute(
+                "SELECT tag_id, tag_name FROM tags WHERE tag_id<>?", (tid,)).fetchall():
+            if unicodedata.normalize("NFKC", str(row["tag_name"] or "")).strip().lower() == norm:
+                raise ValueError("已有同名标签")
+        ids = [str(x) for x in (category_ids or []) if str(x).strip()]
+        # 有了真实类别就不再保留「未分类」占位，避免工作台计数与归属不一致
+        if any(c != "uncategorized" for c in ids):
+            ids = [c for c in ids if c != "uncategorized"]
+        with self.conn:
+            self.conn.execute(
+                "UPDATE tags SET tag_name=?, normalized_name=? WHERE tag_id=?",
+                (nm, norm, tid))
+            self.conn.execute("DELETE FROM category_tags WHERE tag_id=?", (tid,))
+            for cid in (ids or ["uncategorized"]):
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO category_tags(category_id, tag_id) VALUES(?,?)",
+                    (cid, tid))
+
+    def set_tags_status(self, tag_ids, status: str) -> int:
+        """停用/恢复标签；保留作品关联，停用标签不进入主列表与默认筛选推荐。"""
+        st = str(status or "")
+        if st not in ("active", "disabled"):
+            raise ValueError("标签状态只能是 active / disabled")
+        ids = []
+        for x in (tag_ids or []):
+            try:
+                ids.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            raise ValueError("没有选中标签")
+        with self.conn:
+            for tid in ids:
+                self.conn.execute("UPDATE tags SET status=? WHERE tag_id=?", (st, tid))
+        return len(ids)
 
     def list_sources(self) -> list[dict]:
         """图库实际用到的全部来源 + 各来源作品数 (筛选下拉/统计用, 含自定义来源)。"""

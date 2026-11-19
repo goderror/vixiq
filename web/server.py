@@ -6013,6 +6013,17 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"count": db.count_missing_metadata()})
 
     # ---------------- 🏷 标签维度 / 分区（2026-11-19） ----------------
+    def _tag_category_dir(raw):
+        """校验标签类别绑定目录：只接受图库根内真实存在的相对目录；空 = 不绑定。"""
+        dn = str(raw or "").strip()
+        if not dn:
+            return ""
+        root = Path(_paths_snapshot()["effective"]["img"]).resolve()
+        cand = (root / dn.replace("\\", "/").strip("/")).resolve()
+        if cand == root or root not in cand.parents or not cand.is_dir():
+            raise ValueError("只支持图库目录下已存在的子文件夹")
+        return cand.relative_to(root).as_posix()
+
     @app.route("/api/tags/categories")
     def api_tag_categories():
         """标签维度列表（dir_name 非空 = 该维度绑定为分区目录）。"""
@@ -6023,10 +6034,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     def api_tag_categories_create():
         body = request.get_json(silent=True) or {}
         try:
+            dn = _tag_category_dir(body.get("dir_name")) \
+                if body.get("dir_name") is not None else ""
             with _db() as db:
                 db.create_tag_category(
                     body.get("category_id"), body.get("name"),
-                    body.get("dir_name") or "", int(body.get("sort_order") or 0))
+                    dn, int(body.get("sort_order") or 0))
         except Exception as e:
             return jsonify({"ok": False, "msg": str(e)}), 400
         mark_dirty("artworks", "stats", "facets")
@@ -6035,6 +6048,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     @app.route("/api/tags/categories/<cid>", methods=["POST"])
     def api_tag_categories_update(cid):
         body = request.get_json(silent=True) or {}
+        dn = body.get("dir_name")
+        if dn is not None:
+            # 只接受图库根内的、真实存在的相对目录；手填绝对路径/越界路径一律拒绝
+            try:
+                body["dir_name"] = _tag_category_dir(dn)
+            except Exception as e:
+                return jsonify({"ok": False, "msg": str(e)}), 400
         try:
             with _db() as db:
                 db.update_tag_category(
@@ -6076,6 +6096,99 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"ok": False, "msg": str(e)}), 400
         mark_dirty("artworks", "facets")
         return jsonify({"ok": True})
+
+    # ---- 标签工作台（2026-11-19）----
+    @app.route("/api/tags/page")
+    def api_tags_page():
+        """服务端分页的标签列表；view=all/unclassified/inactive/<category_id>。
+
+        ids 非空时返回这些标签（查看已选），忽略 view 过滤。响应附带导航计数与类别。"""
+        args = request.args
+        ids = [x for x in str(args.get("ids") or "").split(",") if x.strip()]
+        try:
+            page = int(args.get("page") or 1)
+            page_size = int(args.get("page_size") or 20)
+        except Exception:
+            page, page_size = 1, 20
+        with _db() as db:
+            data = db.list_tags_page(
+                view=args.get("view", "all"), q=args.get("q", ""),
+                page=page, page_size=page_size,
+                order=args.get("order", "desc"), ids=ids)
+            data["counts"] = db.tag_workspace_counts()
+            data["categories"] = db.list_tag_categories()
+            return jsonify({"ok": True, **data})
+
+    @app.route("/api/tags/batch", methods=["POST"])
+    def api_tags_batch():
+        body = request.get_json(silent=True) or {}
+        action = str(body.get("action") or "")
+        tag_ids = body.get("tag_ids") or []
+        try:
+            with _db() as db:
+                if action in ("add", "remove"):
+                    n = db.batch_tag_categories(
+                        tag_ids, mode=action,
+                        category_ids=body.get("category_ids") or [],
+                        category_id=body.get("category_id") or "")
+                elif action in ("disable", "restore"):
+                    n = db.set_tags_status(
+                        tag_ids, "disabled" if action == "disable" else "active")
+                else:
+                    return jsonify({"ok": False, "msg": "未知的批量操作"}), 400
+        except Exception as e:
+            return jsonify({"ok": False, "msg": str(e)}), 400
+        mark_dirty("artworks", "facets")
+        return jsonify({"ok": True, "count": n})
+
+    @app.route("/api/tags/<int:tag_id>/edit", methods=["POST"])
+    def api_tag_edit(tag_id):
+        body = request.get_json(silent=True) or {}
+        try:
+            with _db() as db:
+                db.update_tag_meta(tag_id, body.get("name"),
+                                   body.get("category_ids") or [])
+        except Exception as e:
+            return jsonify({"ok": False, "msg": str(e)}), 400
+        mark_dirty("artworks", "facets")
+        return jsonify({"ok": True})
+
+    @app.route("/api/tags/pick-folder", methods=["POST"])
+    def api_tag_category_pick_folder():
+        """本机弹原生「选择文件夹」，返回图库内的相对目录；只回填，不保存。
+
+        远程/手机隧道访问一律拒绝：原生对话框只在服务端所在机器上有效。"""
+        if not _is_local_request():
+            return jsonify({"ok": False, "remote": True,
+                            "msg": "选择文件夹只支持在本机操作"}), 403
+        body = request.get_json(silent=True) or {}
+        try:
+            root = Path(_paths_snapshot()["effective"]["img"]).resolve()
+        except Exception:
+            return jsonify({"ok": False, "error": "读不到图库目录"}), 500
+        rel = str(body.get("rel") or "").strip().replace("\\", "/").strip("/")
+        initial = root
+        if rel:
+            cand = (root / rel).resolve()
+            if cand.is_dir() and (cand == root or root in cand.parents):
+                initial = cand
+        from utils.folder_dialog import pick_folder
+        try:
+            picked = pick_folder("选择标签类别的文件夹", initial=str(initial))
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"弹不出系统对话框: {e}"}), 500
+        if not picked:
+            return jsonify({"ok": False, "cancelled": True})
+        try:
+            p = Path(picked).resolve()
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        if p == root or root not in p.parents:
+            return jsonify({"ok": False, "error": "请选择图库目录下的子文件夹"}), 400
+        if not p.is_dir():
+            return jsonify({"ok": False, "error": "选择的文件夹不可用"}), 400
+        return jsonify({"ok": True, "rel": p.relative_to(root).as_posix(),
+                        "abs": str(p)})
 
     @app.route("/api/library/items")
     def api_library_items():
