@@ -717,7 +717,13 @@
 - **验收**：T159（3 个作品分属角色/风格/未分类、作品+图片双视图、类别+标签叠加、
   停用标签不参与、facets 带类别、前端接线），全量 **150/150**。
   浏览器实测：选「角色」只剩验收作品1、标签候选只剩「验收角色」；切「风格」只剩验收作品2。
-- **部署状态**：见本次汇报（F 盘拔除期间安装版保持退出，插回后再部署/启动）。
+- **部署（2026-11-19）**：候选包 `_dev_runtime/packages/vixiq`（`built_at 17:49:32`）在 7813
+  独立数据验收通过：`/api/version` 前端 `20261119b`、`/api/library/items?tag_category=...`
+  正常、页面含 `#lib-f-tagcat`。`dist/vixiq` 与安装版 `D:\Program Files\Vixiq` 的
+  `vixiq.exe` / `_internal/web/static` / `_internal/db/migrations` 已同步（哈希一致），
+  旧文件备份 `.backup-tagcategory-20261119-1753`。本次无新迁移。
+  **F 盘（USB 外接 SSD）已拔除，安装版保持退出，插回后启动即生效**；桌面壁纸当前指向
+  F 盘图库文件，拔盘期间可能失效。GitHub **未提交、未推送**（提交 `59d236b` 仅本地）。
 
 ---
 
