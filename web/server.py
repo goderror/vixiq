@@ -3769,8 +3769,15 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
     @app.route("/api/health")
     def api_health():
+        # 健康检查只回答“服务活着”。数据盘（可能是外接盘）没挂载时 cookies 路径
+        # 会抛 FileNotFoundError, 这里必须吞掉 —— 否则启动器把 500 当未就绪,
+        # 启动画面会白等到超时。
+        try:
+            cookies = _cookies_path().exists()
+        except Exception:
+            cookies = False
         return jsonify({"ok": True, "app": "vixiq",
-                        "cookies_exist": _cookies_path().exists()})
+                        "cookies_exist": cookies})
 
     # ---------------- 🧭 首次使用引导 ----------------
     @app.route("/api/onboarding")

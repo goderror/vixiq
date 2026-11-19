@@ -34,6 +34,7 @@ import json
 import threading 
 import subprocess
 import urllib.request
+import urllib.error
 import webbrowser
 from pathlib import Path
 
@@ -120,10 +121,15 @@ def _safe_console():
 
 def _port_alive(host: str, port: int) -> bool:
     """该端口上是否有一个能响应 HTTP 的活实例?
-    (端口被占但连不通 = 进程已死的僵尸 socket, 应换端口启动而不是放弃)"""
+
+    500 等错误响应也必须算「活着」: 数据盘未挂载时 /api/health 会返回 500,
+    若把 500 当成没启动, 启动画面会一直等到超时（实测外接盘拔出时白等约 3 分钟）。
+    端口被占但连不通 = 进程已死的僵尸 socket, 仍返回 False。"""
     try:
         with urllib.request.urlopen(f"http://{host}:{port}/api/health", timeout=1.5) as r:
-            return 200 <= r.status < 500
+            return r.status < 600
+    except urllib.error.HTTPError:
+        return True     # 有 HTTP 状态码 = 服务已经在监听, 业务错误不影响“是否活着”
     except Exception:
         return False
 

@@ -3059,6 +3059,7 @@ def run_suite() -> SuiteResult:
     suite.add("T157", "🏷 标签维度接口: 分类查询/新增/改名/绑定目录/删除空维度 + 标签多维度 + 有标签拒绝删除 + 前端接线 (隔离数据)", t157_tag_category_api)
     suite.add("T158", "🏷 标签管理工作台: 服务端分页/搜索 + 跨页选择 + 批量加入/移出类别 + 停用恢复 + 编辑 + 文件夹选择(本机/远程) (隔离数据)", t158_tag_workspace)
     suite.add("T159", "🏷 图库按标签类别筛选: 作品/图片双视图 + 类别与标签叠加 + 未分类 + 停用标签不参与 + facets 带类别 + 前端接线 (隔离数据)", t159_library_tag_category_filter)
+    suite.add("T160", "🚀 外接数据盘缺失时启动不卡动画: /api/health 不依赖数据盘 + HTTP 500 也算服务活着 + 启动轮询接线 (离线)", t160_health_and_port_alive)
     suite.write_report()
     return suite
 
@@ -14758,6 +14759,69 @@ def t159_library_tag_category_filter() -> None:
             upaths.user_data = orig_ud
             if orig_img is not None:
                 wsrv._config["paths"]["img_subdir"] = orig_img
+
+
+def t160_health_and_port_alive() -> None:
+    """T160: 外接数据盘缺失时启动不能卡在启动动画（2026-11-19 用户实测）。
+
+    根因：数据盘拔掉后 /api/health 里读 cookies 路径抛 FileNotFoundError → 500；
+    启动器把 500 当「服务没起来」，splash 一直轮询到超时（约 3 分钟）。
+
+    ① /api/health 不依赖数据盘，cookies 路径异常也返回 200；
+    ② _port_alive 把 HTTP 500 当成「服务已经在监听」；连接失败才算没启动；
+    ③ main.py 的启动轮询仍走 _port_alive（静态接线）。
+    """
+    import urllib.error
+    from unittest.mock import patch
+    import main as main_mod
+    import utils.paths as upaths
+    import web.server as wsrv
+
+    client = wsrv.create_app().test_client()
+    orig = upaths.user_data
+
+    def _boom(_rel):
+        raise FileNotFoundError(3, "系统找不到指定的路径。", "F:\\")
+
+    upaths.user_data = _boom
+    try:
+        r = client.get("/api/health")
+        assert r.status_code == 200, r.status_code
+        j = r.get_json()
+        assert j["ok"] is True and j["app"] == "vixiq", j
+        assert j["cookies_exist"] is False, j
+    finally:
+        upaths.user_data = orig
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    with patch.object(main_mod.urllib.request, "urlopen",
+                      lambda *a, **k: _Resp()):
+        assert main_mod._port_alive("127.0.0.1", 1) is True
+
+    def _http500(*a, **k):
+        raise urllib.error.HTTPError("http://x/api/health", 500, "err", {}, None)
+
+    with patch.object(main_mod.urllib.request, "urlopen", _http500):
+        assert main_mod._port_alive("127.0.0.1", 1) is True, \
+            "500 也应视为服务活着, 否则启动画面会白等"
+
+    def _refused(*a, **k):
+        raise urllib.error.URLError("connection refused")
+
+    with patch.object(main_mod.urllib.request, "urlopen", _refused):
+        assert main_mod._port_alive("127.0.0.1", 1) is False
+
+    src = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")
+    assert "except urllib.error.HTTPError:" in src, "启动器未处理 HTTPError"
+    assert '_port_alive("127.0.0.1", port)' in src, "启动轮询未走 _port_alive"
 
 
 def t154_tidy_rmdir_safety() -> None:
