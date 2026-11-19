@@ -3058,6 +3058,7 @@ def run_suite() -> SuiteResult:
     suite.add("T156", "🏷 标签维度与分区: 角色/风格/未分类 + 标签多维度关联 + 维度绑定目录 + 分区计算按 sort_order + 删除边界 (隔离数据)", t156_tag_categories_and_section)
     suite.add("T157", "🏷 标签维度接口: 分类查询/新增/改名/绑定目录/删除空维度 + 标签多维度 + 有标签拒绝删除 + 前端接线 (隔离数据)", t157_tag_category_api)
     suite.add("T158", "🏷 标签管理工作台: 服务端分页/搜索 + 跨页选择 + 批量加入/移出类别 + 停用恢复 + 编辑 + 文件夹选择(本机/远程) (隔离数据)", t158_tag_workspace)
+    suite.add("T159", "🏷 图库按标签类别筛选: 作品/图片双视图 + 类别与标签叠加 + 未分类 + 停用标签不参与 + facets 带类别 + 前端接线 (隔离数据)", t159_library_tag_category_filter)
     suite.write_report()
     return suite
 
@@ -10391,7 +10392,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261119a" and _mss.group(1) == "20261119a", \
+    assert _mjs and _mss and _mjs.group(1) == "20261119b" and _mss.group(1) == "20261119b", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10486,7 +10487,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261119a', html) and _re.search(r'app\.js\?v=20261119a', html), \
+    assert _re.search(r'style\.css\?v=20261119b', html) and _re.search(r'app\.js\?v=20261119b', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10894,7 +10895,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261119a" in html and "app.js?v=20261119a" in html, \
+        assert "style.css?v=20261119b" in html and "app.js?v=20261119b" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13274,7 +13275,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261119a" in _h and "style.css?v=20261119a" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261119b" in _h and "style.css?v=20261119b" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14643,10 +14644,117 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261119a" in html and "app.js?v=20261119a" in html
+            assert "style.css?v=20261119b" in html and "app.js?v=20261119b" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
+            upaths.user_data = orig_ud
+            if orig_img is not None:
+                wsrv._config["paths"]["img_subdir"] = orig_img
+
+
+def t159_library_tag_category_filter() -> None:
+    """T159: 图库按标签类别筛选（2026-11-19）。
+
+    ① 作品视图 / 图片视图都支持 tag_category；
+    ② 类别与具体标签可叠加；未分类类别可筛；
+    ③ 停用标签不参与类别筛选，恢复后回来；
+    ④ facets 的标签带所属类别，前端据此联动类别与标签；
+    ⑤ 前端接线与版本串。
+    """
+    import tempfile
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import utils.paths as upaths
+    import web.server as wsrv
+    from db.store import PixivDatabase, WSt, PSt
+
+    with tempfile.TemporaryDirectory(prefix="t159tagcat_") as td:
+        tmp = Path(td)
+        orig_ud = upaths.user_data
+        orig_img = wsrv._config["paths"].get("img_subdir")
+        upaths.user_data = lambda rel: tmp / str(rel)
+        wsrv._config["paths"]["img_subdir"] = "img"
+        try:
+            db = PixivDatabase(str(tmp / "pixiv.db"))
+            try:
+                with db.conn:
+                    for aid, title in (("920001", "作品甲"), ("920002", "作品乙"),
+                                       ("920003", "作品丙")):
+                        db.change_work_status(aid, WSt.DONE, title=title, author_id="")
+                        db.mark_page_status(aid, 0, PSt.DONE,
+                                            local_path=f"x/{aid}_p0.png")
+                    ids = {}
+                    for name in ("测试角色", "测试风格", "测试未分类"):
+                        db.conn.execute("INSERT INTO tags(tag_name) VALUES(?)", (name,))
+                        ids[name] = int(db.conn.execute(
+                            "SELECT tag_id FROM tags WHERE tag_name=?",
+                            (name,)).fetchone()[0])
+                    db.assign_tag_categories(ids["测试角色"], ["character"])
+                    db.assign_tag_categories(ids["测试风格"], ["style"])
+                    db.assign_tag_categories(ids["测试未分类"], ["uncategorized"])
+                    for aid, name in (("920001", "测试角色"), ("920002", "测试风格"),
+                                      ("920003", "测试未分类")):
+                        db.conn.execute(
+                            "INSERT INTO artwork_tags(artwork_id, tag_id) VALUES(?,?)",
+                            (aid, ids[name]))
+            finally:
+                db.close()
+
+            client = wsrv.create_app().test_client()
+            with patch.object(wsrv, "_cached_reconcile",
+                              return_value=SimpleNamespace(missing_ids=[])):
+                def query(url):
+                    r = client.get(url).get_json()
+                    return {x["artwork_id"] for x in r["items"]}, r
+
+                got, r = query("/api/library/items?tag_category=character&r18=")
+                assert got == {"920001"}, (got, r)
+                assert r["counts"]["artworks"] == 1 and r["counts"]["images"] == 1, r["counts"]
+                got, _ = query("/api/library/items?tag_category=style&r18=")
+                assert got == {"920002"}, got
+                got, _ = query("/api/library/items?tag_category=uncategorized&r18=")
+                assert got == {"920003"}, got
+                # 类别 + 具体标签叠加: 角色类别里没有「测试风格」→ 空结果
+                got, _ = query("/api/library/items?tag_category=character&tag=测试风格&r18=")
+                assert got == set(), got
+                # 图片视图与作品视图同口径
+                got, r = query("/api/library/items?view=image&tag_category=character&r18=")
+                assert got == {"920001"} and r["counts"]["images"] == 1, (got, r["counts"])
+
+                # 停用标签不参与类别筛选；恢复后回来
+                db2 = PixivDatabase(str(tmp / "pixiv.db"))
+                try:
+                    tid = int(db2.conn.execute(
+                        "SELECT tag_id FROM tags WHERE tag_name='测试角色'").fetchone()[0])
+                    db2.set_tags_status([tid], "disabled")
+                finally:
+                    db2.close()
+                got, _ = query("/api/library/items?tag_category=character&r18=")
+                assert got == set(), "停用标签不应参与类别筛选"
+                db3 = PixivDatabase(str(tmp / "pixiv.db"))
+                try:
+                    db3.set_tags_status([tid], "active")
+                finally:
+                    db3.close()
+                got, _ = query("/api/library/items?tag_category=character&r18=")
+                assert got == {"920001"}, got
+
+                # facets 的标签带类别，前端据此过滤候选
+                f = client.get("/api/library/facets").get_json()
+                row = next(x for x in f["tags"] if x["tag_name"] == "测试角色")
+                assert row["categories"] == ["character"], row
+                unc = next(x for x in f["tags"] if x["tag_name"] == "测试未分类")
+                assert unc["categories"] == ["uncategorized"], unc
+
+            html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+            js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+            assert 'id="lib-f-tagcat"' in html and "标签类别: 全部" in html
+            for token in ("tagCategory", "tag_category", "renderTagCatSelect",
+                          "#lib-f-tagcat"):
+                assert token in js, f"前端缺 {token}"
+            assert "style.css?v=20261119b" in html and "app.js?v=20261119b" in html
+        finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
                 wsrv._config["paths"]["img_subdir"] = orig_img

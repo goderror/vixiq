@@ -2163,6 +2163,7 @@ class PixivDatabase:
     def list_artworks(self, *, q: str = '', illust_type=None, is_r18=None,
                       ai: "str | None" = None,
                       author_id: "str | None" = None, tag: "str | None" = None,
+                      tag_category: "str | None" = None,
                       missing: bool = False, sort: str = 'date',
                       order: str = 'desc', limit: int = 200,
                       offset: int = 0,
@@ -2214,6 +2215,15 @@ class PixivDatabase:
         if tag:
             where.append("tg.tag_name = ?")
             params.append(str(tag))
+        if tag_category:
+            # 按标签类别筛选: 作品至少有一个属于该类别的正常标签 (停用标签不参与)
+            where.append(
+                "EXISTS (SELECT 1 FROM artwork_tags atc "
+                "  JOIN category_tags ctc ON ctc.tag_id = atc.tag_id "
+                "  JOIN tags tc ON tc.tag_id = atc.tag_id "
+                " WHERE atc.artwork_id = a.artwork_id "
+                "   AND ctc.category_id = ? AND tc.status = 'active')")
+            params.append(str(tag_category))
         if missing:
             # 「缺元数据」= 还没补全且**补得回来**。已删除作品(deleted_at 非空)排除,
             # 否则每轮补全都去请求 404 空转 (v011 前靠标题占位文案挡住, 现在靠字段)。
@@ -2278,6 +2288,7 @@ class PixivDatabase:
     def count_artworks_filtered(self, *, q: str = '', illust_type=None, is_r18=None,
                                 ai: "str | None" = None,
                                 author_id: "str | None" = None, tag: "str | None" = None,
+                              tag_category: "str | None" = None,
                                 missing: bool = False,
                                 file_missing_ids: "set | list | None" = None,
                                 deleted: bool = False,
@@ -2320,6 +2331,15 @@ class PixivDatabase:
         if tag:
             where.append("tg.tag_name = ?")
             params.append(str(tag))
+        if tag_category:
+            # 按标签类别筛选: 作品至少有一个属于该类别的正常标签 (停用标签不参与)
+            where.append(
+                "EXISTS (SELECT 1 FROM artwork_tags atc "
+                "  JOIN category_tags ctc ON ctc.tag_id = atc.tag_id "
+                "  JOIN tags tc ON tc.tag_id = atc.tag_id "
+                " WHERE atc.artwork_id = a.artwork_id "
+                "   AND ctc.category_id = ? AND tc.status = 'active')")
+            params.append(str(tag_category))
         if missing:
             # 「缺元数据」= 还没补全且**补得回来**。已删除作品(deleted_at 非空)排除,
             # 否则每轮补全都去请求 404 空转 (v011 前靠标题占位文案挡住, 现在靠字段)。
@@ -2389,6 +2409,7 @@ class PixivDatabase:
     def list_images(self, *, q: str = '', illust_type=None, is_r18=None,
                     ai: "str | None" = None,
                     author_id: "str | None" = None, tag: "str | None" = None,
+                              tag_category: "str | None" = None,
                     missing: bool = False, sort: str = 'date', order: str = 'desc',
                     limit: int = 200, offset: int = 0,
                     deleted: bool = False, author_status: "str | None" = None,
@@ -2434,6 +2455,15 @@ class PixivDatabase:
         if tag:
             where.append("tg.tag_name = ?")
             params.append(str(tag))
+        if tag_category:
+            # 按标签类别筛选: 作品至少有一个属于该类别的正常标签 (停用标签不参与)
+            where.append(
+                "EXISTS (SELECT 1 FROM artwork_tags atc "
+                "  JOIN category_tags ctc ON ctc.tag_id = atc.tag_id "
+                "  JOIN tags tc ON tc.tag_id = atc.tag_id "
+                " WHERE atc.artwork_id = a.artwork_id "
+                "   AND ctc.category_id = ? AND tc.status = 'active')")
+            params.append(str(tag_category))
         if missing:
             # 「缺元数据」= 还没补全且**补得回来**。已删除作品(deleted_at 非空)排除,
             # 否则每轮补全都去请求 404 空转 (v011 前靠标题占位文案挡住, 现在靠字段)。
@@ -2497,6 +2527,7 @@ class PixivDatabase:
     def count_images_filtered(self, *, q: str = '', illust_type=None, is_r18=None,
                               ai: "str | None" = None,
                               author_id: "str | None" = None, tag: "str | None" = None,
+                              tag_category: "str | None" = None,
                               missing: bool = False, deleted: bool = False,
                               author_status: "str | None" = None,
                               source: "str | None" = None,
@@ -2538,6 +2569,15 @@ class PixivDatabase:
         if tag:
             where.append("tg.tag_name = ?")
             params.append(str(tag))
+        if tag_category:
+            # 按标签类别筛选: 作品至少有一个属于该类别的正常标签 (停用标签不参与)
+            where.append(
+                "EXISTS (SELECT 1 FROM artwork_tags atc "
+                "  JOIN category_tags ctc ON ctc.tag_id = atc.tag_id "
+                "  JOIN tags tc ON tc.tag_id = atc.tag_id "
+                " WHERE atc.artwork_id = a.artwork_id "
+                "   AND ctc.category_id = ? AND tc.status = 'active')")
+            params.append(str(tag_category))
         if missing:
             # 「缺元数据」= 还没补全且**补得回来**。已删除作品(deleted_at 非空)排除,
             # 否则每轮补全都去请求 404 空转 (v011 前靠标题占位文案挡住, 现在靠字段)。
@@ -4596,10 +4636,12 @@ class PixivDatabase:
         return None
 
     def list_all_tags(self) -> list[dict]:
-        """全部标签 + 各标签作品数 (分类浏览/标签下拉用)。"""
+        """全部标签 + 各标签作品数 + 所属类别 (分类浏览/标签下拉用)。"""
         rows = self.conn.execute(
             """
-            SELECT tg.tag_name, COUNT(atg.artwork_id) AS count
+            SELECT tg.tag_name, COUNT(atg.artwork_id) AS count,
+                   (SELECT GROUP_CONCAT(ct.category_id)
+                      FROM category_tags ct WHERE ct.tag_id = tg.tag_id) AS cats
               FROM tags tg
          LEFT JOIN artwork_tags atg ON atg.tag_id = tg.tag_id
              WHERE tg.status = 'active'
@@ -4607,7 +4649,12 @@ class PixivDatabase:
           ORDER BY count DESC, tg.tag_name ASC
             """
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["categories"] = [x for x in str(d.pop("cats") or "").split(",") if x]
+            out.append(d)
+        return out
 
     # ---- 标签维度 / 分区（2026-11-19）----
     def list_tag_categories(self) -> list[dict]:

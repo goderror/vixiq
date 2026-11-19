@@ -3721,7 +3721,7 @@ let libDataView = 'artwork';     // 图库数据粒度: artwork 作品视图(一
 let libSelected = new Set();     // 批量选中项的主键: 作品视图=作品ID; 图片视图=「作品ID|页码」(一张图一项)
 // 图库默认只显示非 R18 (r18='0'), 需看全部/仅 R18 时可手动切换下拉 (安全模式无关, 始终生效)
 // 默认排序 sort='updated' (按修改时间): 刚入库(pages 变动会 bump updated_at)或刚改动的作品都排最前
-let libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
+let libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', tagCategory: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
 let libPage = 1;                 // 图库当前页码 (从 1 起)
 const LIB_PAGE_SIZE = 60;        // 每页固定张数 (网格/列表)
 let libCounts = { artworks: 0, images: 0 };
@@ -4852,7 +4852,8 @@ window.libFocusArtwork = async function (aid) {
   libFilters.missing = false;
   libFilters.missingMode = '';
   libFilters.source = ''; libFilters.type = ''; libFilters.author = ''; libFilters.tag = '';
-  ['#lib-f-source', '#lib-f-type', '#lib-f-anomaly'].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  libFilters.tagCategory = '';
+  ['#lib-f-source', '#lib-f-type', '#lib-f-anomaly', '#lib-f-tagcat'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   ['#lib-f-author-input', '#lib-f-tag-input'].forEach(id => { const el = $(id); if (el) el.value = ''; });
   const q = $('#lib-search-input');
   if (q) q.value = aid;
@@ -4894,6 +4895,7 @@ async function loadLibrary(opts = {}) {
   p.set('ai', libFilters.ai || '');   // AI 作品筛选: '' 全部 / '0' 非 AI / '2' 仅 AI
   p.set('author_id', libFilters.author);
   p.set('tag', libFilters.tag);
+  p.set('tag_category', libFilters.tagCategory || '');
   p.set('missing', libFilters.missing ? '1' : '');
   p.set('file_missing', libFilters.missingMode === 'file' ? '1' : '');
   p.set('deleted', libFilters.missingMode === 'deleted' ? '1' : '');
@@ -5017,6 +5019,8 @@ async function libOnlyClear() {
   // 还原筛选与视图 (快照缺失时退化为作品视图第 1 页)
   if (prev.filters) libFilters = Object.assign({}, prev.filters);
   if (typeof prev.search === 'string') $('#lib-search-input').value = prev.search;
+  renderTagCatSelect();
+  if (comboTag) comboTag.setByValue(libFilters.tag || '');
   libDataView = prev.dataView || 'artwork';
   libView = prev.view || 'grid';
   libPage = prev.page || 1;
@@ -5069,7 +5073,7 @@ function goLibPageFromInput(input) {
 }
 
 // ---- 可搜索下拉 (作者/标签筛选): 输入关键词过滤, 点击选中 ----
-let facetData = { authors: [], tags: [] };
+let facetData = { authors: [], tags: [], sources: [], tagCats: [] };
 
 function makeCombo(input, list, { itemsRef, onPick, digitAsId }) {
   let pickedValue = '', pickedLabel = '';
@@ -5282,6 +5286,20 @@ function makeEditTagSuggest(input, list) {
 }
 
 let comboAuthor = null, comboTag = null;
+
+// 标签类别下拉: 选项来自工作台的 tag_categories; 当前值失效时回落到「全部」
+function renderTagCatSelect() {
+  const sel = $('#lib-f-tagcat');
+  if (!sel) return;
+  const cats = (facetData && facetData.tagCats) || [];
+  const cur = libFilters.tagCategory || '';
+  sel.innerHTML = '<option value="">标签类别: 全部</option>' + cats.map(c =>
+    `<option value="${esc(c.category_id)}">${esc(c.name)}</option>`).join('');
+  const valid = cats.some(c => c.category_id === cur);
+  sel.value = valid ? cur : '';
+  if (!valid) libFilters.tagCategory = '';
+}
+
 function initCombos() {
   if (comboAuthor) return;
   comboAuthor = makeCombo($('#lib-f-author-input'), $('#lib-f-author-list'), {
@@ -5290,20 +5308,51 @@ function initCombos() {
     digitAsId: true,  // 输入纯数字作者ID可直接精确筛选
   });
   comboTag = makeCombo($('#lib-f-tag-input'), $('#lib-f-tag-list'), {
-    itemsRef: () => facetData.tags.map(t => ({ value: t.tag_name, label: t.tag_name, count: t.count })),
-    onPick: (v) => { libFilters.tag = v; loadLibrary(); },
+    // 选了标签类别后，标签候选只显示该类别下的标签
+    itemsRef: () => facetData.tags
+      .filter(t => !libFilters.tagCategory
+                || (t.categories || []).includes(libFilters.tagCategory))
+      .map(t => ({ value: t.tag_name, label: t.tag_name, count: t.count })),
+    onPick: (v) => {
+      libFilters.tag = v;
+      // 选具体标签时联动类别: 当前类别已包含该标签就不动，否则切到它的第一个真实类别
+      if (v) {
+        const t = facetData.tags.find(x => x.tag_name === v);
+        const cats = (t && t.categories) || [];
+        if (!libFilters.tagCategory || !cats.includes(libFilters.tagCategory)) {
+          const cid = cats.find(c => c !== 'uncategorized') || '';
+          if (cid) { libFilters.tagCategory = cid; renderTagCatSelect(); }
+        }
+      }
+      loadLibrary();
+    },
   });
   // 输入框右侧清空小叉叉: 有内容时显示, 点击清空并取消对应筛选
   attachInputClear($('#lib-f-author-input'), () => { libFilters.author = ''; loadLibrary(); });
   attachInputClear($('#lib-f-tag-input'), () => { libFilters.tag = ''; loadLibrary(); });
+  const catSel = $('#lib-f-tagcat');
+  if (catSel) {
+    catSel.addEventListener('change', (e) => {
+      libFilters.tagCategory = e.target.value;
+      libFilters.tag = '';
+      if (comboTag) comboTag.clear();
+      loadLibrary();
+    });
+  }
 }
 
 async function loadLibFacets() {
   try {
-    const f = await api('/api/library/facets');
-    facetData = { authors: f.authors || [], tags: f.tags || [], sources: f.sources || [] };
+    const [f, c] = await Promise.all([
+      api('/api/library/facets'),
+      api('/api/tags/categories').catch(() => ({ items: [] })),
+    ]);
+    facetData = { authors: f.authors || [], tags: f.tags || [],
+                  sources: f.sources || [],
+                  tagCats: (c && c.items) || [] };
     rebuildSourceFilters(f.sources || []);
     initCombos();
+    renderTagCatSelect();
     // 按当前筛选状态回填显示, 切页/刷新不丢已选作者/标签
     comboAuthor.setByValue(libFilters.author || '');
     comboTag.setByValue(libFilters.tag || '');
@@ -7800,9 +7849,9 @@ async function searchLibrary() { loadLibrary(); }
 async function loadLibraryRecent() {
   // 重置同时退出「仅查看该作品」特殊筛选 (否则列表仍被 only 过滤住)
   if (libOnlyAid) { libOnlyAid = null; libOnlyPrev = null; renderOnlyBanner(); _paintLibViewToggles(); }
-  libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
+  libFilters = { q: '', type: '', status: '', source: '', r18: '0', ai: '', author: '', tag: '', tagCategory: '', missing: false, missingMode: '', sort: 'updated', order: 'desc' };
   $('#lib-search-input').value = '';
-  ['#lib-f-type', '#lib-f-status', '#lib-f-source'].forEach(sel => { $(sel).value = ''; });
+  ['#lib-f-type', '#lib-f-status', '#lib-f-source', '#lib-f-tagcat'].forEach(sel => { $(sel).value = ''; });
   $('#lib-f-sort').value = 'updated';   // 默认排序: 按修改时间 (2026-09-16 默认)
   $('#lib-f-r18').value = '0';   // 默认非 R18
   $('#lib-f-ai').value = '';     // 默认 AI: 全部 (不隐藏任何作品)

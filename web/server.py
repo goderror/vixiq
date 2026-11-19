@@ -6210,6 +6210,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             ai=args.get("ai", ""),
             author_id=args.get("author_id", "") or None,
             tag=args.get("tag", "") or None,
+            tag_category=args.get("tag_category", "") or None,
             missing=args.get("missing", "") == "1",
             deleted=args.get("deleted", "") == "1",
             author_status=args.get("status", "") or None,
