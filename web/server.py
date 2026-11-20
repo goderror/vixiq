@@ -5951,10 +5951,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                                 if nm2 != str((db.get_author(aid) or {}).get("name") or ""):
                                     db.upsert_author(aid, nm2)
                                     out["renamed"] += 1
-                                    try:
-                                        _sync_author_folder(db, aid, nm2)
-                                    except Exception:
-                                        pass
+                                    # 只更新资料; 磁盘作者夹改名必须由「整理文件夹」预览确认后执行,
+                                    # 刷新不能在用户没看过计划时直接改目录 (2026-11-21 验收)。
                             db.set_author_status(aid, "alive" if nm else "gone")
                         except Exception as e:
                             out["note"] = f"联网核对失败：{str(e).splitlines()[0]}"

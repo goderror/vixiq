@@ -3066,6 +3066,7 @@ def run_suite() -> SuiteResult:
     suite.add("T164", "🧷 整理预览快照稳定: 同路径同大小替换源文件→stale 留原位 + 新增无关空目录不改变已确认项(按稳定 key 执行) (隔离数据)", t164_tidy_preview_snapshot_stability)
     suite.add("T165", "🛡 备份对比接入安全模式: 可靠归属分级 + 安全模式下 R18/未知/归属不明两侧占位 + 后端 backup-img 兜底 + 全年龄正常加载 (隔离数据)", t165_backup_compare_safemode)
     suite.add("T166", "🎯 智能刷新前后台拆分: 前台立即刷当前视图(保留页码/勾选) + 后台按作品/作者/磁盘范围核对 + 同范围复用在途任务 + 失败重试/整理入口接线 (离线)", t166_smart_refresh_front_background)
+    suite.add("T167", "🛡 定向刷新作者只更新资料: refresh-scope author 不直接改磁盘文件夹 + 旧文件/本地路径保持 + 整理预览出现 rename 计划 (隔离数据)", t167_refresh_scope_author_no_disk_rename)
     suite.write_report()
     return suite
 
@@ -10400,7 +10401,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261121c" and _mss.group(1) == "20261121c", \
+    assert _mjs and _mss and _mjs.group(1) == "20261121d" and _mss.group(1) == "20261121d", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10495,7 +10496,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261121c', html) and _re.search(r'app\.js\?v=20261121c', html), \
+    assert _re.search(r'style\.css\?v=20261121d', html) and _re.search(r'app\.js\?v=20261121d', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10903,7 +10904,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261121c" in html and "app.js?v=20261121c" in html, \
+        assert "style.css?v=20261121d" in html and "app.js?v=20261121d" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13286,7 +13287,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261121c" in _h and "style.css?v=20261121c" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261121d" in _h and "style.css?v=20261121d" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14655,7 +14656,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261121c" in html and "app.js?v=20261121c" in html
+            assert "style.css?v=20261121d" in html and "app.js?v=20261121d" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14764,7 +14765,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261121c" in html and "app.js?v=20261121c" in html
+            assert "style.css?v=20261121d" in html and "app.js?v=20261121d" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14875,7 +14876,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261121c" in html and "app.js?v=20261121c" in html
+    assert "style.css?v=20261121d" in html and "app.js?v=20261121d" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14915,7 +14916,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261121c" in html
+    assert "20261121d" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15337,11 +15338,15 @@ def t166_smart_refresh_front_background() -> None:
     for token in ("_refreshJobs = new Map()", "function _refreshJobKey",
                   "function renderRefreshStatus", "rs-stage", "rs-count",
                   "async function runRefreshJob",
-                  "running.render(true); return running.promise",
+                  "running.render(true);",
                   "window.retryRefreshJob", "async function _refreshTidyHint",
                   "openTidyPreview()", "REFRESH_STATUS_DELAY",
                   "REFRESH_DONE_HIDE", "job.total = ids.length + 1",
-                  "ids: [id]", "ids: failedIds"):
+                  "ids: [id]", "ids: failedIds", "_refreshActiveKey",
+                  "_refreshActiveKey !== job.key",
+                  "const others = Array.from(_refreshJobs.keys())",
+                  "已新增 ${nDone} 张 · 重新关联 ${nRel} 张",
+                  "apiErr(result)"):
         assert token in js, f"缺少 {token}"
     for token in ("@keyframes rs-in", "@keyframes rs-flow",
                   ".rs-bar.indeterminate", "prefers-reduced-motion",
@@ -15366,6 +15371,80 @@ def t166_smart_refresh_front_background() -> None:
         "进度条必须由真实完成数驱动"
     assert "setTimeout(() => job.render(true), REFRESH_STATUS_DELAY)" in rb, \
         "短任务要延迟展示浮层以减少闪烁"
+    # 作者定向刷新只更新资料; 磁盘目录改名必须走整理预览
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    i0 = srv.index("def api_library_refresh_scope")
+    block = srv[i0:srv.index("api_library_author_reconcile", i0)]
+    assert "_sync_author_folder" not in block, \
+        "refresh-scope 作者分支不得直接改磁盘文件夹, 应留给整理预览"
+
+
+def t167_refresh_scope_author_no_disk_rename() -> None:
+    """T167: 定向刷新作者只更新资料, 不直接改磁盘文件夹（2026-11-21 验收）。
+
+    刷新可以更新 author 名字/存续, 但目录改名必须由整理预览确认后执行;
+    旧文件路径与 pages.local_path 保持不变, 整理计划里能看到 rename。
+    """
+    import json as _json
+    import tempfile
+    import utils.paths as upaths
+    import core.search_client as sc
+    import web.server as ws
+    from db.store import PixivDatabase, WSt, PSt
+
+    with tempfile.TemporaryDirectory(prefix="t167author_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir()
+        db = PixivDatabase(str(tmp / "pixiv.db"))
+        db.upsert_author("77", "unknown")
+        db.change_work_status("990301", WSt.DONE, title="t", author_id="77",
+                              total_pages=1)
+        src = img / "unknown_77" / "990301_p0.jpg"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(b"x" * 16)
+        db.mark_page_status("990301", 0, PSt.DONE,
+                            local_path="unknown_77/990301_p0.jpg")
+        db.close()
+
+        orig_ud, orig_load = upaths.user_data, ws.load_config
+        orig_fetch = sc.http_fetch_user_name
+        orig_build = sc.build_pixiv_http_session
+        import utils.sec as _sec
+        orig_cookies = _sec.load_cookies_smart
+        upaths.user_data = lambda rel: tmp / str(rel)
+        cfg = _json.loads(_json.dumps(ws._config))
+        cfg["safemode"] = {"enabled": True}
+        cfg.setdefault("paths", {})["img_subdir"] = "img"
+        ws.load_config = lambda: cfg
+        # 让 create_app 内的会话构建返回假会话 (未登录真实环境会返回 None)
+        sc.build_pixiv_http_session = lambda cookies, uid: object()
+        _sec.load_cookies_smart = lambda path, upgrade=False: {}
+        sc.http_fetch_user_name = lambda sess, aid: "New"
+        try:
+            client = ws.create_app().test_client()
+            r = client.post("/api/library/refresh-scope",
+                            json={"scope": "author", "ids": ["77"]})
+            assert r.status_code == 200, r.data
+            j = r.get_json()
+            assert j["authors"] == 1 and j["renamed"] == 1, j
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                assert db2.get_author("77")["name"] == "New"
+                lp = [x[0] for x in db2.conn.execute(
+                    "SELECT local_path FROM pages WHERE artwork_id='990301'")]
+                assert lp == ["unknown_77/990301_p0.jpg"], lp
+            assert src.is_file(), "刷新不得直接改磁盘文件夹"
+            assert not (img / "New_77").exists()
+            with PixivDatabase(str(tmp / "pixiv.db")) as db3:
+                plans = ws._tidy_build_plans(db3, img)
+            rn = {p["from"]: p["to"] for p in plans if p["type"] == "rename"}
+            assert rn.get("unknown_77") == "New_77", plans
+        finally:
+            sc.http_fetch_user_name = orig_fetch
+            sc.build_pixiv_http_session = orig_build
+            _sec.load_cookies_smart = orig_cookies
+            ws.load_config = orig_load
+            upaths.user_data = orig_ud
 
 
 def main() -> int:
