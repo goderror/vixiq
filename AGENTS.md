@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-20（当前前端版本 `20261120d`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-20（当前前端版本 `20261120e`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 153 用例，必须全过，2026-11-20 已 153/153 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 154 用例，必须全过，2026-11-20 已 154/154 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，153 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，154 个用例；新增功能必须加断言 |
 
 ---
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261120d`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261120e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -831,6 +831,32 @@
   `_dev_runtime/packages/vixiq`、`dist/vixiq`、`D:\Program Files\Vixiq`，四处哈希一致；
   旧资源备份 `.backup-health-flash-20261120-193555`。安装版无需重启，刷新页面即生效。
 - GitHub 本地提交，**未推送**。
+
+### 4.36 整理文件夹：本轮搬空的目录同一次收尾（2026-11-20，版本 `20261120e`）
+
+- **反馈**：整理把文件搬走后原目录变空，还要再点一次「整理文件夹」才能检测出来。
+- **预览**：
+  - `_tidy_build_plans` ④ 同时列「当前真·空目录」和「本轮 move 后预计搬空的源目录」
+    （`planned=True`，reason 注明「本轮移动后预计搬空」）；只列最上层，move 目标夹及其上级
+    仍排除（T154 事故防线保留）。
+  - 新增 ⑤：move/filrename/rename 目标已存在的，计划上标 `conflict`，reason 写明「执行时会跳过」。
+  - 预览计数新增 `rmdir_pending`、`conflict`。
+- **执行**：
+  - `_tidy_apply_plans(..., expected=None)` 接收前端预览快照；计划消失或 `type/from/to/files`
+    变化 → 记入 `stale` 不执行。前端 `applyTidy` 提交 `expected`，stale/db_failed 用弹窗列出。
+  - 写库与磁盘分开兜底：`src.rename` 成功后 `relink_page_path` / `rewrite_page_path_prefix` /
+    `refresh_ext_titles` 失败记入 `db_failed`（old/new/stage/error）；目标冲突、源消失改记 `stale`。
+  - 空夹收尾由 `shutil.rmtree` 改为由深到浅逐个 `os.rmdir`；目录非真空（含任意文件、隐藏文件、
+    Thumbs.db、失败残留、被占用）一律保留。`_tidy_dir_is_disposable` 改为「子树里没有任何文件」。
+- **健康入口**：健康明细与体检报告的「删除空文件夹」改为打开整理预览；删除 `cleanEmptyDirs`
+  与 `POST /api/library/clean-empty-dirs`（旧的递归直删路径下线）。
+- **验收**：T62 改为「Thumbs.db/隐藏文件/PSD/TXT 保留」；T154 两道防线保留；新增 T163 覆盖
+  同次搬空收尾、含 PSD 保留、目标冲突、预览后放入文件、写库失败；T162 覆盖健康明细入口与旧接口下线；
+  全量 **154/154**。安装版无头实测：空目录明细按钮「🧹 打开整理预览」→ 点击打开「🧹 整理文件夹」。
+- **部署**：后端+前端，候选包 `built_at 20:13:15` 在 7813 独立数据验收通过；
+  安装版 `D:\Program Files\Vixiq` 已替换并重启（前端 `20261120e`，真实库 1603 作品 / 2191 图，
+  预览 0 计划），备份 `.backup-tidy-same-pass-20261120-201510`；`dist/vixiq` 已同步，备份
+  `.backup-tidy-same-pass-20261120-201626`；三处 7 个资源与 exe 哈希一致。GitHub 本地提交，**未推送**。
 
 ---
 

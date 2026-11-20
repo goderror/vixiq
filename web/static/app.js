@@ -4223,10 +4223,10 @@ window.showLibHealthDetail = function (kind) {
   const map = {
     empty: {
       title: '📁 空目录明细',
-      note: '这些文件夹里已经没有任何图片，可以直接删除。',
+      note: '这些文件夹里已经没有任何图片。清理统一走整理预览：只删真正空的目录，含 PSD/TXT/隐藏文件的目录会保留。',
       items: h.empty_dirs || [],
       type: 'path',
-      action: '<button class="btn danger" onclick="cleanEmptyDirs()">🗑️ 删除空文件夹</button>',
+      action: '<button class="btn danger" onclick="openTidyPreview()">🧹 打开整理预览</button>',
     },
     missing: {
       title: '⚠ 文件缺失明细',
@@ -4637,7 +4637,7 @@ const CHK_GROUPS = [
   ['duplicate', '🧩 重复图片：同一文件在图库中存在多份副本',
    `<button class="btn accent" onclick="dedupDups()">🧹 清理重复副本（每组保留画师文件夹内一份）</button>`],
   ['empty_dir', '📁 空文件夹：作者文件夹里已没有任何图片',
-   `<button class="btn danger" onclick="cleanEmptyDirs()">🗑️ 删除空文件夹</button>`],
+   `<button class="btn accent" onclick="openTidyPreview()">🧹 打开整理预览</button>`],
   ['legacy_name', '📝 历史存疑文件名：旧版反搜留下的 (识别ID) 前缀，主体作品作者未验证，暂不自动改名', ''],
   ['loose_image', '📂 未整理：散落在图库根目录且无法自动归档的图片（可用反搜识别作者）',
    `<button class="btn accent" onclick="switchTab('reverse')">🔎 去反搜归类</button>`],
@@ -4882,18 +4882,6 @@ async function susResolveLocally(aid) {
   await loadCheckReport();
   if (lastCheckReport) renderCheckReport(lastCheckReport, true);
   loadLibrary(); libSync(); loadStats();
-}
-
-async function cleanEmptyDirs() {
-  if (!confirm('删除全部空文件夹？（仅删不含任何图片的作者目录）')) return;
-  try {
-    const r = await api('/api/library/clean-empty-dirs', { method: 'POST' });
-    let msg = `已删除 ${r.removed} 个空文件夹 ✓`;
-    if (r.failed > 0) msg += `（${r.failed} 个被占用跳过）`;
-    toast(msg, 'ok');
-    await libSync();
-    chkRun('report');     // 只重跑「汇总报告」这一项, 不用再把整套体检跑一遍
-  } catch (e) { toast('删除失败: ' + e.message, 'err'); }
 }
 
 async function dedupDups() {
@@ -8076,7 +8064,7 @@ async function openTidyPreview() {
       rename: '把作者文件夹名规范成「作者名_作品ID」。名字取自数据库（现用名 + 作者ID），不猜文件夹名；只改文件夹名，里面的文件不动。',
       move: '把散落在根目录或错误位置的图片，搬进它该在的作者文件夹：顶层是「作者名_作者ID」，里面按来源分「站点@账号」子夹（单来源也一样建这层，否则夹名里看不出作品来自哪个站）。目标路径同样由数据库算出。移动后同步数据库路径。',
       filrename: '把没有信息量的乱码文件名（纯哈希串 / 纯数字 / 太短）改成可读名字：pixiv 作品用作品ID，其他来源用「站点@账号_序号」。名字本身可读的一律不动。',
-      rmdir: '整棵子树里除了 Thumbs.db 这类系统杂物外没有任何文件的文件夹 —— 就是归位/平铺搬空后留下的空夹。删掉不丢任何图片；夹里但凡有 .psd/.txt 等真实文件就一律不删。',
+      rmdir: '只删真正空的文件夹。归位/平铺会把图从一个夹搬到另一个夹，原目录本轮搬空后在同一次整理里收尾；夹里只要有任意文件（含 PSD/TXT、隐藏文件、Thumbs.db、失败残留）就保留，绝不递归强删。',
       categorize: '磁盘与数据库对不上，或身份无法识别 —— 系统不做猜测，留待人工判定；默认不勾选，执行时不会改动任何数据。'
     };
     window._tidyPlans = r.plans || [];
@@ -8131,8 +8119,8 @@ async function openTidyPreview() {
             <li>名字本身可读的（含中文/日文/英文单词/人名）<b>一律保留不动</b>；同一文件夹内撞名才加「 (2)」。</li>
           </ul></li>
           <li><b>🧹 清理空夹</b> · ${esc(TYPE_TIP.rmdir)}<ul>
-            <li>为什么整理要管这个：<b>归位/平铺会把图从一个夹搬到另一个夹，从而留下空夹</b>；善后放同一次「整理」里做完，不用再跑去健康面板点一遍「删除空文件夹」。</li>
-            <li>只列最外面那一处（子夹随它一起删），所以同一片残留不会列出一排重复行。</li>
+            <li>为什么整理要管这个：<b>归位/平铺会把图从一个夹搬到另一个夹，从而留下空夹</b>；本轮搬空的源目录在同一次「整理」里收尾，不用再跑去健康面板点一遍「删除空文件夹」。</li>
+            <li>只列最外面那一处；执行时由深到浅逐级删除，不递归强删。目录里只要有任意文件（PSD/TXT、隐藏文件、Thumbs.db、失败残留）就保留。</li>
           </ul></li>
           <li><b>❓️ 待确认</b> · ${esc(TYPE_TIP.categorize)}<ul>
             <li><b>作者归属存疑</b>：文件夹名解析出的作者与数据库记录不一致（例如夹名说「kase_22」(43460823)，库里记的是「ユウマロ」(22)）。以哪边为准需人工指定，定案后不再提示。</li>
@@ -8143,7 +8131,11 @@ async function openTidyPreview() {
       </div>`;
     openLibModal(`🧹 整理文件夹 · 预览 ${counts.total} 项`,
       `<div class="hint tidy-sum"><button type="button" class="help-toggle" onclick="tidyHelpToggle(this)" title="展开 / 收起各项操作的说明">❔ 说明</button>` +
-        `目录规范 <b>${counts.rename}</b> · 位置规范 <b>${counts.move}</b> · 命名规范 <b>${counts.filrename || 0}</b> · 清理空夹 <b>${counts.rmdir || 0}</b> · 待确认 <b>${counts.categorize}</b>　可自动执行 <b>${counts.auto}</b> 项 / 共涉及 <b>${counts.files}</b> 个文件</div>` +
+        `目录规范 <b>${counts.rename}</b> · 位置规范 <b>${counts.move}</b> · 命名规范 <b>${counts.filrename || 0}</b> · 清理空夹 <b>${counts.rmdir || 0}</b>` +
+        (counts.rmdir_pending ? `（预计搬空 <b>${counts.rmdir_pending}</b>）` : '') +
+        ` · 待确认 <b>${counts.categorize}</b>` +
+        (counts.conflict ? ` · <span class="err-text">冲突 <b>${counts.conflict}</b></span>` : '') +
+        `　可自动执行 <b>${counts.auto}</b> 项 / 共涉及 <b>${counts.files}</b> 个文件</div>` +
       claimHtml +
       helpHtml +
       riskNote +
@@ -8221,14 +8213,39 @@ function applyTidySel() {
 }
 
 async function applyTidy(ids) {
+  // 带上预览快照: 执行时后端按内容核对, 计划消失/内容变化的不执行, 避免 id 漂移后误动
+  const wanted = new Set(ids.map(Number));
+  const expected = (window._tidyPlans || [])
+    .filter(p => wanted.has(Number(p.id)))
+    .map(p => ({ id: p.id, type: p.type, from: p.from, to: p.to, files: p.files || [] }));
   try {
     const r = await api('/api/library/tidy/apply', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plans: ids }) });
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plans: ids, expected }) });
     closeLibModal();
     const fail = (r.failed || []).length;
+    const stale = (r.stale || []).length;
+    const dbf = (r.db_failed || []).length;
     toast(`整理完成 ✓ 目录规范 ${r.renamed} · 位置规范 ${r.moved} · 命名规范 ${r.filenamed || 0} · 清理空夹 ${r.rmdirs || 0}`
-      + (fail ? ` · ${fail} 项跳过（见日志）` : ''), fail ? 'warn' : 'ok');
+      + (fail ? ` · ${fail} 项失败` : '')
+      + (stale ? ` · ${stale} 项状态已变化，请重新预览` : '')
+      + (dbf ? ` · ${dbf} 个文件已移动但索引未更新` : ''),
+      (fail || stale || dbf) ? 'warn' : 'ok');
     loadLibrary(); libSync(); loadStats();
+    if (stale || dbf) {
+      const staleRows = (r.stale || []).map(x => `<li>${esc(x)}</li>`).join('');
+      const dbfRows = (r.db_failed || []).map(x =>
+        `<li><code>${esc(x.old)}</code> → <code>${esc(x.new)}</code>` +
+        `<span class="hint">（${esc(x.stage)}${x.error ? ': ' + esc(x.error) : ''}）</span></li>`).join('');
+      openLibModal('⚠ 整理完成，有需要重新预览的项目',
+        (stale ? `<div class="doc-title">预览后状态发生变化，本次未执行</div>` +
+          `<ul class="lib-health-detail">${staleRows}</ul>` : '') +
+        (dbf ? `<div class="doc-title">文件已移动，但数据库索引未更新</div>` +
+          `<ul class="lib-health-detail">${dbfRows}</ul>` +
+          `<div class="hint">可先点「🔄 同步磁盘」，或重新打开整理预览核对。</div>` : '') +
+        '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+        { lg: true });
+    }
   } catch (e) {
     toast('整理失败: ' + e.message, 'err');
     closeLibModal();

@@ -2962,7 +2962,7 @@ def run_suite() -> SuiteResult:
     suite.add("T59", "单向闭环审计修正: 位置规范不再自我套娃/标题回填只认可读名/占位夹名不建作者/旧路径→R18 启发式已删 (离线)", t59_one_way_audit_fixes)
     suite.add("T60", "外来源作者以源网页当前值为准(不再信 SauceNAO 索引名): 网页→账号→索引名三档 + 索引名不预填进库 (离线)", t60_foreign_author_from_source_page)
     suite.add("T61", "本地作者身份只认一套键: (站点,账号) 唯一/改名不分叉/已归属就复用 + 夹名多别名用顿号不含斜杠 (离线)", t61_single_author_identity)
-    suite.add("T62", "一键整理自带「清理空夹」: 真空夹/只剩 Thumbs.db 删、含真实文件不删、嵌套只列外层、冻结夹不碰 (离线)", t62_tidy_removes_empty_dirs)
+    suite.add("T62", "整理文件夹自带「清理空夹」: 真空夹删、含 Thumbs.db/隐藏文件/PSD/TXT 保留、嵌套由深到浅收尾、冻结夹不碰 (离线)", t62_tidy_removes_empty_dirs)
     suite.add("T63", "Output 同步防重复登记: 已在库文件不重建假作品/不刷反斜杠, 真新文件正常入库, 幂等 (离线)", t63_output_sync_no_duplicate_registration)
     suite.add("T64", "下载任务单飞: 进行中再触发不开第二线程, 只排队补跑 (离线)", t64_cart_launch_single_flight)
     suite.add("T65", "pixiv_natural_key 严格身份识别: 外来源顺序号/前导零/哈希尾巴/毫秒戳全部 None, 规范命名/裸ID 命中 (离线)", t65_natural_key_strict)
@@ -3062,6 +3062,7 @@ def run_suite() -> SuiteResult:
     suite.add("T160", "🚀 外接数据盘缺失时启动不卡动画: /api/health 不依赖数据盘 + HTTP 500 也算服务活着 + 启动轮询接线 (离线)", t160_health_and_port_alive)
     suite.add("T161", "🧰 图库筛选栏两行紧凑布局: 29px/4px + 窄屏更多筛选 + 320px 不第三行 + 文案四项 + 来源滑杆图标 + 重置非 R18 + 前端接线 (离线)", t161_gallery_filter_layout)
     suite.add("T162", "🔎 健康条点击看明细 + 托盘「打开当前壁纸文件夹/打开图库文件夹」接线 (离线)", t162_health_detail_and_tray_folder)
+    suite.add("T163", "🧹 整理文件夹同一次收尾搬空目录: 预览标预计搬空 + 执行后逐级 rmdir + 含 PSD 保留 + 目标冲突/预览后放入文件/写库失败 (隔离数据)", t163_tidy_emptied_dirs_same_pass)
     suite.write_report()
     return suite
 
@@ -4522,11 +4523,11 @@ def t61_single_author_identity() -> None:
 
 def t62_tidy_removes_empty_dirs() -> None:
     """T62: 一键整理自带「清理空夹」(一键整理要自带清空夹) ——
-    ① 真·空夹 / 只剩系统杂物(Thumbs.db)的夹 → 产生 rmdir 计划 (auto, 默认勾选);
-    ② 含任何真实文件(.txt/.psd…)的夹 → **不**删 (比健康面板"不含图片即删"更保守);
-    ③ 嵌套空夹只列最外面那一处 (子夹随它一起删, 不刷一排重复行);
+    ① 真·空夹 → 产生 rmdir 计划 (auto, 默认勾选);
+    ② 含 Thumbs.db / 隐藏文件 / .psd / .txt 任意文件的夹 → **不**删 (只删真正为空的目录);
+    ③ 嵌套空夹只列最外面那一处 (执行时由深到浅逐级 os.rmdir, 不递归强删);
     ④ 作者归属争议**冻结**中的夹一个指头都不碰 (含其内部子夹);
-    ⑤ 执行后夹真的没了, 有图的夹与含资料的夹原样保留。"""
+    ⑤ 执行后真空夹真的没了, 有文件的夹原样保留。"""
     import shutil
     import tempfile
     import utils.paths as upaths
@@ -4554,10 +4555,15 @@ def t62_tidy_removes_empty_dirs() -> None:
             p.write_bytes(b"x" * 16)
             db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
 
-        # ① 真·空夹 + 只剩系统杂物的夹
+        # ① 真·空夹
         (img / "空夹甲").mkdir(parents=True, exist_ok=True)
+        # ② 只剩系统杂物 / 隐藏文件 / PSD / TXT 的夹 → 全部保留
         (img / "空夹乙").mkdir(parents=True, exist_ok=True)
         (img / "空夹乙" / "Thumbs.db").write_bytes(b"junk")
+        (img / "空夹丁").mkdir(parents=True, exist_ok=True)
+        (img / "空夹丁" / ".keep").write_bytes(b"hidden")
+        (img / "空夹戊").mkdir(parents=True, exist_ok=True)
+        (img / "空夹戊" / "设定.psd").write_bytes(b"psd")
         # ③ 嵌套空夹 (只应列最外层)
         (img / "空夹丙" / "子夹").mkdir(parents=True, exist_ok=True)
         # ② 含真实文件的夹 → 绝不删
@@ -4575,20 +4581,22 @@ def t62_tidy_removes_empty_dirs() -> None:
         plans = ws._tidy_build_plans(db, img)
         rd = [p for p in plans if p["type"] == "rmdir"]
         got = {p["from"] for p in rd}
-        assert got == {"空夹甲", "空夹乙", "空夹丙"}, plans
+        assert got == {"空夹甲", "空夹丙"}, plans
         assert all(p["auto"] for p in rd), rd
         assert all(p["files"] == [] for p in rd), rd
-        # ② 含真实文件 / ④ 冻结夹内 → 都不在计划里
-        assert not any("有资料" in x for x in got), got
-        assert not any("夹名画师_55500001" in x for x in got), got
+        # ② 含任意文件 / ④ 冻结夹内 → 都不在计划里
+        for x in ("空夹乙", "空夹丁", "空夹戊", "有资料", "夹名画师_55500001"):
+            assert not any(x in y for y in got), (x, got)
 
         rep = ws._tidy_apply_plans(db, img)
-        assert rep["rmdirs"] == 3, rep
+        assert rep["rmdirs"] == 2, rep   # 空夹甲 + 空夹丙(含子夹逐级收尾)
         assert not rep["failed"], rep
         assert not (img / "空夹甲").exists()
-        assert not (img / "空夹乙").exists()          # 连 Thumbs.db 一起整棵删掉
-        assert not (img / "空夹丙").exists()          # 子夹随之消失
-        assert (img / "有资料" / "设定.txt").is_file()  # 含真实文件 → 保留
+        assert not (img / "空夹丙").exists()          # 子夹由深到浅先删, 父夹随后删
+        assert (img / "空夹乙" / "Thumbs.db").is_file()   # 含系统杂物 → 保留
+        assert (img / "空夹丁" / ".keep").is_file()       # 含隐藏文件 → 保留
+        assert (img / "空夹戊" / "设定.psd").is_file()     # 含 PSD → 保留
+        assert (img / "有资料" / "设定.txt").is_file()      # 含真实文件 → 保留
         assert (img / "有图" / "920001_p0.jpg").is_file()
         assert (img / "夹名画师_55500001" / "空子夹").is_dir()  # 冻结夹内不动
         # 幂等: 再跑一次没有可删的了
@@ -10395,7 +10403,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261120d" and _mss.group(1) == "20261120d", \
+    assert _mjs and _mss and _mjs.group(1) == "20261120e" and _mss.group(1) == "20261120e", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10490,7 +10498,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261120d', html) and _re.search(r'app\.js\?v=20261120d', html), \
+    assert _re.search(r'style\.css\?v=20261120e', html) and _re.search(r'app\.js\?v=20261120e', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10898,7 +10906,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261120d" in html and "app.js?v=20261120d" in html, \
+        assert "style.css?v=20261120e" in html and "app.js?v=20261120e" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13281,7 +13289,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261120d" in _h and "style.css?v=20261120d" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261120e" in _h and "style.css?v=20261120e" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14650,7 +14658,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261120d" in html and "app.js?v=20261120d" in html
+            assert "style.css?v=20261120e" in html and "app.js?v=20261120e" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14759,7 +14767,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261120d" in html and "app.js?v=20261120d" in html
+            assert "style.css?v=20261120e" in html and "app.js?v=20261120e" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14870,7 +14878,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261120d" in html and "app.js?v=20261120d" in html
+    assert "style.css?v=20261120e" in html and "app.js?v=20261120e" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14884,6 +14892,7 @@ def t162_health_detail_and_tray_folder() -> None:
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     tray_src = (PROJECT_ROOT / "utils" / "tray.py").read_text(encoding="utf-8")
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
 
     for kind in ("missing", "empty", "corrupt"):
         assert f"showLibHealthDetail('{kind}')" in js, f"徽标点击缺 {kind}"
@@ -14893,7 +14902,12 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "lib-health-detail" in js and ".lib-health-detail" in css
     assert "lib-sync-clickable" in js and ".lib-sync-clickable" in css
     assert "showSelfCheckReport()" in js, "体检汇总也应可点开明细"
-    assert "cleanEmptyDirs()" in js and "cleanMissing()" in js
+    # 空目录清理统一走整理预览; 旧的递归直删接口已下线
+    assert "openTidyPreview()" in js and "cleanMissing()" in js
+    assert 'onclick="openTidyPreview()">🧹 打开整理预览' in js, "健康明细/体检入口应打开整理预览"
+    assert "cleanEmptyDirs" not in js
+    assert "/api/library/clean-empty-dirs" not in js
+    assert "/api/library/clean-empty-dirs" not in srv
     # 正常态健康条只亮一会儿（主动同步后显示，超时自动收起；有异常则常驻）
     assert "HEALTH_OK_SHOW_MS" in js and "_healthOkTimer" in js
     assert "paintLibHealth(!periodic)" in js
@@ -14904,7 +14918,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261120d" in html
+    assert "20261120e" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -14964,6 +14978,137 @@ def t154_tidy_rmdir_safety() -> None:
             finally:
                 ws._tidy_build_plans = old
             assert (keep / "x.jpg").is_file(), "执行阶段二次检查失效：非空夹被删"
+        finally:
+            db.close()
+
+
+def t163_tidy_emptied_dirs_same_pass() -> None:
+    """T163: 整理搬空的源目录在同一次收尾（2026-11-20 用户实测：要再点一次才能清掉）。
+
+    覆盖：
+      ① 预览里按 move 标出「预计搬空」的源目录（planned）；
+      ② 执行后由深到浅逐级 os.rmdir，同一次整理完成收尾；
+      ③ 含 PSD / TXT / 隐藏文件 / Thumbs.db 的目录保留（只删真正为空）；
+      ④ 目标已存在 → 预览标冲突、执行跳过、绝不覆盖；
+      ⑤ 预览后往源目录放入文件 → 该项不再执行、目录保留、返回 stale；
+      ⑥ 磁盘已移动但写库失败 → db_failed 记录旧路径/新路径/阶段。
+    """
+    import tempfile
+    from db.store import PixivDatabase, WSt, PSt
+    import web.server as ws
+
+    with tempfile.TemporaryDirectory(prefix="t163tidy_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir(parents=True)
+        (img / "普通").mkdir()
+        db = PixivDatabase(str(tmp / "pixiv.db"))
+        try:
+            db.upsert_author("77", "作者乙")
+
+            def _work(aid: str, rel: str) -> Path:
+                db.change_work_status(aid, WSt.DONE, title="t", author_id="77",
+                                      total_pages=1)
+                p = img / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(b"img-" + aid.encode())
+                db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
+                return p
+
+            # A: 源目录本轮会被搬空
+            _work("990001", "作者乙_77/990001_p0.jpg")
+            # B: 源目录里还有 PSD → 不得当空夹
+            _work("990002", "散件B/990002_p0.jpg")
+            (img / "散件B" / "保留.psd").write_bytes(b"psd")
+            # C: 目标已存在 → 冲突
+            _work("990003", "错位C/990003_p0.jpg")
+            _work("990004", "待空D/990004_p0.jpg")
+            _work("990005", "搬空E/990005_p0.jpg")
+
+            plans = ws._tidy_build_plans(db, img)
+            by = {}
+            for p in plans:
+                by.setdefault(p["type"], []).append(p)
+
+            # ① 预计搬空: A / E 的源目录在预览里就标出来
+            a_rd = [p for p in by.get("rmdir", []) if p["from"] == "作者乙_77"]
+            assert a_rd and a_rd[0].get("planned"), by.get("rmdir")
+            assert "预计搬空" in a_rd[0]["reason"], a_rd[0]
+            assert any(p["from"] == "搬空E" and p.get("planned")
+                       for p in by.get("rmdir", [])), by.get("rmdir")
+            # ② 含 PSD 的目录不列
+            assert not any(p["from"] == "散件B" for p in by.get("rmdir", [])), \
+                by.get("rmdir")
+
+            a_mv = [p for p in by.get("move", []) if p["from"] == "作者乙_77"]
+            assert a_mv and a_mv[0]["to"].endswith("作者乙_77"), a_mv
+            a_to = a_mv[0]["to"]
+            # 目标夹里预先放一个同名文件 → C 冲突
+            (img / "普通" / "作者乙_77").mkdir(parents=True, exist_ok=True)
+            (img / "普通" / "作者乙_77" / "990003_p0.jpg").write_bytes(b"old")
+
+            # 重新预览: 目标文件出现后 C 才带冲突
+            plans = ws._tidy_build_plans(db, img)
+            by = {}
+            for p in plans:
+                by.setdefault(p["type"], []).append(p)
+            c_mv = [p for p in by.get("move", []) if p["from"] == "错位C"]
+            assert c_mv and c_mv[0].get("conflict") == 1, c_mv
+            assert "目标已存在" in c_mv[0]["reason"], c_mv[0]
+
+            first_from = {"作者乙_77", "散件B", "错位C", "搬空E"}
+            first = [p for p in plans if p["from"] in first_from]
+            expected1 = [{"id": p["id"], "type": p["type"], "from": p["from"],
+                          "to": p["to"], "files": p["files"]} for p in first]
+
+            orig_relink = db.relink_page_path
+
+            def _bad(old, new, *a, **kw):
+                if "990005" in str(old):
+                    raise RuntimeError("模拟写库失败")
+                return orig_relink(old, new, *a, **kw)
+
+            db.relink_page_path = _bad
+            try:
+                rep = ws._tidy_apply_plans(db, img, [p["id"] for p in first],
+                                           expected1)
+            finally:
+                del db.relink_page_path
+
+            # A: 同一次整理就把源目录收尾
+            assert not (img / "作者乙_77").exists(), "搬空的源目录必须同次收尾"
+            assert (img / a_to / "990001_p0.jpg").is_file()
+            # B: 含 PSD → 目录与 PSD 都保留, 图片归位
+            assert (img / "散件B" / "保留.psd").is_file(), "含 PSD 的目录必须保留"
+            assert (img / a_to / "990002_p0.jpg").is_file()
+            # C: 目标冲突 → 源与旧目标都不动
+            assert (img / "错位C" / "990003_p0.jpg").is_file(), "冲突时不得移动/覆盖"
+            assert (img / a_to / "990003_p0.jpg").read_bytes() == b"old"
+            assert any("错位C" in x for x in rep["stale"]), rep
+            # E: 文件已移动, 但写库失败被单独记录
+            assert (img / a_to / "990005_p0.jpg").is_file()
+            assert not (img / "搬空E").exists()
+            assert any(x["stage"] == "relink_page_path" and "990005" in x["old"]
+                       for x in rep["db_failed"]), rep
+            assert rep["rmdirs"] >= 2, rep    # A + E 成功收尾
+            assert not rep["failed"], rep
+
+            # ⑤ 预览后往源目录放入文件 → 该项不再执行, 目录保留
+            plans2 = ws._tidy_build_plans(db, img)
+            d_plans = [p for p in plans2 if p["from"] == "待空D"]
+            assert any(p["type"] == "move" for p in d_plans), d_plans
+            d_rd = [p for p in d_plans if p["type"] == "rmdir"]
+            assert d_rd and d_rd[0].get("planned"), d_plans
+            expected2 = [{"id": p["id"], "type": p["type"], "from": p["from"],
+                          "to": p["to"], "files": p["files"]} for p in d_plans]
+            (img / "待空D" / "late.txt").write_text("late", encoding="utf-8")
+            rep2 = ws._tidy_apply_plans(db, img, [p["id"] for p in d_plans],
+                                        expected2)
+            assert rep2["stale"], rep2
+            assert (img / "待空D" / "late.txt").is_file(), "预览后放入的文件不得被删"
+            assert (img / a_to / "990004_p0.jpg").is_file()
+            d_to = [p for p in d_plans if p["type"] == "move"][0]["to"]
+            assert (img / d_to / "990004_p0.jpg").is_file()
         finally:
             db.close()
 

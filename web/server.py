@@ -1946,8 +1946,10 @@ def _gather_works_into_author_folder(db, artwork_ids: "list[str]") -> dict:
     rep = _tidy_apply_plans(db, img_root, want)
     _want = set(want)
     dests = sorted({p["to"] for p in plans if p["id"] in _want})
+    # 对调用方来说「目标已存在/源已变化」同样是没归拢成功 → 一并当失败如实报告
+    failed = list(rep.get("failed") or []) + list(rep.get("stale") or [])
     return {"moved": int(rep.get("moved") or 0),
-            "failed": list(rep.get("failed") or []),
+            "failed": failed,
             "dests": dests}
 
 
@@ -1962,17 +1964,15 @@ def _gather_works_into_author_folder(db, artwork_ids: "list[str]") -> dict:
 #     categorize 根目录散件/未知作者文件夹/作者归属存疑 → 需人工确认 (auto=False)
 # ==================================================================
 _TIDY_IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-# 系统杂物文件名: 一个夹里除了这些再没别的文件, 就算「空夹」(可整棵删)
-_TIDY_JUNK_NAMES = {"thumbs.db", ".ds_store", "desktop.ini"}
 
 
 def _tidy_dir_is_disposable(d: Path) -> bool:
-    """整棵子树里除系统杂物外**没有任何文件** → 这个夹可以整棵删掉 (整理搬空后的残留夹)。
+    """整棵子树里**没有任何文件** → 这个夹可以逐级 rmdir 收尾。
 
-    比健康面板那条「不含图片即可删」更保守: 夹里若有 .psd / .txt / .zip 等**任何真实文件**,
-    一律不删 —— 整理只清它自己搬空的、真·空的夹, 不替用户判断非图片资料的价值。"""
+    只认真正为空: .psd / .txt / 隐藏文件 / Thumbs.db 等**任意文件**都算占位, 一律保留。
+    执行阶段用 ``os.rmdir`` 由深到浅删除, 绝不 ``rmtree`` 递归强删。"""
     for f in d.rglob("*"):
-        if f.is_file() and f.name.lower() not in _TIDY_JUNK_NAMES:
+        if f.is_file():
             return False
     return True
 
@@ -2392,20 +2392,25 @@ def _tidy_build_plans(db, img_root: Path) -> list:
         _add("filrename", rel, f"{folder}/{want}" if folder else want,
              f"文件名不规范: {base} → {want}", [rel], True)
 
-    # ---- ④ 清理空夹: 整棵子树只有空目录/系统杂物的文件夹 ----
-    # 为什么要放进整理 (一键整理要自带清空夹):
-    # 整理自己会把图搬走 (归位/平铺) 从而**制造**空夹, 善后理应在同一次"一键"里做完,
-    # 而不是让用户再跑去健康面板点一次「删除空文件夹」。实测真实库整理完留着 16 个空夹。
-    # 只列**最上层**那一处 (子夹随它一起删), 免得同一片残留列出一排重复行。
-    # ⚠ 安全: 本次整理会 move 进去的目标夹**绝不能**列成空夹 —— 否则「先移入、后清空夹」
-    # 会把刚移进去的文件整个删掉 (2026-11-18 实测: 根目录 Kloan 夹移入 X图/Kloan 后，
-    # 同时生成的 X图/Kloan 空夹计划把它 rmtree 了)。
+    # ---- ④ 清理空夹: 真·空目录 + 本轮移动后预计搬空的源目录 ----
+    # 两个来源都在同一次整理里收尾, 用户不用再点第二次:
+    #   a) 当前就已经真正空的目录 (任何文件都不含);
+    #   b) 本轮 move 把文件全部搬走后才会空的源目录 (预览标「预计搬空」)。
+    # 只列**最上层**那一处; 执行阶段由深到浅逐个 os.rmdir (绝不 rmtree),
+    # 目录里只要有任意文件 (含 PSD/TXT/隐藏文件/Thumbs.db/失败残留) 就保留。
+    # ⚠ 安全: 本次整理会 move 进去的目标夹及其上级**绝不能**列成待清理目录 ——
+    # 否则「先移入、后清空夹」会把刚移进去的文件删掉 (2026-11-18 事故)。
     _move_targets = {str(p.get("to") or "") for p in plans
                      if p["type"] == "move" and p.get("to")}
 
     def _will_receive_files(rel: str) -> bool:
         return any(rel == t or t.startswith(rel + "/") for t in _move_targets)
 
+    def _candidate_ok(rel: str) -> bool:
+        return bool(rel) and rel not in frozen and not _will_receive_files(rel)
+
+    # a) 当前真·空目录 (只下探仍含文件的夹, 空的整棵交给执行阶段逐级 rmdir)
+    _empty_top = []
     _todo = [img_root]
     while _todo:
         _d = _todo.pop()
@@ -2415,25 +2420,123 @@ def _tidy_build_plans(db, img_root: Path) -> list:
             continue
         for _s in _subs:
             _rel = str(_s.relative_to(img_root)).replace("\\", "/")
-            if _rel in frozen:
-                continue        # 作者争议冻结中 → 它的夹一个指头都不碰
-            if _will_receive_files(_rel):
-                continue        # 整理会把文件搬进这个夹 (含其上级)，不能当空夹删
+            if not _candidate_ok(_rel):
+                continue        # 冻结夹 / move 目标夹(含上级) 一个指头都不碰
             if _tidy_dir_is_disposable(_s):
-                _add("rmdir", _rel, "(删除)",
-                     f"空文件夹: {_rel}（除系统杂物外没有任何文件）", [], True)
+                _empty_top.append(_rel)
             else:
                 _todo.append(_s)
+
+    # b) 本轮 move 之后会搬空的源目录 (含各级上级)
+    _move_src_files = {f for p in plans if p["type"] == "move" for f in p["files"]}
+
+    def _will_empty_after_move(rel: str) -> bool:
+        """rel 目录(含子树)里的每个文件都在本轮 move 的源文件里 → 搬完就空。
+        只按文件判断; 空子目录不影响 (执行阶段由深到浅 rmdir)。"""
+        d = img_root / rel
+        if not d.is_dir():
+            return False
+        for f in d.rglob("*"):
+            if not f.is_file():
+                continue
+            fr = str(f.relative_to(img_root)).replace("\\", "/")
+            if fr not in _move_src_files:
+                return False
+        return True
+
+    _move_src_dirs = set()
+    for p in plans:
+        if p["type"] != "move":
+            continue
+        frm = str(p.get("from") or "")
+        if not frm:
+            continue
+        segs = frm.split("/")
+        for i in range(1, len(segs) + 1):
+            rel = "/".join(segs[:i])
+            if _candidate_ok(rel):
+                _move_src_dirs.add(rel)
+    _planned_empty = {rel for rel in _move_src_dirs if _will_empty_after_move(rel)}
+
+    # 只留最上层: 上级会被清掉时, 子目录随它一起由深到浅收尾
+    _tops = []
+    for rel in sorted(set(_empty_top) | _planned_empty,
+                      key=lambda x: (x.count("/"), x)):
+        if any(rel == t or rel.startswith(t + "/") for t in _tops):
+            continue
+        _tops.append(rel)
+    for rel in _tops:
+        if rel in _planned_empty and rel not in _empty_top:
+            _add("rmdir", rel, "(删除)",
+                 f"本轮移动后预计搬空: {rel}（执行时确认真正为空才删）",
+                 [], True, planned=True)
+        else:
+            _add("rmdir", rel, "(删除)",
+                 f"空文件夹: {rel}（没有任何文件）", [], True)
+
+    # ---- ⑤ 目标冲突: 预览时就标出来, 执行时跳过并要求重新预览 ----
+    for p in plans:
+        try:
+            if p["type"] == "move":
+                dsts = [img_root / p["to"] / Path(f).name for f in p["files"]]
+            elif p["type"] == "filrename":
+                dsts = [img_root / p["to"]]
+            elif p["type"] == "rename":
+                src = img_root / p["from"]
+                dst = img_root / p["to"]
+                if (dst.exists()
+                        and os.path.normcase(str(dst)) != os.path.normcase(str(src))):
+                    p["conflict"] = 1
+                    p["reason"] += "（⚠ 目标已存在，执行时会跳过）"
+                continue
+            else:
+                continue
+            _hit = [d for d in dsts if d.exists()]
+            if _hit:
+                p["conflict"] = len(_hit)
+                p["reason"] += f"（⚠ 目标已存在 {len(_hit)} 个，执行时会跳过）"
+        except OSError:
+            continue
     return plans
 
 
 def _tidy_apply_plans(db, img_root: Path,
-                      plan_ids: "list[int] | None" = None) -> dict:
-    """执行整理计划: 先文件夹改名, 再逐文件移动, 再文件名规范化, 最后清空夹; 同步 pages.local_path。
-    只执行 auto 计划 (categorize/待确认 永不自动执行)。
-    返回 {renamed, moved, filenamed, rmdirs, failed}。"""
+                      plan_ids: "list[int] | None" = None,
+                      expected: "list[dict] | None" = None) -> dict:
+    """执行整理计划: 先文件夹改名, 再逐文件移动, 再文件名规范化, 最后清空夹;
+    同步 pages.local_path。只执行 auto 计划 (categorize/待确认 永不自动执行)。
+
+    expected: 前端预览时的计划快照 [{id,type,from,to,files}]。传入时按内容核对:
+    计划已消失或内容变化 → 记入 stale, 不执行该项, 提示用户重新预览。
+    返回 {renamed, moved, filenamed, rmdirs, rmdir_kept, failed, stale, db_failed}。
+    db_failed: 磁盘已移动/改名但写库失败 [{old,new,stage,error}], 供定向补写索引。"""
     plans = _tidy_build_plans(db, img_root)
-    if plan_ids is not None:
+    stale = []
+    if expected:
+        by_id = {int(p["id"]): p for p in plans}
+        matched = []
+        for e in expected:
+            if e.get("id") is None:
+                continue
+            eid = int(e["id"])
+            p = by_id.get(eid)
+            if not p:
+                stale.append(f"{e.get('from') or '（根目录）'} → {e.get('to') or ''}: "
+                             "预览中的计划已不存在")
+                continue
+            if (str(p["type"]) != str(e.get("type"))
+                    or str(p["from"]) != str(e.get("from"))
+                    or str(p["to"]) != str(e.get("to"))
+                    or set(p["files"]) != set(e.get("files") or [])):
+                stale.append(f"{e.get('from') or '（根目录）'} → {e.get('to') or ''}: "
+                             "预览后状态已变化")
+                continue
+            matched.append(p)
+        plans = matched
+        if plan_ids is not None:
+            want = {int(x) for x in plan_ids}
+            plans = [p for p in plans if int(p["id"]) in want]
+    elif plan_ids is not None:
         want = {int(x) for x in plan_ids}
         plans = [p for p in plans if p["id"] in want]
     # 安全: 只执行 auto 计划 (改/移有据可依); categorize(待确认) 只展示, 永不自动执行
@@ -2441,6 +2544,12 @@ def _tidy_apply_plans(db, img_root: Path,
     img_root = Path(img_root).resolve()
     renamed = moved = filenamed = 0
     failed = []
+    db_failed = []
+
+    def _db_fail(old: str, new: str, stage: str, err: str = "") -> None:
+        db_failed.append({"old": old, "new": new, "stage": stage,
+                          "error": str(err).splitlines()[0] if err else ""})
+
     # ① 文件夹改名 (先做, 让后续移动路径不再变) + 记录改名映射 (move 源被改名后按映射重定位)
     rename_map = {}
     for p in plans:
@@ -2449,23 +2558,31 @@ def _tidy_apply_plans(db, img_root: Path,
         src = img_root / p["from"]
         dst = img_root / p["to"]
         if not src.is_dir():
-            failed.append(f"{p['from']} → {p['to']}: 源文件夹不存在")
+            stale.append(f"{p['from']} → {p['to']}: 源文件夹已不存在")
             continue
         if dst.exists():
             # NTFS 大小写不敏感: dst 与 src 仅大小写不同 = 同一个夹, 允许改名 (规范化大小写,
             # 如 GGAC@毒瘤 → ggac@毒瘤); 否则是真冲突, 跳过
             if os.path.normcase(str(dst)) != os.path.normcase(str(src)):
-                failed.append(f"{p['from']} → {p['to']}: 目标已存在, 跳过")
+                stale.append(f"{p['from']} → {p['to']}: 目标已存在，跳过")
                 continue
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             src.rename(dst)
             renamed += 1
             rename_map[p["from"]] = p["to"]
-            db.rewrite_page_path_prefix(p["from"], p["to"])
-            db.refresh_ext_titles()  # 文件夹整体改名 → 外来作品标题里的路径同步刷新
         except Exception as e:
             failed.append(f"{p['from']} → {p['to']}: {str(e).splitlines()[0]}")
+            continue
+        # 磁盘已改名; 写库单独兜底, 失败记录旧路径/新路径/阶段, 便于定向补写
+        try:
+            db.rewrite_page_path_prefix(p["from"], p["to"])
+        except Exception as e:
+            _db_fail(p["from"], p["to"], "rewrite_page_path_prefix", str(e))
+        try:
+            db.refresh_ext_titles()  # 文件夹整体改名 → 外来作品标题里的路径同步刷新
+        except Exception as e:
+            _db_fail(p["from"], p["to"], "refresh_ext_titles", str(e))
     # ② 逐文件移动
     for p in plans:
         if p["type"] != "move":
@@ -2483,21 +2600,27 @@ def _tidy_apply_plans(db, img_root: Path,
                     rel = alt
                     src = img_root / alt
             if not src.is_file():
-                failed.append(f"{rel}: 源文件不存在")
+                stale.append(f"{rel}: 源文件已不存在")
                 continue
             dst = img_root / p["to"] / src.name
             if dst.exists():
-                failed.append(f"{rel}: 目标 {p['to']}/{src.name} 已存在, 跳过")
+                stale.append(f"{rel} → {p['to']}/{src.name}: 目标已存在，跳过")
                 continue
             try:
                 (img_root / p["to"]).mkdir(parents=True, exist_ok=True)
                 src.rename(dst)
                 moved += 1
-                new_rel = f"{p['to']}/{src.name}"
-                if rel != new_rel:
-                    db.relink_page_path(rel, new_rel)
             except Exception as e:
                 failed.append(f"{rel}: {str(e).splitlines()[0]}")
+                continue
+            new_rel = f"{p['to']}/{src.name}"
+            if rel != new_rel:
+                try:
+                    if not db.relink_page_path(rel, new_rel):
+                        _db_fail(rel, new_rel, "relink_page_path",
+                                 "数据库里没有匹配的旧路径")
+                except Exception as e:
+                    _db_fail(rel, new_rel, "relink_page_path", str(e))
     # ③ 文件名规范化 (已在正确文件夹内 → 原地改名 + 同步 DB 路径; 目标已存在则跳过, 绝不覆盖)
     for p in plans:
         if p["type"] != "filrename":
@@ -2505,41 +2628,51 @@ def _tidy_apply_plans(db, img_root: Path,
         for rel in p["files"]:
             src = img_root / rel
             if not src.is_file():
-                failed.append(f"{rel}: 源文件不存在")
+                stale.append(f"{rel}: 源文件已不存在")
                 continue
             dst = img_root / p["to"]
             if dst.exists():
-                failed.append(f"{rel}: 目标 {p['to']} 已存在, 跳过")
+                stale.append(f"{rel} → {p['to']}: 目标已存在，跳过")
                 continue
             try:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 src.rename(dst)
                 filenamed += 1
-                db.relink_page_path(rel, p["to"])   # 内含 ext_ 标题刷新
             except Exception as e:
                 failed.append(f"{rel}: {str(e).splitlines()[0]}")
-    # ④ 清理空夹 (整棵子树只有空目录/系统杂物): 由深到浅删, 目标已不在就跳过
-    import shutil as _sh
+                continue
+            try:
+                if not db.relink_page_path(rel, p["to"]):   # 内含 ext_ 标题刷新
+                    _db_fail(rel, p["to"], "relink_page_path",
+                             "数据库里没有匹配的旧路径")
+            except Exception as e:
+                _db_fail(rel, p["to"], "relink_page_path", str(e))
+    # ④ 清理空夹: 由深到浅逐级 os.rmdir (绝不 rmtree); 有任意文件就保留
     rmdirs = 0
+    rmdir_kept = 0
     for _p in sorted([x for x in plans if x["type"] == "rmdir"],
                      key=lambda x: -x["from"].count("/")):
         _d = img_root / _p["from"]
         if not _d.is_dir():
             continue
-        # 第二道防线: 执行到这里时目录必须**仍然**是空的。
-        # move 阶段可能刚把文件搬进来 (计划生成时它还是空夹)，此时绝不能 rmtree。
-        if not _tidy_dir_is_disposable(_d):
-            continue
-        try:
-            _sh.rmtree(str(_d))
+        _dirs = [_d] + [x for x in _d.rglob("*") if x.is_dir()]
+        _dirs.sort(key=lambda x: len(x.parts), reverse=True)
+        for _sub in _dirs:
+            try:
+                os.rmdir(str(_sub))
+            except OSError:
+                continue    # 非真空/被占用/已不存在 → 保留, 绝不强删
+        if not _d.exists():
             rmdirs += 1
-        except OSError as e:
-            failed.append(f"{_p['from']}: 删除空夹失败 {str(e).splitlines()[0]}")
+        else:
+            rmdir_kept += 1
+            stale.append(f"{_p['from']}: 目录已不再为空（或无法删除），已保留")
     # ⑤ (已移除) 旧「作者更正」执行段: 曾用文件夹名解析出的作者**无条件覆盖** DB。
     # 数据只能「用户 → 数据库 → 磁盘」单向流动, 检测到磁盘与 DB 不一致时
     # 由 ①a 生成「待确认」项交给用户判断, 绝不自动改写数据库。
     return {"renamed": renamed, "moved": moved, "filenamed": filenamed,
-            "rmdirs": rmdirs, "failed": failed}
+            "rmdirs": rmdirs, "rmdir_kept": rmdir_kept,
+            "failed": failed, "stale": stale, "db_failed": db_failed}
 
 
 def _readable_author_name(db, aid: str, weird: str) -> str:
@@ -7266,43 +7399,6 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                              cleaned, ids=ids)
         return jsonify({"status": "ok", "cleaned": cleaned, "files_removed": files_removed})
 
-    @app.route("/api/library/clean-empty-dirs", methods=["POST"])
-    def api_library_clean_empty_dirs():
-        """删除扫描到的空文件夹 (只删 reconcile 判定「无任何图片文件」的作者目录)。
-
-        注意: reconcile 判定空目录 =「无子目录链深处有图片文件」, 但里面可能有
-        Thumbs.db / .DS_Store / 子空目录 / 配置文件等杂物, 所以必须用
-        shutil.rmtree 而不是 d.rmdir() (后者严格空才能删, 会吞错导致按钮失效)。
-        为安全起见, 删除前再次核对: 真的不含任何图片文件才动手。
-        """
-        import shutil
-        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
-        IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-        removed = 0
-        failed = 0
-        if img_root.is_dir():
-            # 先叶子后根, 保证能递归清掉嵌套空目录
-            dirs = [d for d in img_root.rglob('*') if d.is_dir()]
-            dirs.sort(key=lambda d: str(d).count(os.sep), reverse=True)
-            for d in dirs:
-                if not d.exists():
-                    continue
-                if any(f.is_file() and f.suffix.lower() in IMG_EXT for f in d.rglob('*')):
-                    continue   # 有图片, 不删
-                try:
-                    shutil.rmtree(str(d))
-                    removed += 1
-                except OSError:
-                    failed += 1
-                    continue
-        _cached_reconcile(force=True)  # 刷新对账缓存
-        if removed:
-            audit_log.record("delete", "删除空文件夹",
-                             f"删除 {removed} 个不含任何图片的文件夹"
-                             + (f"（{failed} 个被占用跳过）" if failed else ""),
-                             removed)
-        return jsonify({"status": "ok", "removed": removed, "failed": failed})
-
     @app.route("/api/library/facets")
     def api_library_facets():
         """分类数据: 全部标签 + 全部作者 + 实际来源 (下拉筛选/分类浏览用)。"""
@@ -9156,7 +9252,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
     @app.route("/api/library/tidy/preview", methods=["POST"])
     def api_library_tidy_preview():
-        """一键整理预览: 扫描图库生成规范化计划 (不移动任何文件)。"""
+        """整理文件夹预览: 扫描图库生成规范化计划 (不移动任何文件)。"""
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
         plans = []
         with _db() as db:
@@ -9167,6 +9263,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             "categorize": sum(1 for p in plans if p["type"] == "categorize"),
             "filrename": sum(1 for p in plans if p["type"] == "filrename"),
             "rmdir": sum(1 for p in plans if p["type"] == "rmdir"),
+            "rmdir_pending": sum(1 for p in plans
+                                 if p["type"] == "rmdir" and p.get("planned")),
+            "conflict": sum(1 for p in plans if p.get("conflict")),
             "files": sum(len(p["files"]) for p in plans),
             "auto": sum(1 for p in plans if p["auto"]),
             "need_confirm": sum(1 for p in plans if not p["auto"]),
@@ -9179,9 +9278,10 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         """执行整理计划 (移动+改名+同步 local_path), 随后强制对账。"""
         data = request.get_json(silent=True) or {}
         plan_ids = data.get("plans")  # None = 全部
+        expected = data.get("expected") or None   # 预览快照: 内容变了就不执行该项
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
         with _db() as db:
-            rep = _tidy_apply_plans(db, img_root, plan_ids)
+            rep = _tidy_apply_plans(db, img_root, plan_ids, expected)
         try:
             _cached_reconcile(force=True)
         except Exception:
