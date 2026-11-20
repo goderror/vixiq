@@ -10395,7 +10395,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261120c" and _mss.group(1) == "20261120c", \
+    assert _mjs and _mss and _mjs.group(1) == "20261120d" and _mss.group(1) == "20261120d", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10490,7 +10490,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261120c', html) and _re.search(r'app\.js\?v=20261120c', html), \
+    assert _re.search(r'style\.css\?v=20261120d', html) and _re.search(r'app\.js\?v=20261120d', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10898,7 +10898,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261120c" in html and "app.js?v=20261120c" in html, \
+        assert "style.css?v=20261120d" in html and "app.js?v=20261120d" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13281,7 +13281,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261120c" in _h and "style.css?v=20261120c" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261120d" in _h and "style.css?v=20261120d" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14650,7 +14650,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261120c" in html and "app.js?v=20261120c" in html
+            assert "style.css?v=20261120d" in html and "app.js?v=20261120d" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14759,7 +14759,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261120c" in html and "app.js?v=20261120c" in html
+            assert "style.css?v=20261120d" in html and "app.js?v=20261120d" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14870,7 +14870,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261120c" in html and "app.js?v=20261120c" in html
+    assert "style.css?v=20261120d" in html and "app.js?v=20261120d" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14894,9 +14894,9 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "lib-sync-clickable" in js and ".lib-sync-clickable" in css
     assert "showSelfCheckReport()" in js, "体检汇总也应可点开明细"
     assert "cleanEmptyDirs()" in js and "cleanMissing()" in js
-    # 健康条正常时也常驻显示「未发现异常」（同步磁盘/刷新/整理文件夹后都会重画）
-    assert "const hasHealth = !!h" in js
-    assert "hasHealth || showReport || checkRunning" in js
+    # 正常态健康条只亮一会儿（主动同步后显示，超时自动收起；有异常则常驻）
+    assert "HEALTH_OK_SHOW_MS" in js and "_healthOkTimer" in js
+    assert "paintLibHealth(!periodic)" in js
     assert "未发现异常" in js and ".health-ok" in css
 
     assert "打开当前壁纸文件夹" in tray_src
@@ -14904,7 +14904,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261120c" in html
+    assert "20261120d" in html
 
 
 def t154_tidy_rmdir_safety() -> None:

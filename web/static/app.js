@@ -4039,7 +4039,7 @@ async function libSync(showToast = false, periodic = false) {
     // periodic=1: 定时轮询用, 后端 TTL 内不强制全量重扫磁盘 (图库大时避免每 15s 抢磁盘 IO)
     const h = await api('/api/library/sync' + (periodic ? '?periodic=1' : ''), { method: 'POST' });
     window._libHealth = h;
-    paintLibHealth();
+    paintLibHealth(!periodic);
     if (h && h.new_pages_linked > 0) {
       toast(`📥 发现 ${h.new_pages_linked} 张新图片，已登记入库，正在联网补全标题/标签…`, 'ok');
       loadLibrary(); loadStats(); loadLibFacets();
@@ -4164,7 +4164,10 @@ function _askImportMode(pre) {
 window.importFromFolder = () => importLocalImages('folder');
 window.importFromFiles = () => importLocalImages('files');
 
-function paintLibHealth() {
+const HEALTH_OK_SHOW_MS = 8000;   // 正常态健康条亮多久后自动收起
+let _healthOkTimer = null;
+
+function paintLibHealth(flash = false) {
   const bar = $('#lib-health-hint');
   if (!bar) return;
   const h = window._libHealth;
@@ -4180,13 +4183,27 @@ function paintLibHealth() {
   // (这条"上次体检：…"一直显示 —— 它是上次的快照, 现在: 解决完了自动消失,
   //  没解决但不想看也能收起; 下次真跑体检会重新显示。)
   const showReport = !!rc && liveN > 0 && !rc.bar_dismissed;
-  // 只要同步过一次就常驻显示（正常时也给出「未发现异常」的明确反馈）。
-  // 同步磁盘 / 万能刷新 / 整理文件夹 / 导入 都会走 libSync → 这里重画。
-  const hasHealth = !!h;
-  const clean = hasHealth && !miss && !empty && !bad && !showReport;
-  const visible = $('#tab-library').classList.contains('active')
-    && (hasHealth || showReport || checkRunning);
+  // 正常态只亮一小会儿: 同步磁盘/刷新/整理文件夹等主动操作后 flash 一下, 8 秒后自动收起;
+  // 周期轮询不重新点亮。有异常/体检报告/体检中则一直显示, 直到问题解决。
+  const issue = !!(miss || empty || bad || showReport || checkRunning);
+  const tabActive = $('#tab-library').classList.contains('active');
+  let visible;
+  if (issue) {
+    if (_healthOkTimer) { clearTimeout(_healthOkTimer); _healthOkTimer = null; }
+    visible = tabActive;
+  } else if (flash && tabActive && h) {
+    visible = true;
+    if (_healthOkTimer) clearTimeout(_healthOkTimer);
+    _healthOkTimer = setTimeout(() => {
+      _healthOkTimer = null;
+      paintLibHealth();              // 无异常且不是主动刷新 → 自动收起
+    }, HEALTH_OK_SHOW_MS);
+  } else {
+    visible = tabActive && _healthOkTimer !== null;
+  }
   bar.style.display = visible ? '' : 'none';
+  if (!visible) { bar.innerHTML = ''; return; }
+  const clean = !!(h && !miss && !empty && !bad && !showReport && !checkRunning);
   bar.innerHTML = `<span class="lib-sync-line">🔄 已与磁盘同步 · 扫描 ${h ? h.scanned_images : 0} 图</span>` +
     (clean ? `<span class="health-ok">✓ 未发现异常</span>` : '') +
     (miss ? `<button type="button" class="health-badge miss" title="点击查看具体是哪些作品" onclick="showLibHealthDetail('missing')">⚠ 文件缺失 ${miss}</button>` : '') +
