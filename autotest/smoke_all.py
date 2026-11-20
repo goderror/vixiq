@@ -10404,7 +10404,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261120f" and _mss.group(1) == "20261120f", \
+    assert _mjs and _mss and _mjs.group(1) == "20261120g" and _mss.group(1) == "20261120g", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10499,7 +10499,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261120f', html) and _re.search(r'app\.js\?v=20261120f', html), \
+    assert _re.search(r'style\.css\?v=20261120g', html) and _re.search(r'app\.js\?v=20261120g', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10907,7 +10907,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261120f" in html and "app.js?v=20261120f" in html, \
+        assert "style.css?v=20261120g" in html and "app.js?v=20261120g" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13290,7 +13290,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261120f" in _h and "style.css?v=20261120f" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261120g" in _h and "style.css?v=20261120g" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14659,7 +14659,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261120f" in html and "app.js?v=20261120f" in html
+            assert "style.css?v=20261120g" in html and "app.js?v=20261120g" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14768,7 +14768,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261120f" in html and "app.js?v=20261120f" in html
+            assert "style.css?v=20261120g" in html and "app.js?v=20261120g" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14879,7 +14879,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261120f" in html and "app.js?v=20261120f" in html
+    assert "style.css?v=20261120g" in html and "app.js?v=20261120g" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14919,7 +14919,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261120f" in html
+    assert "20261120g" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15115,12 +15115,16 @@ def t163_tidy_emptied_dirs_same_pass() -> None:
 
 
 def t164_tidy_preview_snapshot_stability() -> None:
-    """T164: 预览快照按稳定 key + 源文件状态核对（2026-11-20 验收反馈两处）。
+    """T164: 预览快照按稳定 key + 源文件状态核对（2026-11-20 验收反馈）。
 
-    ① 预览后同路径替换源文件（同名同大小）→ 该移动项 stale、不移动，新文件留在原位；
+    ① 预览快照经真实前端 JSON 往返（V8）后，未变化的文件仍正常移动；
+       同路径同大小改写并改变状态 → 该移动项 stale、不移动，新文件留在原位；
     ② 新增无关空目录导致列表序号后移 → 原确认的 b-empty 仍按 key 执行，a-empty 保留。
     """
+    import json as _json
     import os as _os
+    import shutil as _shutil
+    import subprocess as _sp
     import tempfile
     from db.store import PixivDatabase, WSt, PSt
     import web.server as ws
@@ -15130,7 +15134,22 @@ def t164_tidy_preview_snapshot_stability() -> None:
                 "from": p["from"], "to": p["to"], "files": p["files"],
                 "sources": p.get("sources") or []}
 
-    # ① 同路径、同大小、内容替换
+    def _js_roundtrip(obj):
+        """模拟浏览器：JSON.stringify → JSON.parse → JSON.stringify。
+        有 node 就用真实 V8；没有则按 V8 规则把所有数字解析成 double。"""
+        payload = _json.dumps(obj, ensure_ascii=False)
+        node = _shutil.which("node")
+        if node:
+            script = ("let s='';process.stdin.on('data',d=>s+=d);"
+                      "process.stdin.on('end',()=>process.stdout.write("
+                      "JSON.stringify(JSON.parse(s))));")
+            r = _sp.run([node, "-e", script], input=payload, capture_output=True,
+                        text=True, encoding="utf-8")
+            assert r.returncode == 0, r.stderr
+            return _json.loads(r.stdout)
+        return _json.loads(_json.dumps(_json.loads(payload, parse_int=float)))
+
+    # ① 纳秒时间戳超过 JS 安全整数: 未变化应正常移动, 改变后应拦截
     with tempfile.TemporaryDirectory(prefix="t164a_") as td:
         tmp = Path(td)
         img = tmp / "img"
@@ -15144,22 +15163,43 @@ def t164_tidy_preview_snapshot_stability() -> None:
             src = img / "作者乙_77" / "990101_p0.jpg"
             src.parent.mkdir(parents=True)
             src.write_bytes(b"original")
+            # > 2^53 的纳秒值: 直接当 JSON number 会在 V8 丢精度
+            _os.utime(src, ns=(1780000000123456700, 1780000000123456700))
             db.mark_page_status("990101", 0, PSt.DONE,
                                 local_path="作者乙_77/990101_p0.jpg")
             plans = ws._tidy_build_plans(db, img)
             mv = [p for p in plans if p["type"] == "move"
                   and p["from"] == "作者乙_77"]
             assert mv, plans
-            exp = _snap(mv[0])
-            # 同路径、同为 8 字节、内容不同; 显式改 mtime 确保状态确实变了
-            src.write_bytes(b"replaced")
-            st = src.stat()
-            _os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+            exp = _js_roundtrip([_snap(mv[0])])[0]
+            assert isinstance(exp["sources"][0]["mtime_ns"], str), \
+                "mtime_ns 必须以字符串跨 JSON"
+            assert int(exp["sources"][0]["mtime_ns"]) > 2 ** 53, exp["sources"]
             rep = ws._tidy_apply_plans(db, img, [mv[0]["id"]], [exp])
-            assert rep["moved"] == 0, rep
-            assert rep["stale"], rep
-            assert src.read_bytes() == b"replaced", "被替换的新文件必须留在原位"
-            assert not (img / mv[0]["to"] / "990101_p0.jpg").exists()
+            assert rep["moved"] == 1 and not rep["stale"], rep
+            assert (img / mv[0]["to"] / "990101_p0.jpg").is_file()
+
+            # 同路径、同大小、内容替换 → 拦截
+            db.change_work_status("990102", WSt.DONE, title="t2", author_id="77",
+                                  total_pages=1)
+            src2 = img / "错位Y" / "990102_p0.jpg"
+            src2.parent.mkdir(parents=True)
+            src2.write_bytes(b"original")
+            db.mark_page_status("990102", 0, PSt.DONE,
+                                local_path="错位Y/990102_p0.jpg")
+            plans2 = ws._tidy_build_plans(db, img)
+            mv2 = [p for p in plans2 if p["type"] == "move"
+                   and p["from"] == "错位Y"]
+            assert mv2, plans2
+            exp2 = _js_roundtrip([_snap(mv2[0])])[0]
+            src2.write_bytes(b"replaced")
+            st = src2.stat()
+            _os.utime(src2, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+            rep2 = ws._tidy_apply_plans(db, img, [mv2[0]["id"]], [exp2])
+            assert rep2["moved"] == 0, rep2
+            assert rep2["stale"], rep2
+            assert src2.read_bytes() == b"replaced", "被替换的新文件必须留在原位"
+            assert not (img / mv2[0]["to"] / "990102_p0.jpg").exists()
         finally:
             db.close()
 
@@ -15174,7 +15214,7 @@ def t164_tidy_preview_snapshot_stability() -> None:
             plans = ws._tidy_build_plans(db, img)
             b = [p for p in plans if p["type"] == "rmdir" and p["from"] == "b-empty"]
             assert b and b[0]["id"] == 1, plans
-            exp = _snap(b[0])
+            exp = _js_roundtrip([_snap(b[0])])[0]
             (img / "a-empty").mkdir()   # 排序在 b 之前 → b 的 id 后移
             plans2 = ws._tidy_build_plans(db, img)
             b2 = [p for p in plans2 if p["type"] == "rmdir"

@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-20（当前前端版本 `20261120f`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-20（当前前端版本 `20261120g`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261120f`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261120g`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -864,6 +864,16 @@
   - 新增 T164 覆盖上述两条；全量 **155/155**。候选包 `built_at 22:56:09` 在 7813 验收通过；
     安装版/dist 已同步（前端 `20261120f`），备份 `.backup-tidy-snapshot-20261120-225709` /
     `.backup-tidy-snapshot-20261120-225743`；三处 7 个资源与 exe 哈希一致。GitHub 本地提交，**未推送**。
+- **浏览器纳秒精度修复（2026-11-20，版本 `20261120g`）**：
+  - 复验发现 `mtime_ns` 以 JSON 数字发送，超过 JS 2^53；浏览器 `JSON.parse` / `stringify`
+    往返后变成双精度，未变化的文件也被判「预览后已被替换」。
+  - `sources` 的 `size` / `mtime_ns` 一律改为字符串（后端 `str()`），比较只做字符串相等；
+    从预览到执行全程不经过 JS Number。
+  - T164 加入真实 Node（V8）JSON 往返：超过 2^53 的纳秒值未变化时正常移动，同大小改写后仍拦截；
+    新增无关空目录的 key 回归保留。全量 **155/155**。
+  - 候选包 `built_at 23:30:05` 在 7813 用合成库完成页面「预览 → 执行」验收（移动归位 + 源目录同次收尾）；
+    安装版/dist 已同步（前端 `20261120g`），备份 `.backup-tidy-mtime-string-20261120-233254` /
+    `.backup-tidy-mtime-string-20261120-233327`；三处 7 个资源与 exe 哈希一致。GitHub 本地提交，**未推送**。
 
 ---
 

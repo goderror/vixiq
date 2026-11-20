@@ -2502,14 +2502,17 @@ def _tidy_build_plans(db, img_root: Path) -> list:
     # id 只是本次列表序号: 新增一个无关计划会让后面所有 id 后移, 不能用它匹配用户确认项。
     # key 由内容决定 (type|from|to, 同键计划本就会被 _add 合并), 列表变化不影响。
     # sources 记录每个源文件的 size/mtime_ns: 预览后同路径替换 (即使同名同大小) 也能识别。
+    # 两个值都以字符串跨 JSON: mtime_ns 是纳秒级大整数 (超过 JS 2^53), 数字会被浏览器
+    # JSON.parse 变成双精度, 未变化的文件也会被误判成「已被修改」; size 一并字符串化,
+    # 让快照字段类型稳定、比较只做字符串相等。
     for p in plans:
         p["key"] = f"{p['type']}|{p['from']}|{p['to']}"
         _stats = []
         for _f in p["files"]:
             try:
                 _st = (img_root / _f).stat()
-                _stats.append({"path": _f, "size": int(_st.st_size),
-                               "mtime_ns": int(_st.st_mtime_ns)})
+                _stats.append({"path": _f, "size": str(int(_st.st_size)),
+                               "mtime_ns": str(int(_st.st_mtime_ns))})
             except OSError:
                 _stats.append({"path": _f, "size": None, "mtime_ns": None})
         p["sources"] = _stats
@@ -2544,8 +2547,8 @@ def _tidy_apply_plans(db, img_root: Path,
             _c = sorted(cur or [], key=lambda x: str(x.get("path") or ""))
             return all(
                 str(a.get("path")) == str(b.get("path"))
-                and a.get("size") == b.get("size")
-                and a.get("mtime_ns") == b.get("mtime_ns")
+                and str(a.get("size")) == str(b.get("size"))
+                and str(a.get("mtime_ns")) == str(b.get("mtime_ns"))
                 for a, b in zip(_e, _c))
 
         matched = []
