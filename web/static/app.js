@@ -10760,53 +10760,179 @@ function paintSmartRefresh() {
   b.classList.toggle('has-target', !!(dirty.length || a));
 }
 
+// ===== 智能刷新: 前台先快, 后台按变化范围补查 =====
+// 前台只重拉当前视图/计数, 不等待磁盘核对; 后台按 lastAction / 无范围时的磁盘索引同步。
+// 同一范围连续点击复用在途任务, 结果/失败/重试与整理入口显示在右下角状态条。
+let _refreshJobs = new Map();          // key -> {promise, label, at}
+let _refreshRetry = null;              // {key, act} 最近一次失败, 供「重试」
+let _refreshStatusTimer = null;
+
+function _refreshJobKey(act) {
+  if (act && act.scope === 'work' && act.ids.length) {
+    return 'work:' + [...act.ids].map(String).sort().join(',');
+  }
+  if (act && act.scope === 'author' && act.ids.length) {
+    return 'author:' + [...act.ids].map(String).sort().join(',');
+  }
+  if (act && act.scope === 'library') return 'library';
+  return 'disk';
+}
+
+function _refreshJobLabel(act) {
+  if (act && act.label) return act.label;
+  if (act && act.scope === 'work') return `作品 ${act.ids.join(', ')}`;
+  if (act && act.scope === 'author') return `作者 ${act.ids.join(', ')}`;
+  return '磁盘索引';
+}
+
+function paintRefreshStatus(html, kind = '') {
+  const el = $('#refresh-status');
+  if (!el) return;
+  clearTimeout(_refreshStatusTimer);
+  el.className = 'refresh-status' + (kind ? ' ' + kind : '');
+  el.innerHTML = html;
+  el.classList.remove('hidden');
+}
+
+function hideRefreshStatus(delay = 0) {
+  const el = $('#refresh-status');
+  if (!el) return;
+  clearTimeout(_refreshStatusTimer);
+  const hide = () => { el.classList.add('hidden'); el.innerHTML = ''; };
+  if (delay) _refreshStatusTimer = setTimeout(hide, delay);
+  else hide();
+}
+window.hideRefreshStatus = hideRefreshStatus;
+
+async function refreshAfterJob(act) {
+  // 完成后只补刷受影响的数据; 保留搜索/筛选/页码/勾选
+  if (Object.keys(_dirtyScopes).length) await flushDirty();
+  const jobs = [loadStats(), loadTrashBadge()];
+  if (isTabActive('library')) {
+    jobs.push(loadLibrary({ resetPage: false, force: true }), loadLibFacets());
+  } else if (isTabActive('authors')) {
+    jobs.push(loadAuthors({ resetPage: false }));
+  } else if (isTabActive('trash')) {
+    jobs.push(loadTrash());
+  }
+  await Promise.allSettled(jobs);
+}
+
+async function _refreshTidyHint(act, result) {
+  // 磁盘核对/作者改名可能带出新整理需求; 作品本地重算不为此扫全库
+  const should = (!act || act.scope === 'library')
+    || (act.scope === 'author' && Number((result && result.renamed) || 0) > 0);
+  if (!should) return 0;
+  try {
+    const p = await api('/api/library/tidy/preview', { method: 'POST' });
+    return Number((p && p.counts && p.counts.total) || 0);
+  } catch (e) { return 0; }
+}
+
+function _refreshResultText(act, r) {
+  if (!act || act.scope === 'library') {
+    const n = Number((r && r.new_pages_linked) || 0);
+    const miss = ((r && r.missing_ids) || []).length;
+    return `磁盘核对完成${n ? ` · 新登记 ${n} 张` : ''}${miss ? ` · 缺失 ${miss}` : ''}`;
+  }
+  if (act.scope === 'work') {
+    const miss = ((r && r.missing_files) || []).length;
+    return `作品核对 ${Number((r && r.works) || 0)} 个${miss ? ` · 缺失 ${miss}` : ''}`;
+  }
+  if (act.scope === 'author') {
+    return `作者核对 ${Number((r && r.authors) || 0)} 位`
+      + `${r && r.renamed ? ` · 改名 ${r.renamed}` : ''}`
+      + `${r && r.note ? ` · ${r.note}` : ''}`;
+  }
+  return '后台核对完成';
+}
+
+async function runRefreshJob(key, act) {
+  // 同一范围连续点击: 复用在途任务, 不重复打接口
+  const running = _refreshJobs.get(key);
+  if (running) return running.promise;
+
+  const job = { at: Date.now(), label: _refreshJobLabel(act) };
+  // 先占位再启动: 并发点击/同步 DOM 事件里也不会重复启动同一范围
+  _refreshJobs.set(key, job);
+  paintRefreshStatus(`⏳ 后台核对：${esc(job.label)}`);
+  job.promise = (async () => {
+    let result = null;
+    try {
+      if (act && (act.scope === 'work' || act.scope === 'author')
+          && act.ids.length) {
+        // 有明确范围: 只核对刚动过的作品/作者 (作者分支含联网核对名字/存续)
+        result = await api('/api/library/refresh-scope', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: act.scope, ids: act.ids }) });
+        const err = apiErr(result);
+        if (err) throw new Error(err);
+      } else {
+        // 无法确定范围 (例如外部往图库塞了图片) → 后台做磁盘索引同步
+        result = await api('/api/library/sync', { method: 'POST' });
+        window._libHealth = result;
+        paintLibHealth(true);
+      }
+      await refreshAfterJob(act);
+      const tidyN = await _refreshTidyHint(act, result);
+      const tray = tidyN > 0
+        ? `<button class="btn accent" onclick="openTidyPreview()">🧹 整理文件夹（${tidyN} 项）</button>`
+        : '';
+      paintRefreshStatus(`✓ ${esc(_refreshResultText(act, result))}${tray}`, 'ok');
+      if (!tidyN) hideRefreshStatus(4200);
+      _refreshRetry = null;
+      return result;
+    } catch (e) {
+      _refreshRetry = { key, act };
+      paintRefreshStatus(
+        `⚠ 后台核对失败：${esc(e.message || '未知错误')} ` +
+        `<button class="btn danger" onclick="retryRefreshJob()">重试</button>`, 'err');
+      return { error: e.message || '未知错误' };
+    } finally {
+      _refreshJobs.delete(key);
+      paintSmartRefresh();
+    }
+  })();
+  return job.promise;
+}
+window.runRefreshJob = runRefreshJob;
+
+window.retryRefreshJob = function () {
+  const r = _refreshRetry;
+  if (!r) return;
+  _refreshRetry = null;
+  paintRefreshStatus(`⏳ 正在重试：${esc(_refreshJobLabel(r.act))}`);
+  runRefreshJob(r.key, r.act);
+};
+
 window.smartRefresh = async function () {
   const b = $('#smart-refresh');
   const act = activeAction();
-  const dirty = Object.keys(_dirtyScopes);
   if (b) { b.disabled = true; b.classList.add('spin'); }
   try {
-    // 「行脚医生」定位: 刷新 = 同能力筛查、但**只诊治刚刚出问题的人**;
-    // 全库磁盘普查是「自检」的活, 刷新不做, 保持毫秒级。
-    // 但"当前视图的真实状态"必须**一步到位**: 封面改了 / 因修改在"按修改时间"里提到了最前 /
-    // 新入库了 / 刚删掉了 —— 点一下就该看见 (旧实现按三分支走, 有时只刷了局部就收工)。
-    const done = [];
-    if (dirty.length) {
-      await flushDirty();               // ① 先把手动触发前累积的待刷新域兑现
-      done.push(...dirty.map(s => SCOPE_LABEL[s] || s));
-    }
-    if (act && (act.scope === 'work' || act.scope === 'author') && act.ids.length) {
-      // ② 有"刚改过的对象" → 顺手定向核对它 (本地重算毫秒级; 联网失败不影响结果)
-      try {
-        const r = await api('/api/library/refresh-scope', { method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope: act.scope, ids: act.ids }) });
-        const err = apiErr(r);
-        if (err) throw new Error(err);
-        if ((r.missing_files || []).length) {
-          toast(`⚠ 发现 ${r.missing_files.length} 个作品的文件缺失`, 'err');
-        }
-      } catch (e) { /* 定向核对失败不挡整体刷新 */ }
-      clearLastAction();
-    }
-    // ③ 当前视图重拉一遍 (列表/统计/筛选项/同步状态/回收站), 让"看得见的变化"都反映出来。
-    //    手动点刷新 = 显式要求"按现在的真实状态重画一遍" → 用 force 绕过指纹跳过;
-    //    (关了安全模式点刷新没反应 —— 指纹里漏了打码态, 已补,
-    //     这里再加一层 force, 保证"用户点了就一定看得见重画"。)
+    // ① 前台: 只重拉当前视图/计数, 不等待磁盘核对 (慢盘也不挡页面)
     const jobs = [loadStats(), loadTrashBadge()];
     if (isTabActive('library')) {
-      jobs.push(loadLibrary({ resetPage: false, force: true }), libSync(), loadLibFacets());
+      jobs.push(loadLibrary({ resetPage: false, force: true }), loadLibFacets());
     } else if (isTabActive('trash')) jobs.push(loadTrash());
     else if (isTabActive('authors')) jobs.push(loadAuthors({ resetPage: false }));
     else if (isTabActive('stats')) jobs.push(loadStatsPage());
     if (isTabActive('settings')) jobs.push(loadOperations());
     await Promise.allSettled(jobs);
-    toast(done.length ? `已刷新：${done.join(' / ')}` : '已刷新', 'ok');
-    paintSmartRefresh();
+
+    // ② 后台: 按最近动作 / 磁盘变化定向核对; 同一范围复用在途任务
+    const key = _refreshJobKey(act);
+    if (_refreshJobs.has(key)) {
+      paintRefreshStatus(`⏳ 该范围已在核对：${esc(_refreshJobLabel(act))}`);
+    } else {
+      runRefreshJob(key, act);   // 不 await: 页面立即恢复可操作
+    }
+    toast('已刷新当前视图 ✓ 后台核对中…', 'ok');
   } catch (e) {
     toast('刷新失败: ' + e.message, 'err');
   } finally {
     if (b) { b.disabled = false; b.classList.remove('spin'); }
+    paintSmartRefresh();
   }
 };
 

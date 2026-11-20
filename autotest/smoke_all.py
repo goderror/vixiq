@@ -3065,6 +3065,7 @@ def run_suite() -> SuiteResult:
     suite.add("T163", "🧹 整理文件夹同一次收尾搬空目录: 预览标预计搬空 + 执行后逐级 rmdir + 含 PSD 保留 + 目标冲突/预览后放入文件/写库失败 (隔离数据)", t163_tidy_emptied_dirs_same_pass)
     suite.add("T164", "🧷 整理预览快照稳定: 同路径同大小替换源文件→stale 留原位 + 新增无关空目录不改变已确认项(按稳定 key 执行) (隔离数据)", t164_tidy_preview_snapshot_stability)
     suite.add("T165", "🛡 备份对比接入安全模式: 可靠归属分级 + 安全模式下 R18/未知/归属不明两侧占位 + 后端 backup-img 兜底 + 全年龄正常加载 (隔离数据)", t165_backup_compare_safemode)
+    suite.add("T166", "🎯 智能刷新前后台拆分: 前台立即刷当前视图(保留页码/勾选) + 后台按作品/作者/磁盘范围核对 + 同范围复用在途任务 + 失败重试/整理入口接线 (离线)", t166_smart_refresh_front_background)
     suite.write_report()
     return suite
 
@@ -10399,7 +10400,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261121a" and _mss.group(1) == "20261121a", \
+    assert _mjs and _mss and _mjs.group(1) == "20261121b" and _mss.group(1) == "20261121b", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10494,7 +10495,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261121a', html) and _re.search(r'app\.js\?v=20261121a', html), \
+    assert _re.search(r'style\.css\?v=20261121b', html) and _re.search(r'app\.js\?v=20261121b', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10902,7 +10903,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261121a" in html and "app.js?v=20261121a" in html, \
+        assert "style.css?v=20261121b" in html and "app.js?v=20261121b" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13285,7 +13286,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261121a" in _h and "style.css?v=20261121a" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261121b" in _h and "style.css?v=20261121b" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14654,7 +14655,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261121a" in html and "app.js?v=20261121a" in html
+            assert "style.css?v=20261121b" in html and "app.js?v=20261121b" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14763,7 +14764,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261121a" in html and "app.js?v=20261121a" in html
+            assert "style.css?v=20261121b" in html and "app.js?v=20261121b" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14874,7 +14875,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261121a" in html and "app.js?v=20261121a" in html
+    assert "style.css?v=20261121b" in html and "app.js?v=20261121b" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14914,7 +14915,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261121a" in html
+    assert "20261121b" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15319,6 +15320,40 @@ def t165_backup_compare_safemode() -> None:
     assert "allow-raw-img" not in js
     srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
     assert "_backup_rating" in srv and "owner_known" in srv
+
+
+def t166_smart_refresh_front_background() -> None:
+    """T166: 智能刷新前台先快、后台按变化范围补查（2026-11-21 第 3 项）。
+
+    前台只重拉当前视图/计数, 不等待全量磁盘同步; 后台按 lastAction 定向核对作品/作者,
+    无明确范围时做磁盘索引同步; 同范围复用在途任务, 结果/失败重试/整理入口在状态条可见。
+    """
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert 'id="refresh-status"' in html, "缺少后台刷新状态条容器"
+    assert ".refresh-status" in css, "缺少状态条样式"
+    for token in ("_refreshJobs = new Map()", "function _refreshJobKey",
+                  "async function runRefreshJob",
+                  "if (running) return running.promise",
+                  "window.retryRefreshJob", "async function _refreshTidyHint",
+                  "openTidyPreview()"):
+        assert token in js, f"缺少 {token}"
+
+    i = js.index("window.smartRefresh = async function ()")
+    body = js[i:js.index("(function wireSmartRefresh", i)]
+    assert "libSync(" not in body, "前台刷新不得等待全量磁盘同步"
+    assert "loadLibrary({ resetPage: false, force: true })" in body, \
+        "前台要保留页码/筛选/勾选地重拉当前视图"
+    assert "runRefreshJob(key, act)" in body, "后台任务必须不阻塞前台"
+    assert "已在核对" in body, "同范围重复点击要提示复用在途任务"
+
+    j = js.index("async function runRefreshJob")
+    rb = js[j:j + 3600]
+    assert "'/api/library/refresh-scope'" in rb and "'/api/library/sync'" in rb
+    assert "refreshAfterJob(act)" in rb, "后台完成要补刷受影响数据"
+    assert "openTidyPreview()" in rb, "发现待整理时要给整理预览入口"
 
 
 def main() -> int:
