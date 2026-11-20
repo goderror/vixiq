@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 160 用例，必须全过，2026-11-21 已 160/160 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 161 用例，必须全过，2026-11-21 已 161/161 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，160 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，161 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 160 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 161 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -1036,6 +1036,20 @@
   现图移走后补回、转换记录完整）；安装版与 `dist\vixiq` 已替换 `vixiq.exe` + 7 个前端资源
   （哈希一致，`config/user.json` 未变），备份 `.backup-png-ingest-recheck-20261121-064935`；
   安装版已启动（前端 `20261121h`），真实库 1603 作品 / 2191 图。GitHub 本地提交，**未推送**。
+- **复验返修：强制重下保留现图（2026-11-21，后端，前端仍 `20261121h`）**：
+  - `download_with_retry` 不再直接写图库正式文件：HTTP 与浏览器两条通道都先写到
+    `paths.temp_root()/downloads/` 的独立暂存文件；下载失败/重试只清理暂存，图库现图不动。
+  - `_finalize_downloaded_page(aid, pn, staging, final_path, ...)` 先校验暂存可识别且能完整解码，
+    再转换到图库内非图片后缀的候选临时文件；同图复用、普通下载冲突保留现图、
+    强制重下才把旧图备份 `.bak` 后 `os.replace` 切换；备份/替换/登记失败都保留旧图与旧记录。
+  - 原生 PNG 分支先 `Image.open().load()` 完整解码，损坏输入按 `unreadable` 失败，不再误判成功。
+  - 下载失败分支只有确认旧图不可用时才标 `FAILED`，旧页状态/路径/指纹/来源记录保持不变。
+  - 回归：新增 T170（保留真实 `download_with_retry`，只替换网络响应：HTML/异常/中断不碰旧图、
+    同格式强制重下备份替换且只留一份、两通道静态断言）；T169 适配暂存签名。全量 **161/161**。
+  - 部署：候选包 `built_at 07:05:21` 启动并通过 `/api/version` / `/api/health`，7813 导入链路
+    复验通过；安装版与 `dist\vixiq` 已替换 `vixiq.exe`（前端资源未变，哈希一致），备份
+    `.backup-force-redownload-20261121-070652`；安装版已启动（前端 `20261121h`），
+    真实库 1603 作品 / 2191 图。GitHub 本地提交，**未推送**。
 
 ---
 

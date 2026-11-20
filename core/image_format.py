@@ -111,8 +111,16 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
     result["current_size"] = src_size
     ext = src.suffix.lower()
 
-    # ① 原生 PNG: 直接登记 (目标不同则复制)
+    # ① 原生 PNG: 先完整解码校验, 再登记/复制 (损坏输入不得当成成功)
     if ext == ".png":
+        try:
+            from PIL import Image as _Image
+            with _Image.open(src) as _im:
+                _im.load()
+        except Exception as e:
+            result.update(ok=False, reason="unreadable",
+                          note=f"源图片无法打开：{str(e).splitlines()[0]}")
+            return result
         try:
             if out.resolve() != src.resolve():
                 if out.exists() and not overwrite:
@@ -172,7 +180,7 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
     cleanup_failed = False
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        tmp = out.with_name(out.name + ".tmp.png")
+        tmp = out.with_name(out.name + ".part")
         try:
             with src_img as im:
                 im = ImageOps.exif_transpose(im)

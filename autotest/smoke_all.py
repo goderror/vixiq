@@ -3074,6 +3074,7 @@ def run_suite() -> SuiteResult:
     suite.add("T167", "🛡 定向刷新作者只更新资料: refresh-scope author 不直接改磁盘文件夹 + 旧文件/本地路径保持 + 整理预览出现 rename 计划 (隔离数据)", t167_refresh_scope_author_no_disk_rename)
     suite.add("T168", "🔄 同步磁盘索引: 根目录不可用/扫描不完整暂缓缺失/多候选待确认/缺失清理先勾选且索引与回收分离 (隔离数据)", t168_sync_disk_root_scan_pending_clean)
     suite.add("T169", "🖼 入库统一转 PNG: 静态 JPG/WEBP 转换 + 原生 PNG/动图保持 + 转换记录随页 + 重复导入/同页冲突 + 下载端复用/备份 (隔离数据)", t169_png_ingest_normalization)
+    suite.add("T170", "🛡 强制重下保留现图: 两条通道先写暂存 + 真实下载函数校验失败/异常/中断不碰旧图 + 同格式替换前备份 (隔离数据)", t170_force_redownload_keeps_old_image)
     suite.write_report()
     return suite
 
@@ -15744,13 +15745,12 @@ def t169_png_ingest_normalization() -> None:
         assert r8["ok"] and r8["converted"], r8
         assert (tmp / "dup.png.bak").is_file()
 
-        # ② 下载端: 普通下载同图复用 / 不同图保留现图 / 强制重下备份覆盖 / 损坏输入
+        # ② 下载收尾: 暂存文件先校验; 普通冲突保留现图; 强制重下备份替换; 损坏输入
         dl = tmp / "dl"
         dl.mkdir()
-        same_png = dl / "990501_p0.png"
-        Image.new("RGB", (10, 10), (50, 60, 70)).save(same_png, "PNG")
-        same_jpg = dl / "990501_p0.jpg"
-        Image.new("RGB", (10, 10), (50, 60, 70)).save(same_jpg, "JPEG")
+        old_png = dl / "990501_p0.png"
+        Image.new("RGB", (10, 10), (50, 60, 70)).save(old_png, "PNG")
+        final_jpg = dl / "990501_p0.jpg"
         c = PixivDownloader.__new__(PixivDownloader)
         c.reporter = _Rep()
         c.save_folder = str(dl)
@@ -15759,67 +15759,73 @@ def t169_png_ingest_normalization() -> None:
             db.change_work_status("990501", WSt.DONE, title="t", total_pages=1)
             db.mark_page_status("990501", 0, PSt.DONE, local_path="990501_p0.png")
             c.db = db
+
+            # 暂存文件 (模拟应用临时目录下载结果)
+            stage1 = dl / ".stage-same.jpg"
+            Image.new("RGB", (10, 10), (50, 60, 70)).save(stage1, "JPEG")
             ok, conv = c._finalize_downloaded_page(
-                "990501", 0, str(same_jpg), old_rel="990501_p0.png",
-                force_overwrite=False)
-            assert ok and conv.get("reuse") and conv["current_path"] == str(same_png), conv
-            assert not same_jpg.exists() and same_png.is_file()
+                "990501", 0, str(stage1), str(final_jpg),
+                old_rel="990501_p0.png", force_overwrite=False)
+            assert ok and conv.get("reuse") and conv["current_path"] == str(old_png), conv
+            assert not stage1.exists() and old_png.is_file()
             assert db.get_page_conversion("990501", 0)["converted_at"] is None
 
             # 普通下载/补页遇到不同内容: 保留现图与登记, 报告冲突, 不覆盖
-            png_before = hashlib.md5(same_png.read_bytes()).hexdigest()
-            diff_jpg = dl / "990501_p0.jpg"
-            Image.new("RGB", (10, 10), (200, 10, 10)).save(diff_jpg, "JPEG")
+            png_before = hashlib.md5(old_png.read_bytes()).hexdigest()
+            stage2 = dl / ".stage-diff.jpg"
+            Image.new("RGB", (10, 10), (200, 10, 10)).save(stage2, "JPEG")
             ok2, conv2 = c._finalize_downloaded_page(
-                "990501", 0, str(diff_jpg), old_rel="990501_p0.png",
-                force_overwrite=False)
+                "990501", 0, str(stage2), str(final_jpg),
+                old_rel="990501_p0.png", force_overwrite=False)
             assert not ok2 and conv2.get("conflict"), conv2
-            assert hashlib.md5(same_png.read_bytes()).hexdigest() == png_before, \
+            assert hashlib.md5(old_png.read_bytes()).hexdigest() == png_before, \
                 "普通下载不得覆盖现图"
-            assert not diff_jpg.exists()
+            assert not stage2.exists()
             assert db.get_page_info("990501", 0).local_path == "990501_p0.png"
 
             # 强制重下: 备份 .bak 后切换新图, 来源记录更新
-            force_jpg = dl / "990501_p0.jpg"
-            Image.new("RGB", (10, 10), (10, 200, 10)).save(force_jpg, "JPEG")
+            stage3 = dl / ".stage-force.jpg"
+            Image.new("RGB", (10, 10), (10, 200, 10)).save(stage3, "JPEG")
             ok3, conv3 = c._finalize_downloaded_page(
-                "990501", 0, str(force_jpg), old_rel="990501_p0.png",
-                force_overwrite=True)
+                "990501", 0, str(stage3), str(final_jpg),
+                old_rel="990501_p0.png", force_overwrite=True)
             assert ok3 and conv3.get("converted"), conv3
             assert (dl / "990501_p0.png.bak").is_file(), "强制重下要先备份旧图"
+            assert not stage3.exists()
             rec = db.get_page_conversion("990501", 0)
             assert rec["source_format"] == "jpg" and rec["source_md5"], rec
             assert rec["converted_at"] and rec["current_format"] == "png", rec
             assert rec["source_file_size"] > 0
-            new_png_bytes = (dl / "990501_p0.png").read_bytes()
+            new_png_bytes = old_png.read_bytes()
 
             # 损坏输入 + 旧版本: 旧 PNG 与来源记录保持不变, 任务失败
-            bad_jpg = dl / "990501_p0.jpg"
-            bad_jpg.write_bytes(b"broken")
+            stage4 = dl / ".stage-bad.jpg"
+            stage4.write_bytes(b"broken")
             ok4, conv4 = c._finalize_downloaded_page(
-                "990501", 0, str(bad_jpg), old_rel="990501_p0.png",
-                force_overwrite=False)
+                "990501", 0, str(stage4), str(final_jpg),
+                old_rel="990501_p0.png", force_overwrite=True)
             assert not ok4 and conv4.get("reason") == "unreadable", conv4
-            assert (dl / "990501_p0.png").read_bytes() == new_png_bytes, \
-                "损坏输入不得替换旧 PNG"
+            assert old_png.read_bytes() == new_png_bytes, "损坏输入不得替换旧 PNG"
+            assert not stage4.exists()
             rec2 = db.get_page_conversion("990501", 0)
             assert rec2["source_md5"] == rec["source_md5"], "旧来源记录不得被清空"
             assert any("无法打开" in w for w in c.reporter.warns), c.reporter.warns
 
             # 无旧版本 + 损坏输入: 不登记损坏文件, 页标记失败
             db.change_work_status("990509", WSt.DONE, title="t2", total_pages=1)
-            bad2 = dl / "990509_p0.jpg"
-            bad2.write_bytes(b"broken2")
+            stage5 = dl / ".stage-bad2.jpg"
+            stage5.write_bytes(b"broken2")
             ok5, conv5 = c._finalize_downloaded_page(
-                "990509", 0, str(bad2), old_rel=None, force_overwrite=False)
+                "990509", 0, str(stage5), str(dl / "990509_p0.jpg"),
+                old_rel=None, force_overwrite=False)
             assert not ok5 and conv5.get("reason") == "unreadable", conv5
             pi = db.get_page_info("990509", 0)
             assert pi is None or int(pi.status or 0) == PSt.FAILED, pi
             assert not (dl / "990509_p0.png").exists()
 
             # 登记失败: 文件保留, 返回失败并标明阶段
-            good_jpg = dl / "990509_p0.jpg"
-            Image.new("RGB", (5, 5), (7, 7, 7)).save(good_jpg, "JPEG")
+            stage6 = dl / ".stage-good.jpg"
+            Image.new("RGB", (5, 5), (7, 7, 7)).save(stage6, "JPEG")
             orig_mark = db.mark_page_status
 
             def _boom(*a, **k):
@@ -15827,7 +15833,8 @@ def t169_png_ingest_normalization() -> None:
             db.mark_page_status = _boom
             try:
                 ok6, conv6 = c._finalize_downloaded_page(
-                    "990509", 0, str(good_jpg), old_rel=None, force_overwrite=False)
+                    "990509", 0, str(stage6), str(dl / "990509_p0.jpg"),
+                    old_rel=None, force_overwrite=False)
             finally:
                 db.mark_page_status = orig_mark
             assert not ok6 and (dl / "990509_p0.png").is_file(), "登记失败要保留文件"
@@ -15838,7 +15845,8 @@ def t169_png_ingest_normalization() -> None:
             orig_norm = imf.normalize_to_png
             db.change_work_status("990511", WSt.DONE, title="t3", total_pages=1)
             jpg511 = dl / "990511_p0.jpg"
-            Image.new("RGB", (6, 6), (8, 9, 10)).save(jpg511, "JPEG")
+            stage7 = dl / ".stage-511.jpg"
+            Image.new("RGB", (6, 6), (8, 9, 10)).save(stage7, "JPEG")
 
             def _fake_norm(path, **kw):
                 return {"ok": False, "converted": False, "reason": "convert_failed",
@@ -15850,19 +15858,20 @@ def t169_png_ingest_normalization() -> None:
             imf.normalize_to_png = _fake_norm
             try:
                 ok7, conv7 = c._finalize_downloaded_page(
-                    "990511", 0, str(jpg511), old_rel=None, force_overwrite=False)
+                    "990511", 0, str(stage7), str(jpg511),
+                    old_rel=None, force_overwrite=False)
             finally:
                 imf.normalize_to_png = orig_norm
             assert ok7 and conv7["current_format"] == "jpg", conv7
-            assert jpg511.is_file()
+            assert jpg511.is_file(), "原格式回退要落到正式路径"
             r7rec = db.get_page_conversion("990511", 0)
             assert "PNG 保存失败" in (r7rec["convert_note"] or ""), r7rec
             assert any("后续可重试" in w or "需要处理" in w for w in c.reporter.warns)
 
             # 转换记录写入失败: 文件与页登记保留, 提示具体阶段
             db.change_work_status("990512", WSt.DONE, title="t4", total_pages=1)
-            jpg512 = dl / "990512_p0.jpg"
-            Image.new("RGB", (6, 6), (11, 12, 13)).save(jpg512, "JPEG")
+            stage8 = dl / ".stage-512.jpg"
+            Image.new("RGB", (6, 6), (11, 12, 13)).save(stage8, "JPEG")
             orig_set = db.set_page_conversion
 
             def _set_boom(*a, **k):
@@ -15870,7 +15879,8 @@ def t169_png_ingest_normalization() -> None:
             db.set_page_conversion = _set_boom
             try:
                 ok8, conv8 = c._finalize_downloaded_page(
-                    "990512", 0, str(jpg512), old_rel=None, force_overwrite=False)
+                    "990512", 0, str(stage8), str(dl / "990512_p0.jpg"),
+                    old_rel=None, force_overwrite=False)
             finally:
                 db.set_page_conversion = orig_set
             assert ok8, "文件与登记成功时不应整体失败"
@@ -16074,12 +16084,139 @@ def t169_png_ingest_normalization() -> None:
                   "外部源文件全程保持原位", "源文件原位"):
         assert token in srv, f"缺少服务端接入 {token}"
     craw = (PROJECT_ROOT / "core" / "crawler.py").read_text(encoding="utf-8")
-    for token in ("normalize_to_png", "_normalize_download",
+    for token in ("normalize_to_png", "_staging_path",
                   "_record_page_conversion", "_finalize_downloaded_page",
                   "same_page_conflict", "is_readable", "cleanup_failed"):
         assert token in craw, f"缺少下载端接入 {token}"
     assert craw.count("_finalize_downloaded_page") >= 3, \
         "浏览器与 HTTP 两路都必须共用同一收尾流程"
+
+
+def t170_force_redownload_keeps_old_image() -> None:
+    """T170: 强制重下先下载到暂存文件, 校验通过才替换 (4B-1 复验返修)。
+
+    保留真实 `download_with_retry` 和收尾登记逻辑, 只替换网络响应:
+    - 超过最低大小的 HTML / 请求异常 / 下载中断: 只清理暂存, 旧图字节与登记不变;
+    - 同格式有效 PNG 强制重下: 旧图备份 .bak 后替换, 图库只留一份;
+    - 两条下载通道都必须走 `_staging_path`, 原生 PNG 必须先完整解码。
+    """
+    import hashlib
+    import io
+    import tempfile
+    import utils.net as unet
+    from core.crawler import PixivDownloader
+    from db.store import PixivDatabase, WSt, PSt
+    from PIL import Image
+
+    class _Rep:
+        def __init__(self):
+            self.logs, self.warns = [], []
+
+        def log(self, m):
+            self.logs.append(str(m))
+
+        def warn(self, m):
+            self.warns.append(str(m))
+
+        def progress(self, *a, **k):
+            pass
+
+        def error(self, m):
+            self.logs.append(str(m))
+
+    class _Op:
+        def __init__(self, payload=None, error=None, interrupt=False):
+            self.payload = payload or b""
+            self.error = error
+            self.interrupt = interrupt
+
+        def open(self, url, timeout=30):
+            if self.error:
+                raise self.error
+            if self.interrupt:
+                class _R(io.BytesIO):
+                    def read(self, n=-1):
+                        raise OSError("connection reset")
+                return _R(b"x" * 64)
+            return io.BytesIO(self.payload)
+
+    with tempfile.TemporaryDirectory(prefix="t170dl_") as td:
+        tmp = Path(td)
+        dl = tmp / "img"
+        dl.mkdir()
+        old_png = dl / "990701_p0.png"
+        Image.new("RGB", (8, 8), (10, 20, 30)).save(old_png, "PNG")
+        old_bytes = old_png.read_bytes()
+        old_md5 = hashlib.md5(old_bytes).hexdigest()
+        db = PixivDatabase(str(tmp / "dl.db"))
+        try:
+            db.change_work_status("990701", WSt.DONE, title="t", total_pages=1)
+            db.mark_page_status("990701", 0, PSt.DONE, local_path="990701_p0.png")
+            c = PixivDownloader.__new__(PixivDownloader)
+            c.reporter = _Rep()
+            c.save_folder = str(dl)
+            c.db = db
+            c.config = {"crawler": {"max_retries": 0, "min_file_size": 32}}
+
+            orig_build = unet.build_opener
+            try:
+                # ① 超过最低大小的 HTML: 下载"成功"但校验失败, 旧图不变
+                unet.build_opener = lambda headers=None: _Op(
+                    payload=b"<html>" + b"x" * 64)
+                staging = c._staging_path(".png")
+                assert c.download_with_retry("http://x/a.png", staging)
+                ok, conv = c._finalize_downloaded_page(
+                    "990701", 0, staging, str(dl / "990701_p0.png"),
+                    old_rel="990701_p0.png", force_overwrite=True)
+                assert not ok and conv.get("reason") == "unreadable", conv
+                assert old_png.read_bytes() == old_bytes
+                assert not Path(staging).exists(), "损坏暂存必须清理"
+                assert db.get_page_info("990701", 0).local_path == "990701_p0.png"
+                assert hashlib.md5(old_png.read_bytes()).hexdigest() == old_md5
+
+                # ② 请求异常: 真实 download_with_retry 清理暂存, 正式文件不动
+                unet.build_opener = lambda headers=None: _Op(error=OSError("boom"))
+                staging = c._staging_path(".png")
+                assert not c.download_with_retry("http://x/a.png", staging)
+                assert not Path(staging).exists()
+                assert old_png.read_bytes() == old_bytes
+
+                # ③ 下载中断: 同上
+                unet.build_opener = lambda headers=None: _Op(interrupt=True)
+                staging = c._staging_path(".png")
+                assert not c.download_with_retry("http://x/a.png", staging)
+                assert not Path(staging).exists()
+                assert old_png.read_bytes() == old_bytes
+                assert db.get_page_info("990701", 0).local_path == "990701_p0.png"
+
+                # ④ 同格式有效 PNG 强制重下: 备份 .bak 后替换, 图库只留一份
+                new_png = tmp / "new.png"
+                Image.new("RGB", (8, 8), (200, 100, 50)).save(new_png, "PNG")
+                unet.build_opener = lambda headers=None: _Op(
+                    payload=new_png.read_bytes())
+                staging = c._staging_path(".png")
+                assert c.download_with_retry("http://x/a.png", staging)
+                ok, conv = c._finalize_downloaded_page(
+                    "990701", 0, staging, str(dl / "990701_p0.png"),
+                    old_rel="990701_p0.png", force_overwrite=True)
+                assert ok and conv.get("converted") is False, conv
+                assert old_png.read_bytes() == new_png.read_bytes()
+                assert (dl / "990701_p0.png.bak").is_file(), "旧图必须先备份"
+                rec = db.get_page_conversion("990701", 0)
+                assert rec["current_format"] == "png", rec
+                pngs = [p for p in dl.iterdir() if p.suffix.lower() == ".png"]
+                assert len(pngs) == 1, pngs
+            finally:
+                unet.build_opener = orig_build
+        finally:
+            db.close()
+
+    craw = (PROJECT_ROOT / "core" / "crawler.py").read_text(encoding="utf-8")
+    assert craw.count("self._staging_path(") >= 2, \
+        "HTTP 与浏览器两条下载通道都必须先写应用暂存文件"
+    assert craw.count("download_with_retry(") >= 3      # 定义 + 两处调用
+    imf = (PROJECT_ROOT / "core" / "image_format.py").read_text(encoding="utf-8")
+    assert "_im.load()" in imf, "原生 PNG 必须先完整解码"
 
 
 def main() -> int:

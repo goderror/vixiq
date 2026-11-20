@@ -582,83 +582,30 @@ class PixivDownloader:
         self._author_dir_cache[cache_key] = d
         return d
 
-    # ---- 入库格式统一 (2026-11-21 4B-1, 与上传/路径导入共用 core.image_format) ----
-    def _normalize_download(self, save_path: str, force_overwrite: bool = False) -> dict:
-        """下载落盘后按入库规则处理 (普通下载/补页/强制重下共用)。
+    # ---- 下载暂存 + 入库格式统一 (2026-11-21 4B-1 复验返修) ----
+    def _staging_path(self, ext: str) -> str:
+        """应用拥有的下载暂存文件: 绝不与图库正式文件同名同路径。
 
-        - 目标 PNG 不存在: 静态图直接转 PNG;
-        - 目标 PNG 已存在且像素一致: 删掉刚下的 JPG, 复用已有 PNG;
-        - 已存在但内容不同/无法确认: 普通下载与补页保留现图 (conflict=True, 不覆盖),
-          只有明确强制重下才备份 `.bak` 后覆盖;
-        - 转换失败: 保留可用原文件; 打不开的输入标记 reason='unreadable'。"""
-        from core.image_format import normalize_to_png, same_pixels, is_readable
-        png = os.path.splitext(save_path)[0] + ".png"
-        had_existing = os.path.isfile(png)
-        conv = normalize_to_png(save_path, delete_source=True, overwrite=False)
-        if not conv.get("ok") and conv.get("reason") == "exists":
-            png = os.path.splitext(save_path)[0] + ".png"
-            if not is_readable(save_path):
-                # 新下载文件打不开: 保留现图, 按「输入损坏」报告, 不能当同页冲突
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                conv.update({
-                    "ok": False, "conflict": True, "keep_existing": True,
-                    "current_path": png, "current_format": "png",
-                    "current_size": (os.path.getsize(png)
-                                     if os.path.isfile(png) else None),
-                    "source_format": None, "source_file_size": None,
-                    "source_md5": None, "converted_at": None,
-                    "reason": "unreadable",
-                    "note": "新下载文件无法打开，保留现有文件",
-                })
-                self.reporter.warn(
-                    f"⚠ 新下载文件无法打开，保留现有文件: {os.path.basename(png)}")
-                return conv
-            if had_existing and is_readable(png) and same_pixels(save_path, png):
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                conv = {
-                    "ok": True, "converted": False, "reuse": True,
-                    "current_path": png, "current_format": "png",
-                    "current_size": os.path.getsize(png),
-                    "source_format": None, "source_file_size": None,
-                    "source_md5": None, "converted_at": None,
-                    "reason": "", "note": "已有相同 PNG，复用",
-                }
-                self.reporter.log(f"♻ 已有相同 PNG，复用: {os.path.basename(png)}")
-            elif not force_overwrite:
-                # 普通下载/补页: 同页已有不同内容 → 保留现图与登记, 只报告冲突
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                conv.update({
-                    "ok": False, "conflict": True, "keep_existing": True,
-                    "current_path": png, "current_format": "png",
-                    "current_size": (os.path.getsize(png)
-                                     if os.path.isfile(png) else None),
-                    "source_format": None, "source_file_size": None,
-                    "source_md5": None, "converted_at": None,
-                    "reason": "same_page_conflict",
-                    "note": "同页已有不同内容的图片，保留现有文件",
-                })
-                self.reporter.warn(
-                    f"⚠ 同页已有不同内容的图片，保留现有文件: {os.path.basename(png)}")
-            else:
-                conv = normalize_to_png(save_path, delete_source=True, overwrite=True)
-        if conv.get("converted"):
-            self.reporter.log(
-                f"🔄 已转存为 PNG: {os.path.basename(conv['current_path'])}")
-        elif not conv.get("ok") and not conv.get("conflict"):
-            self.reporter.warn(
-                f"⚠ 转换未完成（{conv.get('note')}）: {os.path.basename(save_path)}")
-        if conv.get("cleanup_failed"):
-            self.reporter.warn("⚠ 临时副本清理失败，可稍后手动清理")
-        return conv
+        下载失败/重试的清理只会删这个文件, 图库现图在整个下载阶段保持原样。"""
+        import uuid
+        d = paths.temp_root() / "downloads"
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d / f"{uuid.uuid4().hex}{ext or '.img'}")
+
+    def _cleanup_staging(self, *items) -> None:
+        for p in items:
+            if not p:
+                continue
+            try:
+                os.remove(str(p))
+            except OSError:
+                pass
+
+    def _old_page_file(self, old_rel: "str | None"):
+        if not old_rel:
+            return None
+        cand = os.path.join(self.save_folder, str(old_rel).replace("/", os.sep))
+        return cand if os.path.isfile(cand) else None
 
     def _record_page_conversion(self, aid: str, pn: int, conv: dict) -> bool:
         """把转换来源记录写到页上 (失败只补原因, 不清空已有来源记录)。"""
@@ -682,35 +629,26 @@ class PixivDownloader:
                 f"⚠ 转换记录写入失败（文件已保留，可重试）: {str(e).splitlines()[0]}")
             return False
 
-    def _finalize_downloaded_page(self, aid: str, pn: int, save_path: str, *,
+    def _finalize_downloaded_page(self, aid: str, pn: int, staging_path: str,
+                                  final_path: str, *,
                                   old_rel: "str | None" = None,
                                   force_overwrite: bool = False) -> "tuple[bool, dict]":
-        """下载落盘后的统一收尾: 转 PNG → 校验 → 登记 → 写转换记录。
+        """下载暂存文件校验/转换后, 再替换图库正式文件并登记。
 
-        返回 (success, conv)。success=False 时原因必须出现在任务日志里:
-        - 同页已有不同内容: 保留现图与旧登记 (conv.conflict);
-        - 新文件无法打开: 不登记损坏文件; 旧图可用则保留旧登记, 否则标 FAILED;
-        - 转换失败但原格式可读: 登记原格式并在日志标为需要处理;
-        - 登记/转换记录写入失败: 保留可用文件并标明阶段, 可重试。"""
-        from core.image_format import is_readable
-        conv = self._normalize_download(save_path, force_overwrite)
-        if conv.get("conflict"):
-            return False, conv
-        cur_path = conv.get("current_path")
-        if not conv.get("ok") and (
-                conv.get("reason") == "unreadable"
-                or not cur_path or not is_readable(cur_path)):
-            # 损坏/打不开的下载产物绝不能成为当前图; 刚下载的文件不是用户源文件
-            try:
-                os.remove(save_path)
-            except Exception:
-                pass
-            old_ok = None
-            if old_rel:
-                cand = os.path.join(self.save_folder,
-                                    str(old_rel).replace("/", os.sep))
-                if os.path.isfile(cand) and is_readable(cand):
-                    old_ok = cand
+        两步分离 (4B-1 复验返修):
+        1. 新文件只写应用临时目录, 下载失败/重试清理不会碰图库现图;
+        2. 候选文件必须可识别且完整解码, 才按覆盖规则切换正式文件。
+        失败时旧图字节、路径、状态和转换来源记录一律保持不变。
+        """
+        import uuid
+        from core.image_format import normalize_to_png, same_pixels, is_readable
+        staging = Path(staging_path)
+        dest_path = Path(final_path)
+
+        def _keep_old(reason: str, note: str, *, conflict: bool = False):
+            self._cleanup_staging(staging)
+            old_file = self._old_page_file(old_rel)
+            old_ok = bool(old_file and is_readable(old_file))
             if not old_ok:
                 try:
                     self.db.mark_page_status(aid, pn, PSt.FAILED)
@@ -718,23 +656,109 @@ class PixivDownloader:
                     self.reporter.warn(
                         f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
             self.reporter.warn(
-                f"⚠ 新下载文件无法打开，未登记: {os.path.basename(save_path)}"
+                f"⚠ {note}: {dest_path.name}"
                 + ("（已保留旧文件与登记）" if old_ok else ""))
-            return False, conv
-        if not cur_path:
-            self.reporter.warn("⚠ 转换结果缺少文件路径，未登记")
-            return False, conv
+            return False, {"ok": False, "reason": reason, "note": note,
+                           "conflict": conflict,
+                           "current_path": str(old_file or dest_path)}
+
+        # ① 下载暂存必须可识别且能完整解码
+        if not staging.is_file() or not is_readable(staging):
+            return _keep_old("unreadable", "新下载文件无法打开，未登记")
+
+        # ② 转换到图库内的候选临时文件 (非图片后缀, 不会被对账扫到)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        candidate = dest_path.parent / f".vixiq-new-{uuid.uuid4().hex}.tmp"
+        conv = normalize_to_png(str(staging), out_path=str(candidate),
+                                delete_source=True, overwrite=True)
+        cur_path = Path(conv.get("current_path") or staging)
+        if not conv.get("ok") and conv.get("reason") == "unreadable":
+            self._cleanup_staging(candidate)
+            return _keep_old("unreadable", "新下载文件无法打开，未登记")
+        if not cur_path.is_file() or not is_readable(cur_path):
+            self._cleanup_staging(staging, candidate)
+            return _keep_old("unreadable", "新下载文件无法打开，未登记")
+        if conv.get("cleanup_failed"):
+            self.reporter.warn("⚠ 临时副本清理失败，可稍后手动清理")
+        # 转 PNG 时正式名用 .png; 动图/转换失败回退保持原扩展名
+        if conv.get("current_format") == "png":
+            dest_path = dest_path.with_suffix(".png")
+        single_frame = (conv.get("current_format") != "gif"
+                        and "动图" not in (conv.get("note") or "")
+                        and "多帧" not in (conv.get("note") or ""))
+
+        old_file = self._old_page_file(old_rel)
+        if old_file is None and dest_path.is_file():
+            old_file = str(dest_path)
+
+        # ③ 同图复用: 不重复写正式文件
+        if (old_file and is_readable(old_file) and single_frame
+                and same_pixels(cur_path, old_file)):
+            self._cleanup_staging(staging, cur_path)
+            self.reporter.log(
+                f"♻ 同页已有相同图片，复用: {os.path.basename(old_file)}")
+            conv.update(ok=True, reuse=True, current_path=str(old_file),
+                        current_format=("png" if str(old_file).lower().endswith(".png")
+                                        else conv.get("current_format")))
+            return True, conv
+
+        # ④ 不同内容: 普通下载/补页保留现图; 只有强制重下才备份后替换
+        if old_file and not force_overwrite:
+            self._cleanup_staging(staging, cur_path)
+            note = "同页已有不同内容的图片，保留现有文件"
+            self.reporter.warn(f"⚠ {note}: {os.path.basename(old_file)}")
+            return False, dict(conv, ok=False, conflict=True, keep_existing=True,
+                               reason="same_page_conflict", note=note,
+                               current_path=str(old_file))
+        if old_file and force_overwrite:
+            bak = old_file + ".bak"
+            try:
+                if os.path.exists(bak):
+                    os.remove(bak)
+                shutil.copy2(old_file, bak)
+                self.reporter.log(f"💾 旧版已备份 → {os.path.basename(bak)}")
+            except Exception as e:
+                self._cleanup_staging(staging, cur_path)
+                note = "覆盖前备份失败，保留现有文件"
+                self.reporter.warn(f"⚠ {note}: {str(e).splitlines()[0]}")
+                return False, dict(conv, ok=False, conflict=True,
+                                   keep_existing=True, reason="backup_failed",
+                                   note=note, current_path=str(old_file))
+
+        # ⑤ 切换到正式路径 (同盘原子替换; 跨盘退回复制)
         try:
-            rel_path = Path(cur_path).relative_to(self.save_folder).as_posix()
+            os.replace(str(cur_path), str(dest_path))
+        except OSError:
+            try:
+                shutil.copy2(str(cur_path), str(dest_path))
+                self._cleanup_staging(cur_path)
+            except Exception as e:
+                self._cleanup_staging(staging, cur_path)
+                note = "替换正式文件失败，保留现有文件"
+                self.reporter.warn(f"⚠ {note}: {str(e).splitlines()[0]}")
+                return False, dict(conv, ok=False, reason="replace_failed",
+                                   note=note, current_path=str(dest_path))
+        except Exception as e:
+            self._cleanup_staging(staging, cur_path)
+            note = "替换正式文件失败，保留现有文件"
+            self.reporter.warn(f"⚠ {note}: {str(e).splitlines()[0]}")
+            return False, dict(conv, ok=False, reason="replace_failed",
+                               note=note, current_path=str(dest_path))
+        self._cleanup_staging(staging)
+
+        # ⑥ 登记 + 来源记录
+        try:
+            rel_path = dest_path.relative_to(self.save_folder).as_posix()
         except Exception as e:
             self.reporter.warn(
                 f"⚠ 入库路径无效，未登记: {str(e).splitlines()[0]}")
-            return False, conv
+            return False, dict(conv, ok=False, reason="register_failed",
+                               note="入库路径无效", current_path=str(dest_path))
         fmd5 = fsize = None
         try:
             from utils.hashutil import md5_of
-            fmd5 = md5_of(cur_path)
-            fsize = os.path.getsize(cur_path)
+            fmd5 = md5_of(str(dest_path))
+            fsize = os.path.getsize(str(dest_path))
         except Exception as e:
             self.reporter.warn(
                 f"⚠ 读取新文件大小/指纹失败: {str(e).splitlines()[0]}")
@@ -744,12 +768,14 @@ class PixivDownloader:
         except Exception as e:
             self.reporter.warn(
                 f"⚠ 登记失败（文件已保留，可重试）: {str(e).splitlines()[0]}")
-            return False, conv
+            return False, dict(conv, ok=False, reason="register_failed",
+                               note="登记失败", current_path=str(dest_path))
+        conv["current_path"] = str(dest_path)
         self._record_page_conversion(aid, pn, conv)
         if not conv.get("ok"):
             self.reporter.warn(
                 f"⚠ 已保留原格式（{conv.get('note')}），后续可重试转 PNG: "
-                f"{os.path.basename(cur_path)}")
+                f"{dest_path.name}")
         return True, conv
 
     def _download_http(self, artwork_id: str, ctx, *, author_id=None,
@@ -828,9 +854,12 @@ class PixivDownloader:
                     self._fire_progress("artwork_page", i, total, filename[:10])
                     success_count += 1
                     continue
-            if self.download_with_retry(img_url, save_path):
+            # 4B-1 复验返修: 新下载只写应用暂存文件, 校验通过后才替换正式文件
+            final_path = os.path.join(save_dir, filename)
+            staging = self._staging_path("." + ext)
+            if self.download_with_retry(img_url, staging):
                 ok, conv = self._finalize_downloaded_page(
-                    artwork_id, pn, save_path,
+                    artwork_id, pn, staging, final_path,
                     old_rel=(pinfo.local_path if pinfo is not None else None),
                     force_overwrite=force_overwrite)
                 if ok:
@@ -844,11 +873,16 @@ class PixivDownloader:
                     self.not_found.append(filename)
                 self._fire_progress("artwork_page", i, total, filename[:10])
             else:
-                try:
-                    self.db.mark_page_status(artwork_id, pn, PSt.FAILED)
-                except Exception as e:
-                    self.reporter.warn(
-                        f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
+                self._cleanup_staging(staging)
+                old_file = self._old_page_file(
+                    pinfo.local_path if pinfo is not None else None)
+                from core.image_format import is_readable
+                if not (old_file and is_readable(old_file)):
+                    try:
+                        self.db.mark_page_status(artwork_id, pn, PSt.FAILED)
+                    except Exception as e:
+                        self.reporter.warn(
+                            f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
                 self.reporter.progress(i, total, f"{filename} → 失败")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 self.not_found.append(filename)
@@ -1071,21 +1105,13 @@ class PixivDownloader:
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 success_count += 1
                 continue
-            # 强制重下(overwrite): 本地旧文件先备份为 .bak, 恢复入口在图库「备份管理」。
-            # .bak 后缀不被对账当图片扫到(自然键/扩展名都不匹配), 不会产生幽灵记录。
-            if force_overwrite and os.path.exists(save_path):
-                bak_path = save_path + ".bak"
-                try:
-                    if os.path.exists(bak_path):
-                        os.remove(bak_path)   # 只留最新一份, 避免无限堆叠
-                    shutil.copy2(save_path, bak_path)
-                    self.reporter.log(f"💾 旧版已备份 → {os.path.basename(bak_path)}")
-                except Exception as e:
-                    self.reporter.warn(f"旧版备份失败(跳过备份): {str(e).splitlines()[0]}")
-            if self.download_with_retry(url, save_path):
+            # 4B-1 复验返修: 新下载只写应用暂存文件; 覆盖备份在收尾里按真实旧路径做
+            final_path = os.path.join(save_dir, filename)
+            staging = self._staging_path("." + ext)
+            if self.download_with_retry(url, staging):
                 # 入库统一: 静态图转 PNG + 写转换记录 (动图保持原格式)
                 ok, conv = self._finalize_downloaded_page(
-                    aid, page_num, save_path,
+                    aid, page_num, staging, final_path,
                     old_rel=(pinfo.local_path if pinfo is not None else None),
                     force_overwrite=force_overwrite)
                 if ok:
@@ -1099,11 +1125,16 @@ class PixivDownloader:
                     self.not_found.append(filename)
                 self._fire_progress("artwork_page", i, total, filename[:10])
             else:
-                try:
-                    self.db.mark_page_status(aid, page_num, PSt.FAILED)
-                except Exception as e:
-                    self.reporter.warn(
-                        f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
+                self._cleanup_staging(staging)
+                old_file = self._old_page_file(
+                    pinfo.local_path if pinfo is not None else None)
+                from core.image_format import is_readable
+                if not (old_file and is_readable(old_file)):
+                    try:
+                        self.db.mark_page_status(aid, page_num, PSt.FAILED)
+                    except Exception as e:
+                        self.reporter.warn(
+                            f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
                 self.reporter.progress(i, total, f"{filename} → 失败")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 self.not_found.append(filename)
