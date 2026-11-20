@@ -2497,6 +2497,22 @@ def _tidy_build_plans(db, img_root: Path) -> list:
                 p["reason"] += f"（⚠ 目标已存在 {len(_hit)} 个，执行时会跳过）"
         except OSError:
             continue
+
+    # ---- ⑥ 稳定标识 + 源文件状态快照 ----
+    # id 只是本次列表序号: 新增一个无关计划会让后面所有 id 后移, 不能用它匹配用户确认项。
+    # key 由内容决定 (type|from|to, 同键计划本就会被 _add 合并), 列表变化不影响。
+    # sources 记录每个源文件的 size/mtime_ns: 预览后同路径替换 (即使同名同大小) 也能识别。
+    for p in plans:
+        p["key"] = f"{p['type']}|{p['from']}|{p['to']}"
+        _stats = []
+        for _f in p["files"]:
+            try:
+                _st = (img_root / _f).stat()
+                _stats.append({"path": _f, "size": int(_st.st_size),
+                               "mtime_ns": int(_st.st_mtime_ns)})
+            except OSError:
+                _stats.append({"path": _f, "size": None, "mtime_ns": None})
+        p["sources"] = _stats
     return plans
 
 
@@ -2506,20 +2522,38 @@ def _tidy_apply_plans(db, img_root: Path,
     """执行整理计划: 先文件夹改名, 再逐文件移动, 再文件名规范化, 最后清空夹;
     同步 pages.local_path。只执行 auto 计划 (categorize/待确认 永不自动执行)。
 
-    expected: 前端预览时的计划快照 [{id,type,from,to,files}]。传入时按内容核对:
-    计划已消失或内容变化 → 记入 stale, 不执行该项, 提示用户重新预览。
+    expected: 前端预览时的计划快照 [{id,key,type,from,to,files,sources}]。
+    传入时按稳定 key 匹配 (列表序号变化不影响), 并核对 files 与源文件 size/mtime_ns;
+    计划已消失或内容/文件状态变化 → 记入 stale, 不执行该项, 提示用户重新预览。
+    旧快照无 key/sources 时退回按 id/files 匹配 (兼容)。
     返回 {renamed, moved, filenamed, rmdirs, rmdir_kept, failed, stale, db_failed}。
     db_failed: 磁盘已移动/改名但写库失败 [{old,new,stage,error}], 供定向补写索引。"""
     plans = _tidy_build_plans(db, img_root)
     stale = []
     if expected:
+        by_key = {p.get("key"): p for p in plans}
         by_id = {int(p["id"]): p for p in plans}
+
+        def _sources_same(exp: list, cur: list) -> bool:
+            """源文件状态是否一致。旧快照没有 sources → 不拦 (兼容)。"""
+            if not exp:
+                return True
+            if len(exp) != len(cur or []):
+                return False
+            _e = sorted(exp, key=lambda x: str(x.get("path") or ""))
+            _c = sorted(cur or [], key=lambda x: str(x.get("path") or ""))
+            return all(
+                str(a.get("path")) == str(b.get("path"))
+                and a.get("size") == b.get("size")
+                and a.get("mtime_ns") == b.get("mtime_ns")
+                for a, b in zip(_e, _c))
+
         matched = []
         for e in expected:
-            if e.get("id") is None:
+            if e.get("id") is None and not e.get("key"):
                 continue
-            eid = int(e["id"])
-            p = by_id.get(eid)
+            p = (by_key.get(e.get("key")) if e.get("key")
+                 else by_id.get(int(e["id"])))
             if not p:
                 stale.append(f"{e.get('from') or '（根目录）'} → {e.get('to') or ''}: "
                              "预览中的计划已不存在")
@@ -2531,11 +2565,13 @@ def _tidy_apply_plans(db, img_root: Path,
                 stale.append(f"{e.get('from') or '（根目录）'} → {e.get('to') or ''}: "
                              "预览后状态已变化")
                 continue
+            if not _sources_same(e.get("sources") or [], p.get("sources") or []):
+                stale.append(f"{e.get('from') or '（根目录）'} → {e.get('to') or ''}: "
+                             "源文件在预览后已被替换或修改")
+                continue
             matched.append(p)
+        # expected 本身就是用户确认的范围; 不再按本次重新生成后的 id 过滤 (id 会因新计划后移)
         plans = matched
-        if plan_ids is not None:
-            want = {int(x) for x in plan_ids}
-            plans = [p for p in plans if int(p["id"]) in want]
     elif plan_ids is not None:
         want = {int(x) for x in plan_ids}
         plans = [p for p in plans if p["id"] in want]

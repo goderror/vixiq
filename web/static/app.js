@@ -8217,7 +8217,8 @@ async function applyTidy(ids) {
   const wanted = new Set(ids.map(Number));
   const expected = (window._tidyPlans || [])
     .filter(p => wanted.has(Number(p.id)))
-    .map(p => ({ id: p.id, type: p.type, from: p.from, to: p.to, files: p.files || [] }));
+    .map(p => ({ id: p.id, key: p.key || '', type: p.type, from: p.from, to: p.to,
+                 files: p.files || [], sources: p.sources || [] }));
   try {
     const r = await api('/api/library/tidy/apply', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
