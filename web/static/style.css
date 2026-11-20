@@ -896,6 +896,126 @@ main.cards-collapsed #tab-wallpapers .wf-card .wf-meta { padding: 8px 10px; }
   cursor: pointer;
 }
 .lib-filters .lib-spacer { flex: 1; min-width: 8px; }
+
+/* ===== 图库筛选栏: 常态两行 + 窄屏更多筛选 (2026-11-20) ===== */
+#lib-filters.gf-toolbar {
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 4px; margin: 0; padding: 0; min-width: 0;
+}
+#lib-filters .gf-band { display: flex; align-items: center; gap: 4px; min-width: 0; }
+#lib-filters .gf-band-search { flex-wrap: nowrap; }
+#lib-filters .gf-searches {
+  flex: 1 1 auto; display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 4px; min-width: 0;
+}
+#lib-filters .gf-tag-query {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); min-width: 0;
+}
+#lib-filters .gf-sort,
+#lib-filters .gf-actions {
+  display: flex; align-items: center; gap: 4px; flex: 0 0 auto; min-width: 0;
+}
+#lib-filters .gf-band-facets { flex-wrap: nowrap; }
+#lib-filters .gf-facets {
+  display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0;
+}
+#lib-filters .gf-source {
+  display: flex; align-items: center; gap: 3px; min-width: 0; flex: 0 1 auto;
+}
+#lib-filters select,
+#lib-filters .combo input,
+#lib-filters .btn,
+#lib-filters .gf-more {
+  height: 29px; min-height: 29px; padding: 0 8px; font-size: 13px;
+  border-radius: 6px; line-height: 27px; flex: 0 0 auto;
+}
+#lib-filters select { max-width: 150px; min-width: 0; }
+#lib-filters .combo { display: block; flex: 1 1 auto; min-width: 0; }
+#lib-filters .combo input {
+  flex: 1 1 auto; width: 100%; min-width: 0; padding: 0 28px 0 10px; line-height: 27px;
+}
+#lib-filters .combo .input-clear { right: 4px; }
+#lib-filters .gf-tag-query > select { border-radius: 6px 0 0 6px; max-width: 128px; }
+#lib-filters .gf-tag-query .combo input { border-radius: 0 6px 6px 0; border-left: 0; }
+#lib-filters .gf-source select { flex: 1 1 auto; }
+#lib-filters .gf-source-manager {
+  width: 29px; min-width: 29px; padding: 0; display: grid; place-items: center;
+  background: #eef1f5;
+}
+#lib-filters .gf-source-manager svg { width: 15px; height: 15px; }
+#lib-filters .gf-order { display: inline-flex; align-items: center; gap: 3px; }
+#lib-filters .gf-reset-short { display: none; }
+#lib-filters .gf-more { position: relative; }
+#lib-filters .gf-more[hidden] { display: none; }
+#lib-filters .gf-more[data-active="true"]::after {
+  content: ""; position: absolute; top: 2px; right: 2px; width: 4px; height: 4px;
+  border-radius: 50%; background: var(--accent);
+}
+#lib-filters .gf-panel { display: grid; gap: 4px; min-width: 0; }
+#lib-filters .gf-panel[hidden] { display: none; }
+#lib-filters .gf-panel .gf-facets {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px;
+}
+#lib-filters .gf-panel .gf-source { grid-column: 1 / -1; display: flex; }
+#lib-filters .gf-panel .gf-source select { flex: 1 1 auto; max-width: none; }
+#lib-filters .gf-panel select { max-width: none; width: 100%; }
+#lib-filters .gf-panel #lib-f-tagcat { width: 100%; max-width: none; }
+
+@media (max-width: 980px) {
+  #lib-filters.gf-toolbar {
+    display: grid;
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+    grid-template-areas: "search search search" "more sort actions";
+    gap: 4px;
+  }
+  #lib-filters .gf-band-search,
+  #lib-filters .gf-band-facets { display: contents; }
+  #lib-filters .gf-searches {
+    grid-area: search; grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  #lib-filters .gf-tag-query { display: block; min-width: 0; }
+  #lib-filters .gf-sort { grid-area: sort; }
+  #lib-filters .gf-actions { grid-area: actions; justify-self: end; }
+  #lib-filters .gf-more { grid-area: more; }
+  #lib-filters .gf-facets { display: none; }
+  #lib-filters .gf-panel { grid-column: 1 / -1; }
+}
+
+@media (max-width: 415px) {
+  #lib-filters .gf-sort select { max-width: 72px; }
+  #lib-filters .gf-order-word,
+  #lib-filters .gf-reset-full,
+  #lib-filters .gf-manage-text { display: none; }
+  #lib-filters .gf-reset-short { display: inline; }
+  #lib-filters .gf-icon { display: inline; }
+  #lib-filters .btn,
+  #lib-filters select,
+  #lib-filters .combo input { padding: 0 6px; }
+  #lib-filters .gf-order {
+    width: 29px; min-width: 29px; padding: 0; justify-content: center;
+  }
+}
+
+@media (max-width: 415px) and (pointer: coarse) {
+  #lib-filters .gf-sort select { max-width: 68px; }
+  #lib-filters .gf-order,
+  #lib-filters .gf-reset { width: 42px; min-width: 42px; }
+  #lib-filters .gf-more { padding: 0 5px; }
+  #lib-filters .gf-manage-tags {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 42px; padding: 0;
+  }
+}
+
+@media (pointer: coarse) {
+  #lib-filters select,
+  #lib-filters .combo input,
+  #lib-filters .btn,
+  #lib-filters .gf-more { min-height: 42px; }
+  #lib-filters .gf-source-manager { width: 42px; min-width: 42px; }
+  #lib-filters .gf-more { min-width: 42px; }
+  #lib-filters .combo input { font-size: 16px; }
+}
 /* 选择统计保留在原总数位置；列表总数移至上下分页栏。 */
 #lib-total { margin: 0; align-self: center; white-space: nowrap; }
 .lib-selection-row { display:flex; justify-content:space-between; align-items:center; gap:10px 16px; flex-wrap:wrap; margin:12px 0; }

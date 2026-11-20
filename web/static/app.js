@@ -7844,6 +7844,100 @@ async function saveLibTags(aid) {
 // ---- 兼容旧调用 (搜索框回车/按钮仍可用) ----
 async function searchLibrary() { loadLibrary(); }
 
+// 📋 重置筛选 = 恢复默认条件 (R18 回到「非 R18」)
+// 排序按钮的箭头/文字分开放: 窄屏只留箭头, 无障碍名称仍完整。
+function syncLibOrderButton() {
+  const btn = $('#lib-f-order');
+  if (!btn) return;
+  const desc = libFilters.order !== 'asc';
+  const arrow = btn.querySelector('.gf-arrow');
+  const word = btn.querySelector('.gf-order-word');
+  if (arrow) arrow.textContent = desc ? '↓' : '↑';
+  if (word) word.textContent = desc ? '降序' : '升序';
+  btn.setAttribute('aria-label',
+    desc ? '当前为降序，切换为升序' : '当前为升序，切换为降序');
+  btn.title = desc ? '当前为降序，点击切换为升序' : '当前为升序，点击切换为降序';
+}
+
+// 图库筛选栏: 桌面两行; 窄屏把标签类别和作品筛选收进「更多筛选」面板。
+function initGalleryFilterLayout() {
+  const bar = $('#lib-filters');
+  if (!bar || bar.dataset.gfLayout === '1') return;
+  bar.dataset.gfLayout = '1';
+  const more = $('#lib-more-filters');
+  const panel = $('#lib-more-panel');
+  const facets = $('#lib-facet-controls');
+  const tagCat = $('#lib-f-tagcat');
+  const tagQuery = bar.querySelector('.gf-tag-query');
+  const facetBand = bar.querySelector('.gf-band-facets');
+  if (!more || !panel || !facets || !tagCat || !tagQuery || !facetBand) return;
+  const mq = window.matchMedia('(max-width: 980px)');
+  let compact = false;
+
+  function activeFilterCount() {
+    const defaults = {
+      '#lib-f-type': '', '#lib-f-status': '', '#lib-f-source': '',
+      '#lib-f-anomaly': '', '#lib-f-r18': '0', '#lib-f-ai': '',
+    };
+    let n = 0;
+    Object.keys(defaults).forEach(sel => {
+      const el = $(sel);
+      if (el && el.value !== defaults[sel]) n += 1;
+    });
+    if (tagCat.value) n += 1;
+    return n;
+  }
+
+  function paintMore() {
+    const n = activeFilterCount();
+    const open = !panel.hidden;
+    const base = open ? '收起筛选' : '更多筛选';
+    more.textContent = base;
+    more.dataset.active = n > 0 ? 'true' : 'false';
+    more.setAttribute('aria-expanded', open ? 'true' : 'false');
+    more.setAttribute('aria-label', n ? `${base}，已启用 ${n} 项` : base);
+  }
+
+  function applyLayout(nextCompact) {
+    compact = nextCompact;
+    panel.hidden = true;
+    if (compact) {
+      more.hidden = false;
+      panel.append(tagCat, facets);
+    } else {
+      more.hidden = true;
+      tagQuery.insertBefore(tagCat, tagQuery.firstChild);
+      facetBand.append(facets);
+    }
+    paintMore();
+  }
+
+  more.addEventListener('click', () => {
+    if (!compact) return;
+    panel.hidden = !panel.hidden;
+    paintMore();
+    if (!panel.hidden) {
+      const first = panel.querySelector('select, input, button');
+      if (first) first.focus();
+    }
+  });
+  panel.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    panel.hidden = true;
+    paintMore();
+    more.focus();
+  });
+  bar.addEventListener('change', paintMore);
+  bar.addEventListener('input', paintMore);
+  mq.addEventListener('change', (e) => applyLayout(e.matches));
+  window.gfPaintMoreFilters = paintMore;
+  window.gfCollapseMoreFilters = () => {
+    panel.hidden = true;
+    paintMore();
+  };
+  applyLayout(mq.matches);
+}
+
 // 📋 全部作品 = 重置全部筛选 (关键字/类型/R18/作者/标签/缺元数据/排序) 回完整列表。
 // 之前只是重新 loadLibrary, libFilters 里残留的作者/标签筛选清不掉, 导致"选了作者后回不去"。
 async function loadLibraryRecent() {
@@ -7858,7 +7952,8 @@ async function loadLibraryRecent() {
   if (comboAuthor) comboAuthor.clear();
   if (comboTag) comboTag.clear();
   $('#lib-f-anomaly').value = '';
-  $('#lib-f-order').textContent = '↓ 降序';
+  syncLibOrderButton();
+  if (window.gfCollapseMoreFilters) window.gfCollapseMoreFilters();
   loadLibrary();
 }
 
@@ -9066,6 +9161,8 @@ function bind() {
   $('#lib-selfcheck-btn').addEventListener('click', runSelfCheck);
   $('#lib-src-manage').addEventListener('click', openSourceManager);
   $('#lib-tagcat-manage').addEventListener('click', openTagCategoryManager);
+  // 筛选栏两行布局 + 窄屏「更多筛选」
+  initGalleryFilterLayout();
   $$('#lib-view-toggle .view-btn').forEach(b => b.addEventListener('click', () => setLibView(b.dataset.view)));
   $$('#lib-data-toggle .view-btn').forEach(b => b.addEventListener('click', () => setLibDataView(b.dataset.view)));
 
@@ -9080,10 +9177,10 @@ function bind() {
   // 启动时把排序下拉同步为**真实状态** (HTML 里的 selected 只是初始显示;
   // 曾出现 HTML 默认项与 libFilters.sort 不一致 → 下拉显示「按入库」实际按「修改时间」查询)
   $('#lib-f-sort').value = libFilters.sort;
-  $('#lib-f-order').textContent = libFilters.order === 'desc' ? '↓ 降序' : '↑ 升序';
+  syncLibOrderButton();
   $('#lib-f-order').addEventListener('click', () => {
     libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc';
-    $('#lib-f-order').textContent = libFilters.order === 'desc' ? '↓ 降序' : '↑ 升序';
+    syncLibOrderButton();
     loadLibrary();
   });
   // 异常筛选: 下拉单选 (缺元数据 / 缺失文件 / 已失效), 可与其它条件叠加

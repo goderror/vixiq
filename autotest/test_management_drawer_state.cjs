@@ -208,6 +208,9 @@ function controllerFixture() {
     state, active: 'wallpapers', main: { scrollTop: 0 }, intentAt: 0,
     INTENT_TTL: 1800, document: { activeElement: { tagName: 'MAIN' } },
     Date, focusedExtra: () => false, activeToolbar: () => ({ extra: { contains: () => false } }),
+    inScrollableOverlay: () => false,
+    PULL_WHEEL_NEED: 400,
+    PULL_TOUCH_NEED: 160,
     paint: () => { screen.compact = state.compact; screen.paints++; },
     // 下拉跟手位移相关的 DOM 写入在纯逻辑测试里用空实现 (状态机才是被测对象)
     consumePull: (d) => {

@@ -11,7 +11,8 @@ function element(key) {
   return elements.get(key);
 }
 const calls = [], notices = [];
-const context = vm.createContext({ console, $, $$: () => [], window: {}, document: {},
+const context = vm.createContext({ console, $, $$: () => [], window: {},
+  document: { querySelector: () => null },
   esc: s => String(s || '').replaceAll('<', '&lt;'), fmtSize: n => String(n || 0),
   sourceLabel: s => s, toast: msg => notices.push(msg),
   autoStartDownload: async () => calls.push({ start: true }), setLastAction() {},

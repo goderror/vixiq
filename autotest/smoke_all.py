@@ -3060,6 +3060,7 @@ def run_suite() -> SuiteResult:
     suite.add("T158", "🏷 标签管理工作台: 服务端分页/搜索 + 跨页选择 + 批量加入/移出类别 + 停用恢复 + 编辑 + 文件夹选择(本机/远程) (隔离数据)", t158_tag_workspace)
     suite.add("T159", "🏷 图库按标签类别筛选: 作品/图片双视图 + 类别与标签叠加 + 未分类 + 停用标签不参与 + facets 带类别 + 前端接线 (隔离数据)", t159_library_tag_category_filter)
     suite.add("T160", "🚀 外接数据盘缺失时启动不卡动画: /api/health 不依赖数据盘 + HTTP 500 也算服务活着 + 启动轮询接线 (离线)", t160_health_and_port_alive)
+    suite.add("T161", "🧰 图库筛选栏两行紧凑布局: 29px/4px + 窄屏更多筛选 + 320px 不第三行 + 文案四项 + 来源滑杆图标 + 重置非 R18 + 前端接线 (离线)", t161_gallery_filter_layout)
     suite.write_report()
     return suite
 
@@ -9813,7 +9814,7 @@ def t119_ai_filter_and_backfill() -> None:
     assert "vixiq.searchHideAi" in appjs, "隐藏 AI 的设置要记住 (localStorage)"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'id="lib-f-ai"' in html, "图库筛选栏要有 AI 下拉"
-    assert '<option value="" selected>AI: 全部</option>' in html, \
+    assert '<option value="" selected>AI 生成: 全部</option>' in html, \
         "AI 筛选默认必须是「全部」(不改变现有默认视图)"
     assert 'id="search-hide-ai"' in html and 'class="btn icon-toggle active"' in html, \
         "查询页要有「🚫 隐藏 AI 作品」开关且默认开启"
@@ -9947,7 +9948,7 @@ def t120_keyword_paging_and_lib_layout() -> None:
 
     # ---------- D 布局: 异常筛选是独立下拉, 全选在顶部主行 ----------
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    i_filters = html.index('class="field-row lib-filters" id="lib-filters"')
+    i_filters = html.index('id="lib-filters"')
     i_ops = html.index('<div class="lib-selection-row">')
     i_batch = html.index('class="lib-batch-group lib-action-toolbar"')
     i_anomaly = html.index('id="lib-f-anomaly"')
@@ -10393,7 +10394,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261119b" and _mss.group(1) == "20261119b", \
+    assert _mjs and _mss and _mjs.group(1) == "20261119c" and _mss.group(1) == "20261119c", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10488,7 +10489,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261119b', html) and _re.search(r'app\.js\?v=20261119b', html), \
+    assert _re.search(r'style\.css\?v=20261119c', html) and _re.search(r'app\.js\?v=20261119c', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10896,7 +10897,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261119b" in html and "app.js?v=20261119b" in html, \
+        assert "style.css?v=20261119c" in html and "app.js?v=20261119c" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13276,7 +13277,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261119b" in _h and "style.css?v=20261119b" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261119c" in _h and "style.css?v=20261119c" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14645,7 +14646,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261119b" in html and "app.js?v=20261119b" in html
+            assert "style.css?v=20261119c" in html and "app.js?v=20261119c" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14754,7 +14755,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261119b" in html and "app.js?v=20261119b" in html
+            assert "style.css?v=20261119c" in html and "app.js?v=20261119c" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14822,6 +14823,50 @@ def t160_health_and_port_alive() -> None:
     src = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")
     assert "except urllib.error.HTTPError:" in src, "启动器未处理 HTTPError"
     assert '_port_alive("127.0.0.1", port)' in src, "启动轮询未走 _port_alive"
+
+
+def t161_gallery_filter_layout() -> None:
+    """T161: 图库筛选栏两行紧凑布局与文案（2026-11-20）。
+
+    ① 桌面两行容器；窄屏「更多筛选」独立面板；
+    ② 文案：异常项 / 作者状态 / 重置筛选 / AI 生成；
+    ③ 29px 控件、4px 间距、来源滑杆 29x29、触屏 42px；
+    ④ 320px 收缩重置/排序文案，只留箭头；
+    ⑤ 复用现有筛选 ID 和重置默认值；版本串。
+    """
+    html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert 'class="field-row lib-filters gf-toolbar" id="lib-filters"' in html
+    for token in ("gf-band-search", "gf-band-facets", "lib-more-filters",
+                  "lib-more-panel", "lib-facet-controls"):
+        assert token in html, f"HTML 缺 {token}"
+    for text in ("异常项: 全部", "作者状态: 全部", "重置筛选", "AI 生成: 全部",
+                 "AI 生成: 是", "AI 生成: 否", "更多筛选"):
+        assert text in html, f"文案缺 {text}"
+    assert 'id="lib-src-manage"' in html and "管理来源分类" in html
+    assert 'class="gf-reset-full"' in html and 'class="gf-reset-short"' in html
+    assert 'class="gf-arrow"' in html and 'class="gf-order-word"' in html
+    for el_id in ("lib-f-type", "lib-f-status", "lib-f-source", "lib-f-anomaly",
+                  "lib-f-r18", "lib-f-ai", "lib-f-tagcat", "lib-f-sort",
+                  "lib-f-order", "lib-recent-btn", "lib-tagcat-manage",
+                  "lib-f-author-input", "lib-f-tag-input"):
+        assert f'id="{el_id}"' in html, f"现有控件丢失: {el_id}"
+
+    assert "height: 29px" in css and "gap: 4px" in css
+    assert "min-height: 42px" in css
+    assert 'grid-template-areas: "search search search" "more sort actions"' in css
+    assert "max-width: 72px" in css
+    assert 'gf-more[data-active="true"]::after' in css
+    assert "width: 29px" in css
+
+    for token in ("initGalleryFilterLayout", "syncLibOrderButton",
+                  "gfCollapseMoreFilters", "activeFilterCount"):
+        assert token in js, f"前端缺 {token}"
+    assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
+    assert "r18: '0'" in js, "重置默认值应回到非 R18"
+    assert "style.css?v=20261119c" in html and "app.js?v=20261119c" in html
 
 
 def t154_tidy_rmdir_safety() -> None:

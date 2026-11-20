@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261119b">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261119b">
+<link rel="stylesheet" href="/static/style.css?v=20261119c">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261119c">
 </head>
 <body>
 
@@ -288,44 +288,62 @@
       </div>
       <div class="management-extra">
         <div class="management-extra-inner">
-      <div class="field-row lib-filters" id="lib-filters">
-        <select id="lib-f-type" title="按类型筛选"><option value="">类型: 全部</option><option value="0">插画</option><option value="1">漫画</option><option value="2">动图</option></select>
-        <select id="lib-f-status" title="按作者存续状态筛选"><option value="">状态: 全部</option><option value="alive">作者活跃中</option><option value="gone">作者已注销</option><option value="unknown">未知作者</option></select>
-        <select id="lib-f-source" title="按来源筛选"><option value="">来源: 全部</option><option value="pixiv">pixiv</option><option value="danbooru">danbooru</option><option value="twitter">X（推特）</option><option value="bilibili">bilibili</option><option value="ggac">GGAC</option><option value="artstation">ArtStation</option><option value="deviantart">DeviantArt</option><option value="niconico">Nico静画</option><option value="skeb">Skeb</option><option value="yandere">yande.re</option><option value="konachan">Konachan</option><option value="gelbooru">Gelbooru</option><option value="sankaku">Sankaku</option><option value="other">未知来源</option></select>
-        <button id="lib-src-manage" class="btn ghost" title="管理来源分类">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg>
-        </button>
-        <select id="lib-f-anomaly" title="按异常状态筛选">
-          <option value="">异常: 全部</option>
-          <option value="metadata">缺元数据</option>
-          <option value="file">缺失文件</option>
-          <option value="deleted">已失效</option>
-        </select>
-        <select id="lib-f-r18" title="按 R18 筛选"><option value="0" selected>R18: 非 R18</option><option value="1">仅 R18</option><option value="">全部（含 R18）</option></select>
-        <select id="lib-f-ai" title="按 AI 生成筛选（按 pixiv 官方 aiType 标记）"><option value="" selected>AI: 全部</option><option value="0">AI: 非 AI</option><option value="2">AI: 仅 AI</option></select>
-        <button id="lib-tagcat-manage" class="btn ghost" title="标签管理（搜索、归类、停用）">🏷️ 标签管理</button>
-        <select id="lib-f-tagcat" title="按标签类别筛选"><option value="">标签类别: 全部</option></select>
-        <div class="combo" id="combo-author">
-          <input type="text" id="lib-f-author-input" placeholder="作者: 输入关键词筛选" autocomplete="off" spellcheck="false">
-          <button class="input-clear" hidden aria-label="清空作者筛选" title="清空">✕</button>
-          <div class="combo-list" id="lib-f-author-list"></div>
+      <div class="field-row lib-filters gf-toolbar" id="lib-filters">
+        <div class="gf-band gf-band-search" role="group" aria-label="作者和标签搜索">
+          <div class="gf-searches">
+            <div class="combo gf-author" id="combo-author">
+              <input type="text" id="lib-f-author-input" placeholder="作者: 输入关键词筛选" autocomplete="off" spellcheck="false">
+              <button class="input-clear" hidden aria-label="清空作者筛选" title="清空">✕</button>
+              <div class="combo-list" id="lib-f-author-list"></div>
+            </div>
+            <div class="gf-tag-query">
+              <select id="lib-f-tagcat" title="按标签类别筛选"><option value="">标签类别: 全部</option></select>
+              <div class="combo gf-tag" id="combo-tag">
+                <input type="text" id="lib-f-tag-input" placeholder="标签: 输入关键词筛选" autocomplete="off" spellcheck="false">
+                <button class="input-clear" hidden aria-label="清空标签筛选" title="清空">✕</button>
+                <div class="combo-list" id="lib-f-tag-list"></div>
+              </div>
+            </div>
+          </div>
+          <div class="gf-sort" role="group" aria-label="排序">
+            <select id="lib-f-sort" title="排序">
+              <option value="date">排序: 按发布日</option>
+              <option value="created">排序: 按入库时间</option>
+              <option value="updated" selected>排序: 按修改时间</option>
+              <option value="title">排序: 按标题</option>
+              <option value="author">排序: 按作者</option>
+              <option value="id">排序: 按ID</option>
+              <option value="bookmark">排序: 按收藏</option>
+            </select>
+            <button id="lib-f-order" class="btn ghost gf-order" title="切换升降序" aria-label="当前为降序，切换为升序"><span class="gf-arrow" aria-hidden="true">↓</span><span class="gf-order-word" aria-hidden="true">降序</span></button>
+          </div>
+          <div class="gf-actions" role="group" aria-label="筛选操作">
+            <button id="lib-recent-btn" class="btn ghost gf-reset" title="恢复默认筛选，继续显示非 R18 作品" aria-label="重置筛选"><span class="gf-reset-full">重置筛选</span><span class="gf-reset-short" aria-hidden="true">重置</span></button>
+            <button id="lib-tagcat-manage" class="btn ghost gf-manage-tags" title="标签管理（搜索、归类、停用）" aria-label="标签管理"><span class="gf-icon" aria-hidden="true">🏷️</span><span class="gf-manage-text">标签管理</span></button>
+          </div>
         </div>
-        <div class="combo" id="combo-tag">
-          <input type="text" id="lib-f-tag-input" placeholder="标签: 输入关键词筛选" autocomplete="off" spellcheck="false">
-          <button class="input-clear" hidden aria-label="清空标签筛选" title="清空">✕</button>
-          <div class="combo-list" id="lib-f-tag-list"></div>
+        <div class="gf-band gf-band-facets" role="group" aria-label="作品筛选">
+          <button type="button" id="lib-more-filters" class="btn ghost gf-more" aria-expanded="false" aria-controls="lib-more-panel" hidden>更多筛选</button>
+          <div class="gf-facets" id="lib-facet-controls">
+            <select id="lib-f-type" title="按类型筛选"><option value="">类型: 全部</option><option value="0">插画</option><option value="1">漫画</option><option value="2">动图</option></select>
+            <select id="lib-f-status" title="按作者状态筛选"><option value="">作者状态: 全部</option><option value="alive">作者活跃中</option><option value="gone">作者已注销</option><option value="unknown">未知作者</option></select>
+            <div class="gf-source">
+              <select id="lib-f-source" title="按来源筛选"><option value="">来源: 全部</option><option value="pixiv">pixiv</option><option value="danbooru">danbooru</option><option value="twitter">X（推特）</option><option value="bilibili">bilibili</option><option value="ggac">GGAC</option><option value="artstation">ArtStation</option><option value="deviantart">DeviantArt</option><option value="niconico">Nico静画</option><option value="skeb">Skeb</option><option value="yandere">yande.re</option><option value="konachan">Konachan</option><option value="gelbooru">Gelbooru</option><option value="sankaku">Sankaku</option><option value="other">未知来源</option></select>
+              <button id="lib-src-manage" class="btn ghost gf-source-manager" title="管理来源分类" aria-label="管理来源分类">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg>
+              </button>
+            </div>
+            <select id="lib-f-anomaly" title="按异常项筛选">
+              <option value="">异常项: 全部</option>
+              <option value="metadata">缺元数据</option>
+              <option value="file">缺失文件</option>
+              <option value="deleted">已失效</option>
+            </select>
+            <select id="lib-f-r18" title="按 R18 筛选"><option value="0" selected>R18: 非 R18</option><option value="1">仅 R18</option><option value="">全部（含 R18）</option></select>
+            <select id="lib-f-ai" title="按 AI 生成筛选（按 pixiv 官方 aiType 标记）"><option value="" selected>AI 生成: 全部</option><option value="2">AI 生成: 是</option><option value="0">AI 生成: 否</option></select>
+          </div>
         </div>
-        <select id="lib-f-sort" title="排序">
-          <option value="date">排序: 按发布日</option>
-          <option value="created">排序: 按入库时间</option>
-          <option value="updated" selected>排序: 按修改时间</option>
-          <option value="title">排序: 按标题</option>
-          <option value="author">排序: 按作者</option>
-          <option value="id">排序: 按ID</option>
-          <option value="bookmark">排序: 按收藏</option>
-        </select>
-        <button id="lib-f-order" class="btn ghost" title="切换升降序">↓ 降序</button>
-        <button id="lib-recent-btn" class="btn ghost" title="清除全部筛选，按默认条件重新列出作品">📋 全部作品</button>
+        <section id="lib-more-panel" class="gf-panel" aria-label="更多筛选" hidden></section>
       </div>
         </div>
       </div>
@@ -846,10 +864,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261119b"></script>
-<script src="/static/wallpaper-admin.js?v=20261119b"></script>
-<script src="/static/management-drawer-state.js?v=20261119b"></script>
-<script src="/static/management-toolbar.js?v=20261119b"></script>
+<script src="/static/app.js?v=20261119c"></script>
+<script src="/static/wallpaper-admin.js?v=20261119c"></script>
+<script src="/static/management-drawer-state.js?v=20261119c"></script>
+<script src="/static/management-toolbar.js?v=20261119c"></script>
 </body>
 </html>
 
