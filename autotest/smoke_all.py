@@ -10400,7 +10400,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261121b" and _mss.group(1) == "20261121b", \
+    assert _mjs and _mss and _mjs.group(1) == "20261121c" and _mss.group(1) == "20261121c", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10495,7 +10495,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261121b', html) and _re.search(r'app\.js\?v=20261121b', html), \
+    assert _re.search(r'style\.css\?v=20261121c', html) and _re.search(r'app\.js\?v=20261121c', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10903,7 +10903,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261121b" in html and "app.js?v=20261121b" in html, \
+        assert "style.css?v=20261121c" in html and "app.js?v=20261121c" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13286,7 +13286,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261121b" in _h and "style.css?v=20261121b" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261121c" in _h and "style.css?v=20261121c" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14655,7 +14655,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261121b" in html and "app.js?v=20261121b" in html
+            assert "style.css?v=20261121c" in html and "app.js?v=20261121c" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14764,7 +14764,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261121b" in html and "app.js?v=20261121b" in html
+            assert "style.css?v=20261121c" in html and "app.js?v=20261121c" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14875,7 +14875,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261121b" in html and "app.js?v=20261121b" in html
+    assert "style.css?v=20261121c" in html and "app.js?v=20261121c" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14915,7 +14915,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261121b" in html
+    assert "20261121c" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15335,11 +15335,18 @@ def t166_smart_refresh_front_background() -> None:
     assert 'id="refresh-status"' in html, "缺少后台刷新状态条容器"
     assert ".refresh-status" in css, "缺少状态条样式"
     for token in ("_refreshJobs = new Map()", "function _refreshJobKey",
+                  "function renderRefreshStatus", "rs-stage", "rs-count",
                   "async function runRefreshJob",
-                  "if (running) return running.promise",
+                  "running.render(true); return running.promise",
                   "window.retryRefreshJob", "async function _refreshTidyHint",
-                  "openTidyPreview()"):
+                  "openTidyPreview()", "REFRESH_STATUS_DELAY",
+                  "REFRESH_DONE_HIDE", "job.total = ids.length + 1",
+                  "ids: [id]", "ids: failedIds"):
         assert token in js, f"缺少 {token}"
+    for token in ("@keyframes rs-in", "@keyframes rs-flow",
+                  ".rs-bar.indeterminate", "prefers-reduced-motion",
+                  "safe-area-inset-bottom"):
+        assert token in css, f"缺少进度动画/窄屏样式 {token}"
 
     i = js.index("window.smartRefresh = async function ()")
     body = js[i:js.index("(function wireSmartRefresh", i)]
@@ -15347,13 +15354,18 @@ def t166_smart_refresh_front_background() -> None:
     assert "loadLibrary({ resetPage: false, force: true })" in body, \
         "前台要保留页码/筛选/勾选地重拉当前视图"
     assert "runRefreshJob(key, act)" in body, "后台任务必须不阻塞前台"
-    assert "已在核对" in body, "同范围重复点击要提示复用在途任务"
+    assert "沿用后台核对进度" in body, "同范围重复点击要复用在途任务与现有进度"
+    assert "正在更新页面" in body, "点击要立即给按钮反馈"
 
     j = js.index("async function runRefreshJob")
-    rb = js[j:j + 3600]
+    rb = js[j:js.index("window.runRefreshJob = runRefreshJob")]
     assert "'/api/library/refresh-scope'" in rb and "'/api/library/sync'" in rb
     assert "refreshAfterJob(act)" in rb, "后台完成要补刷受影响数据"
     assert "openTidyPreview()" in rb, "发现待整理时要给整理预览入口"
+    assert "job.doneCount" in rb and "Math.round((opts.done || 0) / opts.total * 100)" in js, \
+        "进度条必须由真实完成数驱动"
+    assert "setTimeout(() => job.render(true), REFRESH_STATUS_DELAY)" in rb, \
+        "短任务要延迟展示浮层以减少闪烁"
 
 
 def main() -> int:

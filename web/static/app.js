@@ -10763,9 +10763,11 @@ function paintSmartRefresh() {
 // ===== 智能刷新: 前台先快, 后台按变化范围补查 =====
 // 前台只重拉当前视图/计数, 不等待磁盘核对; 后台按 lastAction / 无范围时的磁盘索引同步。
 // 同一范围连续点击复用在途任务, 结果/失败/重试与整理入口显示在右下角状态条。
-let _refreshJobs = new Map();          // key -> {promise, label, at}
-let _refreshRetry = null;              // {key, act} 最近一次失败, 供「重试」
+let _refreshJobs = new Map();          // key -> job (含进度/渲染器)
+let _refreshRetry = null;              // {act} 最近一次失败, 供「重试」
 let _refreshStatusTimer = null;
+const REFRESH_STATUS_DELAY = 300;      // 短任务不弹浮层, 减少闪烁
+const REFRESH_DONE_HIDE = 3000;        // 成功结果展示时长
 
 function _refreshJobKey(act) {
   if (act && act.scope === 'work' && act.ids.length) {
@@ -10785,22 +10787,76 @@ function _refreshJobLabel(act) {
   return '磁盘索引';
 }
 
-function paintRefreshStatus(html, kind = '') {
+function _ensureRefreshStatus() {
   const el = $('#refresh-status');
+  if (!el) return null;
+  if (!el.querySelector('.rs-head')) {
+    el.innerHTML =
+      '<div class="rs-head"><span class="rs-stage" role="status" aria-live="polite"></span>' +
+      '<span class="rs-count" aria-hidden="true"></span></div>' +
+      '<div class="rs-track" role="progressbar" aria-valuemin="0"><div class="rs-bar"></div></div>' +
+      '<div class="rs-actions"></div>';
+  }
+  return el;
+}
+
+function renderRefreshStatus(opts) {
+  const el = _ensureRefreshStatus();
   if (!el) return;
   clearTimeout(_refreshStatusTimer);
-  el.className = 'refresh-status' + (kind ? ' ' + kind : '');
-  el.innerHTML = html;
-  el.classList.remove('hidden');
+  if (el.classList.contains('hidden')) {
+    el.classList.remove('hidden', 'leaving');
+    el.classList.add('show');       // 只在首次出现时放入场动画
+  } else {
+    el.classList.remove('leaving');
+  }
+  el.classList.toggle('ok', opts.kind === 'ok');
+  el.classList.toggle('err', opts.kind === 'err');
+  const stage = el.querySelector('.rs-stage');
+  const text = opts.stage || '';
+  if (stage.textContent !== text) stage.textContent = text;   // 读屏只播报阶段变化
+  el.querySelector('.rs-count').textContent =
+    opts.total ? `${opts.done || 0} / ${opts.total} 项` : '';
+  const track = el.querySelector('.rs-track');
+  const bar = el.querySelector('.rs-bar');
+  track.style.display = opts.bar === false ? 'none' : '';
+  if (opts.indeterminate) {
+    bar.classList.add('indeterminate');
+    bar.style.width = '';
+    track.removeAttribute('aria-valuemax');
+    track.removeAttribute('aria-valuenow');
+  } else {
+    bar.classList.remove('indeterminate');
+    if (opts.total) {
+      const pct = Math.max(0, Math.min(100,
+        Math.round((opts.done || 0) / opts.total * 100)));
+      bar.style.width = pct + '%';
+      track.setAttribute('aria-valuemax', String(opts.total));
+      track.setAttribute('aria-valuenow', String(opts.done || 0));
+    } else {
+      bar.style.width = '0%';
+      track.removeAttribute('aria-valuemax');
+      track.removeAttribute('aria-valuenow');
+    }
+  }
+  el.querySelector('.rs-actions').innerHTML = opts.actions || '';
 }
 
 function hideRefreshStatus(delay = 0) {
   const el = $('#refresh-status');
   if (!el) return;
   clearTimeout(_refreshStatusTimer);
-  const hide = () => { el.classList.add('hidden'); el.innerHTML = ''; };
-  if (delay) _refreshStatusTimer = setTimeout(hide, delay);
-  else hide();
+  const doHide = () => {
+    if (el.classList.contains('hidden')) return;
+    if (el.classList.contains('err')) return;   // 失败状态保留, 等用户重试/下次刷新
+    el.classList.add('leaving');
+    _refreshStatusTimer = setTimeout(() => {
+      el.classList.add('hidden');
+      el.classList.remove('leaving', 'show', 'ok', 'err');
+    }, 180);
+  };
+  if (delay) _refreshStatusTimer = setTimeout(doHide, delay);
+  else doHide();
 }
 window.hideRefreshStatus = hideRefreshStatus;
 
@@ -10829,11 +10885,27 @@ async function _refreshTidyHint(act, result) {
   } catch (e) { return 0; }
 }
 
+function _mergeScopeResult(acc, r) {
+  if (!r) return;
+  acc.works += Number(r.works || 0);
+  acc.authors += Number(r.authors || 0);
+  acc.renamed += Number(r.renamed || 0);
+  acc.source_classified += Number(r.source_classified || 0);
+  if (Array.isArray(r.missing_files)) acc.missing_files.push(...r.missing_files);
+  if (r.note) acc.note = r.note;
+}
+
 function _refreshResultText(act, r) {
   if (!act || act.scope === 'library') {
     const n = Number((r && r.new_pages_linked) || 0);
+    const rel = Number((r && r.pages_relinked) || 0);
     const miss = ((r && r.missing_ids) || []).length;
-    return `磁盘核对完成${n ? ` · 新登记 ${n} 张` : ''}${miss ? ` · 缺失 ${miss}` : ''}`;
+    const empty = ((r && r.empty_dirs) || []).length;
+    const bad = ((r && r.corrupt_files) || []).length;
+    return `新增 ${n} 张 · 重新关联 ${rel} 张`
+      + (miss ? ` · 缺失 ${miss}` : '')
+      + (empty ? ` · 空目录 ${empty}` : '')
+      + (bad ? ` · 损坏 ${bad}` : '');
   }
   if (act.scope === 'work') {
     const miss = ((r && r.missing_files) || []).length;
@@ -10848,47 +10920,140 @@ function _refreshResultText(act, r) {
 }
 
 async function runRefreshJob(key, act) {
-  // 同一范围连续点击: 复用在途任务, 不重复打接口
+  // 同一范围连续点击: 复用在途任务与现有进度, 不从头开始
   const running = _refreshJobs.get(key);
-  if (running) return running.promise;
+  if (running) { running.render(true); return running.promise; }
+  // 新任务开始 → 取消上一个结果「3 秒自动收起」的定时器, 否则会把本次状态一起藏掉
+  clearTimeout(_refreshStatusTimer);
 
-  const job = { at: Date.now(), label: _refreshJobLabel(act) };
+  const ids = (act && (act.scope === 'work' || act.scope === 'author'))
+    ? [...act.ids] : [];
+  const job = {
+    at: Date.now(), label: _refreshJobLabel(act), shown: false, done: false,
+    stage: '页面已更新 · 后台核对中', doneCount: 0, total: 0,
+    indeterminate: true, kind: '', actions: '', bar: true,
+  };
   // 先占位再启动: 并发点击/同步 DOM 事件里也不会重复启动同一范围
   _refreshJobs.set(key, job);
-  paintRefreshStatus(`⏳ 后台核对：${esc(job.label)}`);
+  job.render = (force = false) => {
+    if (job.done && !force) return;
+    if (!force && !job.shown && Date.now() - job.at < REFRESH_STATUS_DELAY) return;
+    job.shown = true;
+    renderRefreshStatus({
+      stage: job.stage, done: job.doneCount, total: job.total,
+      indeterminate: job.indeterminate, kind: job.kind,
+      actions: job.actions, bar: job.bar,
+    });
+  };
+  job._showTimer = setTimeout(() => job.render(true), REFRESH_STATUS_DELAY);
+
   job.promise = (async () => {
+    const failed = [];
+    const failedIds = [];
     let result = null;
     try {
-      if (act && (act.scope === 'work' || act.scope === 'author')
-          && act.ids.length) {
-        // 有明确范围: 只核对刚动过的作品/作者 (作者分支含联网核对名字/存续)
-        result = await api('/api/library/refresh-scope', { method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope: act.scope, ids: act.ids }) });
-        const err = apiErr(result);
-        if (err) throw new Error(err);
+      if (ids.length) {
+        const scope = act.scope;
+        job.total = ids.length + 1;      // 核对 N 项 + 补刷页面数据
+        job.indeterminate = false;
+        job.stage = scope === 'work' ? '核对作品' : '核对作者';
+        job.render();
+        const acc = { works: 0, authors: 0, renamed: 0, source_classified: 0,
+                      missing_files: [], note: '' };
+        for (const id of ids) {
+          job.stage = `${scope === 'work' ? '核对作品' : '核对作者'} `
+            + `${job.doneCount + 1} / ${ids.length}`;
+          job.render();
+          try {
+            // 逐个提交: 进度按服务端真实完成数推进, 也便于只重试失败项
+            const r = await api('/api/library/refresh-scope', { method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ scope, ids: [id] }) });
+            const err = apiErr(r);
+            if (err) throw new Error(err);
+            _mergeScopeResult(acc, r);
+          } catch (e) {
+            failed.push(`${id}: ${e.message || '核对失败'}`);
+            failedIds.push(id);
+          }
+          job.doneCount += 1;
+          job.render();
+        }
+        result = acc;
+        if (failedIds.length === ids.length) {
+          throw new Error(failed[0] || '核对失败');
+        }
       } else {
-        // 无法确定范围 (例如外部往图库塞了图片) → 后台做磁盘索引同步
+        // 无法确定范围 (例如外部往图库塞了图片) → 后台磁盘索引同步
+        job.stage = '检查目录';
+        job.indeterminate = true;
+        job.render();
         result = await api('/api/library/sync', { method: 'POST' });
         window._libHealth = result;
         paintLibHealth(true);
       }
+
+      job.stage = '更新页面数据';
+      if (job.total) job.indeterminate = false;
+      job.render();
       await refreshAfterJob(act);
+      if (job.total) {
+        job.doneCount = Math.max(job.doneCount, job.total);
+        job.render();
+      }
+
+      job.stage = '检查整理项';
+      job.render();
       const tidyN = await _refreshTidyHint(act, result);
-      const tray = tidyN > 0
-        ? `<button class="btn accent" onclick="openTidyPreview()">🧹 整理文件夹（${tidyN} 项）</button>`
-        : '';
-      paintRefreshStatus(`✓ ${esc(_refreshResultText(act, result))}${tray}`, 'ok');
-      if (!tidyN) hideRefreshStatus(4200);
-      _refreshRetry = null;
+      const text = _refreshResultText(act, result);
+      job.done = true;
+      clearTimeout(job._showTimer);
+      const statusEl = $('#refresh-status');
+      const statusVisible = !!(statusEl && !statusEl.classList.contains('hidden'));
+      // 本次浮层没出现过、且页面上也没有旧结果 → 短任务不弹, 避免闪烁;
+      // 若旧结果还挂着(例如重试很快成功), 必须把它更新掉, 不能留着旧失败。
+      const fast = !job.shown && !statusVisible
+        && Date.now() - job.at < REFRESH_STATUS_DELAY && !failed.length;
+      if (fast) {
+        hideRefreshStatus();            // 短操作不弹浮层
+      } else {
+        job.bar = false;
+        job.indeterminate = false;
+        if (failed.length) {
+          job.kind = 'err';
+          job.stage = `${text}（${failed.length} 项失败：${failed[0]}）`;
+          job.actions = `<button class="btn danger" onclick="retryRefreshJob()">重试失败项</button>`;
+          _refreshRetry = { act: { ...act, ids: failedIds } };
+          job.render(true);
+        } else {
+          job.kind = 'ok';
+          job.stage = `✓ ${text}`;
+          job.actions = tidyN > 0
+            ? `<button class="btn accent" onclick="openTidyPreview()">🧹 整理文件夹（${tidyN} 项）</button>`
+            : '';
+          _refreshRetry = null;
+          job.render(true);
+          if (!tidyN) hideRefreshStatus(REFRESH_DONE_HIDE);
+        }
+      }
       return result;
     } catch (e) {
-      _refreshRetry = { key, act };
-      paintRefreshStatus(
-        `⚠ 后台核对失败：${esc(e.message || '未知错误')} ` +
-        `<button class="btn danger" onclick="retryRefreshJob()">重试</button>`, 'err');
+      job.done = true;
+      clearTimeout(job._showTimer);
+      job.kind = 'err';
+      job.bar = false;
+      job.indeterminate = false;
+      job.stage = `⚠ 后台核对失败：${e.message || '未知错误'}`;
+      job.actions = `<button class="btn danger" onclick="retryRefreshJob()">重试</button>`;
+      _refreshRetry = {
+        act: (act && failedIds.length && act.ids)
+          ? { ...act, ids: failedIds } : act,
+      };
+      job.render(true);
       return { error: e.message || '未知错误' };
     } finally {
+      job.done = true;
+      clearTimeout(job._showTimer);
       _refreshJobs.delete(key);
       paintSmartRefresh();
     }
@@ -10901,14 +11066,17 @@ window.retryRefreshJob = function () {
   const r = _refreshRetry;
   if (!r) return;
   _refreshRetry = null;
-  paintRefreshStatus(`⏳ 正在重试：${esc(_refreshJobLabel(r.act))}`);
-  runRefreshJob(r.key, r.act);
+  runRefreshJob(_refreshJobKey(r.act), r.act);
 };
 
 window.smartRefresh = async function () {
   const b = $('#smart-refresh');
   const act = activeAction();
-  if (b) { b.disabled = true; b.classList.add('spin'); }
+  if (b) {
+    b.disabled = true;
+    b.classList.add('spin');
+    b.dataset.tip = '正在更新页面';   // 点击立即反馈, 不等浮层
+  }
   try {
     // ① 前台: 只重拉当前视图/计数, 不等待磁盘核对 (慢盘也不挡页面)
     const jobs = [loadStats(), loadTrashBadge()];
@@ -10920,14 +11088,16 @@ window.smartRefresh = async function () {
     if (isTabActive('settings')) jobs.push(loadOperations());
     await Promise.allSettled(jobs);
 
-    // ② 后台: 按最近动作 / 磁盘变化定向核对; 同一范围复用在途任务
+    // ② 后台: 按最近动作 / 磁盘变化定向核对; 同一范围沿用现有任务与进度
     const key = _refreshJobKey(act);
-    if (_refreshJobs.has(key)) {
-      paintRefreshStatus(`⏳ 该范围已在核对：${esc(_refreshJobLabel(act))}`);
+    const running = _refreshJobs.get(key);
+    if (running) {
+      running.render(true);
+      toast('已沿用后台核对进度', 'ok');
     } else {
       runRefreshJob(key, act);   // 不 await: 页面立即恢复可操作
+      toast('页面已更新 ✓ 后台核对中…', 'ok');
     }
-    toast('已刷新当前视图 ✓ 后台核对中…', 'ok');
   } catch (e) {
     toast('刷新失败: ' + e.message, 'err');
   } finally {
