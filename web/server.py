@@ -925,14 +925,15 @@ def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
 
     2026-11-21 4B-1: 上传与路径导入共用。src_copy 必须是**应用临时目录里的副本**
     (外部源文件保持原位); 调用方负责事后清理整个临时目录。
-    返回 {kind: imported|reused|pending|failed, name, target, converted, note,
-          source_md5, source_format, source_file_size, current_format, converted_at}
-    - reused: 原始指纹或像素确认一致, 复用已有登记, 不落第二份;
-    - pending: 同页/同名已有文件但无法确认一致, 保留现有登记, 等人工确认;
+    返回 {kind: imported|reused|pending|failed, name, target, restored, converted,
+          note, source_md5, source_format, source_file_size, current_format, converted_at}
+    - reused: 原始指纹/像素确认一致, 且库内当前文件可用, 不落第二份;
+    - pending: 同页/同名已有文件但无法确认一致或现图不可用, 保留现有登记与文件;
+    - imported: 落盘成功; restored=True 表示库内登记缺失但磁盘已有相同文件, 只补登记;
     - failed: 入库移动失败 (临时文件仍可用于排查)。
     """
     import shutil as _sh
-    from core.image_format import normalize_to_png, same_pixels
+    from core.image_format import normalize_to_png, same_pixels, is_readable
     from utils.hashutil import md5_of
 
     src_copy = Path(src_copy)
@@ -948,7 +949,7 @@ def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
     final_tmp = Path(conv.get("current_path") or src_copy)
     target_name = final_tmp.name if ok else src_copy.name
     result = {
-        "kind": "imported", "name": target_name, "target": None,
+        "kind": "imported", "name": target_name, "target": None, "restored": False,
         "ok": ok, "converted": bool(conv.get("converted")),
         "note": conv.get("note") or "", "source_md5": src_md5,
         "source_format": conv.get("source_format"),
@@ -956,39 +957,72 @@ def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
         "current_format": conv.get("current_format"),
         "converted_at": conv.get("converted_at"),
     }
+    # 单帧图片才做像素核对; 动图/多帧只认指纹, 其余列待确认
+    single_frame = (conv.get("current_format") != "gif"
+                    and "动图" not in (conv.get("note") or "")
+                    and "多帧" not in (conv.get("note") or ""))
 
-    # ① 转换前的原始指纹命中同一页 → 重复导入, 复用已有登记
+    def _drop_tmp():
+        try:
+            final_tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    nkey = pixiv_natural_key(target_name) or pixiv_natural_key(src_copy.name)
+
+    # ① 原始指纹命中同一页: 还要核对库内当前文件确实可用
     if src_md5:
         with _db() as db:
             hit = db.find_page_by_source_md5(src_md5)
-        nkey_self = pixiv_natural_key(target_name) or pixiv_natural_key(src_copy.name)
-        if hit and (not nkey_self
-                    or (str(hit["artwork_id"]), int(hit["page_num"])) == nkey_self):
-            result.update(kind="reused", note="已有同一来源的转换记录，复用已有登记")
-            return result
+        if hit and (not nkey
+                    or (str(hit["artwork_id"]), int(hit["page_num"])) == nkey):
+            cur = None
+            if hit.get("local_path"):
+                cand = img_root / str(hit["local_path"])
+                if cand.is_file() and is_readable(cand):
+                    cur = cand
+            if cur is not None:
+                if single_frame and same_pixels(final_tmp, cur):
+                    _drop_tmp()
+                    result.update(kind="reused",
+                                  note="已有同一来源的转换记录，复用已有登记")
+                else:
+                    _drop_tmp()
+                    result.update(kind="pending",
+                                  note="同页已有文件，但内容无法确认一致；保留现有登记")
+                return result
+            # 现图缺失/打不开 → 继续走同页校验与补回流程, 不能直接 reused
 
-    nkey = pixiv_natural_key(target_name) or pixiv_natural_key(src_copy.name)
     target = dest_root / target_name
     if nkey:
-        # ② 同一作品页已有登记: 只认像素核对一致; 无法确认一律保留现有登记
+        # ② 同一作品页已有登记: 现图可用才复用; 缺失则补回, 不可用则列待确认
         with _db() as db:
             page = db.get_page_info(nkey[0], nkey[1])
         existing_rel = getattr(page, "local_path", None) if page else None
         existing = (img_root / str(existing_rel)) if existing_rel else None
         if existing is not None and existing.is_file():
-            if (conv.get("current_format") == "png"
-                    and same_pixels(final_tmp, existing)):
+            if not is_readable(existing):
+                _drop_tmp()
+                result.update(kind="pending",
+                              note="同页现有文件无法打开；保留现有登记")
+                return result
+            if single_frame and same_pixels(final_tmp, existing):
+                _drop_tmp()
                 result.update(kind="reused", note="同页已有相同 PNG，复用已有登记")
             else:
+                _drop_tmp()
                 result.update(kind="pending",
                               note="同页已有文件，但内容无法确认一致；保留现有登记")
             return result
-        # ③ 目标同名文件存在 (可能尚未登记) → 同样只认像素一致
+        # ③ 登记缺失或现图不存在: 目标已有相同文件时只补登记 (不落第二份)
         if target.exists():
-            if (conv.get("current_format") == "png"
-                    and same_pixels(final_tmp, target)):
-                result.update(kind="reused", note="目标已有相同 PNG，复用")
+            if is_readable(target) and single_frame and same_pixels(final_tmp, target):
+                _drop_tmp()
+                result.update(kind="imported", name=target.name,
+                              target=str(target), restored=True,
+                              note="目标已有相同文件，已补回登记")
             else:
+                _drop_tmp()
                 result.update(kind="pending",
                               note="目标已有同名文件，内容无法确认一致；保留现有文件")
             return result
@@ -1037,20 +1071,39 @@ def _record_ingested_conversions(img_root: Path, results: "list[dict]") -> int:
     """入库文件对账补页后, 按 local_path 找到页补写格式转换记录。
 
     上传/路径导入是「先落文件 → 对账补页」, 转换记录要在页存在之后写;
-    归位/整理只改 local_path, 这些列随页保留。"""
+    归位/整理只改 local_path, 这些列随页保留。
+    restored=True 表示库内登记还在但现图缺失/目标已有同内容文件: 这里把页补回新路径,
+    避免对账把它继续当成缺失。"""
     n = 0
     try:
         with _db() as db:
             for r in results:
                 if r.get("kind") != "imported" or not r.get("target"):
                     continue
+                target = Path(r["target"])
                 try:
-                    rel = Path(r["target"]).relative_to(img_root).as_posix()
+                    rel = target.relative_to(img_root).as_posix()
                 except Exception:
                     continue
                 page = db.find_page_by_local_path(rel)
                 if not page:
-                    continue
+                    nkey = pixiv_natural_key(target.name)
+                    if not nkey or not r.get("restored"):
+                        continue
+                    try:
+                        from utils.hashutil import md5_of
+                        md5 = md5_of(str(target))
+                        size = target.stat().st_size
+                    except Exception:
+                        md5 = size = None
+                    try:
+                        db.mark_page_status(nkey[0], nkey[1], PSt.DONE, rel,
+                                            md5=md5, file_size_bytes=size)
+                    except Exception:
+                        continue
+                    page = {"artwork_id": nkey[0], "page_num": nkey[1]}
+                    # 旧路径已不可用, 让下一次对账重新扫描
+                    _reconcile_state["ts"] = 0.0
                 db.set_page_conversion(
                     page["artwork_id"], page["page_num"],
                     source_format=r.get("source_format"),
@@ -10328,7 +10381,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             "python": _sys.version.split()[0],
         })
 
-    # ---------------- 📁 从本地文件夹导入 (源文件进回收站, 可恢复) ----------------
+    # ---------------- 📁 从本地文件夹导入 (外部源文件保持原位) ----------------
     @app.route("/api/library/pick-folder", methods=["POST"])
     def api_library_pick_folder():
         """弹系统原生文件夹选择框; 返回 {path} (用户取消则 path 为 null)。"""
@@ -10344,18 +10397,16 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
     @app.route("/api/library/import-from-path", methods=["POST"])
     def api_library_import_from_path():
-        """📁 把本地文件夹 / 选中的图片**搬进图库**: 先复制入库, 成功后源文件送**回收站**。
+        """📁 把本地文件夹 / 选中的图片导入图库 (外部源文件全程保持原位)。
 
         body: {path}          —— 选一个文件夹 (递归其内所有图片)
               {paths: [...]}  —— 选中的多张图片
               {dry_run: true} —— 只统计不动文件 (前端先预览再确认)
           - 文件名含 pixiv 作品ID → 入库 img/ (对账登记 + 后台补元数据 + 归入作者夹)
           - 无 ID (截图等)        → 入库 input/ 反搜收件箱
-          - 目标同名              → **跳过, 源文件留在原处** (
-                                    宁可不导, 也不动源文件)
-        语义变更: 原来是 shutil.move 硬搬 + 重复时 os.unlink 永久删,
-        误选一个文件夹就再也找不回。现在一律「复制成功 → 源文件进回收站(可还原)」,
-        送回收站失败只如实报告, 绝不回滚已入库的图。"""
+          - 目标同名/同页已有     → 按来源指纹与像素核对复用或列待确认
+        2026-11-21 4B-1 返修: 外部源文件只读, 转换/导入全部在应用临时副本上完成;
+        成功、复用、转换失败、待确认都不会移动或删除源文件。"""
         import shutil as _sh
         data = request.get_json(silent=True) or {}
         raw = str(data.get("path") or "").strip().strip('"')
@@ -10446,7 +10497,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                             "total": len(plan), "with_id": n_pixiv,
                             "without_id": len(plan) - n_pixiv, "conflicts": taken})
 
-        imported, redirected, skipped, failed, to_recycle = [], [], [], [], []
+        imported, redirected, skipped, failed = [], [], [], []
         reused, pending, convert_failed = [], [], []
         ingest_records: "list[dict]" = []
         custom_files: "list[Path]" = []      # 待登记的「自定义作品」文件 (入库成功才登记)
@@ -10475,10 +10526,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                         custom_files.append(Path(r["target"]))
                     else:
                         redirected.append(r["name"])
-                    to_recycle.append(str(fp))
                 elif r["kind"] == "reused":
                     reused.append(fp.name)
-                    to_recycle.append(str(fp))   # 图库已有同一张: 按导入语义送回收站
                 elif r["kind"] == "pending":
                     pending.append({"name": fp.name, "reason": r["note"]})
                     skipped.append(fp.name)      # 保留现有登记, 源文件留在原处
@@ -10488,12 +10537,6 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     convert_failed.append({"name": fp.name, "reason": r["note"]})
         finally:
             _cleanup_ingest_tmpdir(tmpdir)
-        # 入库成功后才动源文件: 送回收站 (可恢复), 失败只报告
-        if to_recycle:
-            recycled, recycle_bad = _recycle_files(to_recycle)
-        else:
-            recycled, recycle_bad = 0, []
-        recycle_failed = [Path(x).name for x in recycle_bad]
 
         # 「建自定义作品」: 把复制进 #其他来源#/ 的文件登记成 ext_ 壳作品 (标题=文件名)
         custom_created = []
@@ -10519,24 +10562,22 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             _kick_metadata_fill()
         n = len(imported) + len(redirected) + len(custom_created)
         if n or skipped or failed or custom_created or reused or convert_failed:
-            audit_log.record("add", "导入图片(源文件进回收站)",
+            audit_log.record("add", "导入图片(源文件原位)",
                              f"从 {src_label} 入库 {len(imported)} 张，"
                              f"转反搜收件箱 {len(redirected)} 张"
                              + (f"，建自定义作品 {len(custom_created)} 个" if custom_created else "")
                              + (f"，重复复用 {len(reused)} 张" if reused else "")
                              + (f"，待确认 {len(pending)} 张" if pending else "")
                              + (f"，转换失败保留原格式 {len(convert_failed)} 张" if convert_failed else "")
-                             + (f"，源文件已送回收站 {recycled} 个" if recycled else "")
-                             + (f"，同名跳过 {len(skipped)} 张(源文件未动)" if skipped else "")
-                             + (f"，送回收站失败 {len(recycle_failed)} 个" if recycle_failed else "")
-                             + (f"，复制失败 {len(failed)} 张" if failed else ""),
+                             + (f"，跳过 {len(skipped)} 张" if skipped else "")
+                             + (f"，复制失败 {len(failed)} 张" if failed else "")
+                             + "（外部源文件保持原位）",
                              n)
         return jsonify({"status": "ok", "imported": imported,
                         "redirected": redirected, "custom_created": custom_created,
                         "skipped": skipped, "reused": reused, "pending": pending,
                         "convert_failed": convert_failed,
-                        "failed": failed, "recycled": recycled,
-                        "recycle_failed": recycle_failed,
+                        "failed": failed,
                         "new_pages": rep.new_pages_linked,
                         "conflicts": getattr(rep, "conflicts", []) or []})
 

@@ -5186,14 +5186,12 @@ def t73_zero_page_download_marked_failed() -> None:
 
 
 def t74_import_from_folder_moves_files() -> None:
-    """T74: 本地导入 = 复制入库 + 源文件进回收站 (2026-09-17 语义变更)。
+    """T74: 本地导入 = 复制入库 + 外部源文件保持原位 (2026-11-21 4B-1 返修)。
 
     背景: 最初用浏览器 file input 上传(只能落副本, 浏览器不给源路径); 改成服务端直接
     操作磁盘后是 shutil.move 硬搬、重复时 os.unlink 永久删 —— 误选一个文件夹就找不回。
-    现在: 先 copy2 入库, **成功后才把源文件送回收站**(可还原), 送回收站失败只如实报告;
-    目标同名一律跳过、源文件留在原处。
-    测试里把 `_recycle_files` 换成桩(记录调用并真删, 等价于"进回收站后原处没了"),
-    避免测试真往系统回收站扔垃圾文件。paths 重定向到临时目录, 不碰生产库。"""
+    4B-1 起: 外部源文件只读, 导入全程使用应用临时副本; 成功/复用/失败/待确认都不动源文件。
+    测试里把 `_recycle_files` 换成记录桩, 断言导入流程从未调用它。"""
     import tempfile
     import shutil
     import utils.paths as upaths
@@ -5238,33 +5236,38 @@ def t74_import_from_folder_moves_files() -> None:
         assert (j["total"], j["with_id"], j["without_id"]) == (3, 2, 1), j
         assert (src / "900001_p0.png").exists(), "dry-run 不应移动任何文件"
 
-        # ② 执行: 先复制入库, 再把源文件送回收站 (核心断言 —— 旧实现是硬搬/永久删)
+        # ② 执行: 源文件只读, 应用只用临时副本入库 (核心断言 —— 源文件必须还在原处)
+        src_bytes = {nm: (src / nm).read_bytes()
+                     for nm in ("900001_p0.png", "900001_p1.png", "screenshot.png")}
         r = client.post("/api/library/import-from-path", json={"path": str(src)})
         j = r.get_json()
         assert r.status_code == 200, j
         assert sorted(j["imported"]) == ["900001_p0.png", "900001_p1.png"], j
         assert j["redirected"] == ["screenshot.png"], j
-        assert j["recycled"] == 3 and not j["recycle_failed"], j
+        assert recycle_calls == [], "导入流程不得调用回收站"
         for nm in ("900001_p0.png", "900001_p1.png", "screenshot.png"):
-            assert not (src / nm).exists(), f"源文件应已进回收站(原处不该再有): {nm}"
-        # 送回收站的必须是源文件本身, 不是图库里的副本
-        sent = recycle_calls[-1]
-        assert all(Path(x).parent == src for x in sent), sent
+            assert (src / nm).is_file(), f"源文件必须保持原位: {nm}"
+            assert (src / nm).read_bytes() == src_bytes[nm], f"源文件字节不得改变: {nm}"
         assert (src / "note.txt").exists(), "非图片文件不应被动"
         assert (tmp / "img" / "900001_p0.png").exists(), "未落到图库 img/"
         assert (tmp / "input" / "screenshot.png").exists(), "无作品ID未转反搜收件箱"
 
-        # ②b 同名重复 → 跳过, **源文件留在原处** (宁可不导也不动源文件)
+        # ②b 同页已有不同内容 → 保留现有登记并列待确认, 源文件仍在原处
         dup = tmp / "downloads2"
         dup.mkdir(parents=True)
-        (dup / "900001_p0.png").write_bytes(b"content-differs" * 4)
+        dup_bytes = b"content-differs" * 4
+        (dup / "900001_p0.png").write_bytes(dup_bytes)
         r = client.post("/api/library/import-from-path", json={"path": str(dup)})
         j = r.get_json()
         assert r.status_code == 200, j
         assert j["skipped"] == ["900001_p0.png"] and not j["imported"], j
-        assert (dup / "900001_p0.png").exists(), "同名重复时源文件必须留在原处"
+        assert j["pending"] and ("无法确认" in j["pending"][0]["reason"]
+                                 or "无法打开" in j["pending"][0]["reason"]), j
+        assert (dup / "900001_p0.png").is_file(), "待确认时源文件必须留在原处"
+        assert (dup / "900001_p0.png").read_bytes() == dup_bytes
         assert (tmp / "img" / "900001_p0.png").read_bytes().startswith(b"a" * 32), \
-            "同名重复不该覆盖库内已有文件"
+            "待确认不该覆盖库内已有文件"
+        assert recycle_calls == []
 
         # ②c 选中的多张图片 (paths 模式): 与文件夹模式同一套语义
         pick = tmp / "pick"
@@ -5282,9 +5285,9 @@ def t74_import_from_folder_moves_files() -> None:
         j = r.get_json()
         assert r.status_code == 200, j
         assert j["imported"] == ["900002_p0.png"] and j["redirected"] == ["shot.png"], j
-        assert j["recycled"] == 2, j
-        assert not (pick / "900002_p0.png").exists() and not (pick / "shot.png").exists(), \
-            "多选导入的源文件也应进回收站"
+        assert (pick / "900002_p0.png").is_file() and (pick / "shot.png").is_file(), \
+            "多选导入的外部源文件也应保持原位"
+        assert recycle_calls == []
         assert (pick / "note.txt").exists(), "非图片不应被动"
         # 多选模式的安全闸: 文件不存在 / 图库内部 → 400
         assert client.post("/api/library/import-from-path",
@@ -10408,7 +10411,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261121g" and _mss.group(1) == "20261121g", \
+    assert _mjs and _mss and _mjs.group(1) == "20261121h" and _mss.group(1) == "20261121h", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10503,7 +10506,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261121g', html) and _re.search(r'app\.js\?v=20261121g', html), \
+    assert _re.search(r'style\.css\?v=20261121h', html) and _re.search(r'app\.js\?v=20261121h', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10911,7 +10914,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261121g" in html and "app.js?v=20261121g" in html, \
+        assert "style.css?v=20261121h" in html and "app.js?v=20261121h" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13294,7 +13297,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261121g" in _h and "style.css?v=20261121g" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261121h" in _h and "style.css?v=20261121h" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14663,7 +14666,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261121g" in html and "app.js?v=20261121g" in html
+            assert "style.css?v=20261121h" in html and "app.js?v=20261121h" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14772,7 +14775,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261121g" in html and "app.js?v=20261121g" in html
+            assert "style.css?v=20261121h" in html and "app.js?v=20261121h" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14883,7 +14886,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261121g" in html and "app.js?v=20261121g" in html
+    assert "style.css?v=20261121h" in html and "app.js?v=20261121h" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14923,7 +14926,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261121g" in html
+    assert "20261121h" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15634,7 +15637,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261121g" in html
+    assert "同步磁盘索引" in html and "20261121h" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -15645,7 +15648,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     i = js.index("$('#lib-sync-btn').addEventListener")
     assert "manualSyncDisk()" in js[i:i + 200], "手动同步要复用后台进度条"
     j0 = js.index("async function libSync")
-    body = js[j0:js.index("// 📁 把本地图片搬进图库", j0)]
+    body = js[j0:js.index("// 📁 把本地图片导入图库", j0)]
     assert "clean-missing" not in body and "cleanMissing" not in body, \
         "周期轮询/普通同步不得触发缺失清理"
 
@@ -15730,7 +15733,7 @@ def t169_png_ingest_normalization() -> None:
         bad.write_bytes(b"not an image")
         r6 = normalize_to_png(bad, delete_source=True)
         assert not r6["ok"] and not r6["converted"] and bad.is_file(), r6
-        assert "转换失败" in r6["note"] or "无法读取" in r6["note"], r6
+        assert r6["reason"] == "unreadable" and "无法打开" in r6["note"], r6
 
         jpg2 = tmp / "dup.jpg"
         Image.new("RGB", (5, 5), (1, 1, 1)).save(jpg2, "JPEG")
@@ -15741,7 +15744,7 @@ def t169_png_ingest_normalization() -> None:
         assert r8["ok"] and r8["converted"], r8
         assert (tmp / "dup.png.bak").is_file()
 
-        # ② 下载端: 相同 PNG 复用; 不同内容备份后覆盖; 转换记录写页
+        # ② 下载端: 普通下载同图复用 / 不同图保留现图 / 强制重下备份覆盖 / 损坏输入
         dl = tmp / "dl"
         dl.mkdir()
         same_png = dl / "990501_p0.png"
@@ -15750,29 +15753,129 @@ def t169_png_ingest_normalization() -> None:
         Image.new("RGB", (10, 10), (50, 60, 70)).save(same_jpg, "JPEG")
         c = PixivDownloader.__new__(PixivDownloader)
         c.reporter = _Rep()
+        c.save_folder = str(dl)
         db = PixivDatabase(str(tmp / "dl.db"))
         try:
             db.change_work_status("990501", WSt.DONE, title="t", total_pages=1)
             db.mark_page_status("990501", 0, PSt.DONE, local_path="990501_p0.png")
             c.db = db
-            conv = c._normalize_download(str(same_jpg), False)
-            assert conv["ok"] and conv.get("reuse") and conv["current_path"] == str(same_png), conv
+            ok, conv = c._finalize_downloaded_page(
+                "990501", 0, str(same_jpg), old_rel="990501_p0.png",
+                force_overwrite=False)
+            assert ok and conv.get("reuse") and conv["current_path"] == str(same_png), conv
             assert not same_jpg.exists() and same_png.is_file()
-            c._record_page_conversion("990501", 0, conv)
-            # 复用已有 PNG 时不覆盖旧转换记录
             assert db.get_page_conversion("990501", 0)["converted_at"] is None
 
+            # 普通下载/补页遇到不同内容: 保留现图与登记, 报告冲突, 不覆盖
+            png_before = hashlib.md5(same_png.read_bytes()).hexdigest()
             diff_jpg = dl / "990501_p0.jpg"
             Image.new("RGB", (10, 10), (200, 10, 10)).save(diff_jpg, "JPEG")
-            conv2 = c._normalize_download(str(diff_jpg), True)
-            assert conv2["converted"] and Path(conv2["current_path"]).is_file(), conv2
-            assert (dl / "990501_p0.png.bak").is_file()
-            db.mark_page_status("990501", 0, PSt.DONE, local_path="990501_p0.png")
-            c._record_page_conversion("990501", 0, conv2)
+            ok2, conv2 = c._finalize_downloaded_page(
+                "990501", 0, str(diff_jpg), old_rel="990501_p0.png",
+                force_overwrite=False)
+            assert not ok2 and conv2.get("conflict"), conv2
+            assert hashlib.md5(same_png.read_bytes()).hexdigest() == png_before, \
+                "普通下载不得覆盖现图"
+            assert not diff_jpg.exists()
+            assert db.get_page_info("990501", 0).local_path == "990501_p0.png"
+
+            # 强制重下: 备份 .bak 后切换新图, 来源记录更新
+            force_jpg = dl / "990501_p0.jpg"
+            Image.new("RGB", (10, 10), (10, 200, 10)).save(force_jpg, "JPEG")
+            ok3, conv3 = c._finalize_downloaded_page(
+                "990501", 0, str(force_jpg), old_rel="990501_p0.png",
+                force_overwrite=True)
+            assert ok3 and conv3.get("converted"), conv3
+            assert (dl / "990501_p0.png.bak").is_file(), "强制重下要先备份旧图"
             rec = db.get_page_conversion("990501", 0)
             assert rec["source_format"] == "jpg" and rec["source_md5"], rec
             assert rec["converted_at"] and rec["current_format"] == "png", rec
             assert rec["source_file_size"] > 0
+            new_png_bytes = (dl / "990501_p0.png").read_bytes()
+
+            # 损坏输入 + 旧版本: 旧 PNG 与来源记录保持不变, 任务失败
+            bad_jpg = dl / "990501_p0.jpg"
+            bad_jpg.write_bytes(b"broken")
+            ok4, conv4 = c._finalize_downloaded_page(
+                "990501", 0, str(bad_jpg), old_rel="990501_p0.png",
+                force_overwrite=False)
+            assert not ok4 and conv4.get("reason") == "unreadable", conv4
+            assert (dl / "990501_p0.png").read_bytes() == new_png_bytes, \
+                "损坏输入不得替换旧 PNG"
+            rec2 = db.get_page_conversion("990501", 0)
+            assert rec2["source_md5"] == rec["source_md5"], "旧来源记录不得被清空"
+            assert any("无法打开" in w for w in c.reporter.warns), c.reporter.warns
+
+            # 无旧版本 + 损坏输入: 不登记损坏文件, 页标记失败
+            db.change_work_status("990509", WSt.DONE, title="t2", total_pages=1)
+            bad2 = dl / "990509_p0.jpg"
+            bad2.write_bytes(b"broken2")
+            ok5, conv5 = c._finalize_downloaded_page(
+                "990509", 0, str(bad2), old_rel=None, force_overwrite=False)
+            assert not ok5 and conv5.get("reason") == "unreadable", conv5
+            pi = db.get_page_info("990509", 0)
+            assert pi is None or int(pi.status or 0) == PSt.FAILED, pi
+            assert not (dl / "990509_p0.png").exists()
+
+            # 登记失败: 文件保留, 返回失败并标明阶段
+            good_jpg = dl / "990509_p0.jpg"
+            Image.new("RGB", (5, 5), (7, 7, 7)).save(good_jpg, "JPEG")
+            orig_mark = db.mark_page_status
+
+            def _boom(*a, **k):
+                raise RuntimeError("synthetic db locked")
+            db.mark_page_status = _boom
+            try:
+                ok6, conv6 = c._finalize_downloaded_page(
+                    "990509", 0, str(good_jpg), old_rel=None, force_overwrite=False)
+            finally:
+                db.mark_page_status = orig_mark
+            assert not ok6 and (dl / "990509_p0.png").is_file(), "登记失败要保留文件"
+            assert any("登记失败" in w for w in c.reporter.warns), c.reporter.warns
+
+            # 转换失败但原格式可读: 登记原格式并标为需要处理
+            import core.image_format as imf
+            orig_norm = imf.normalize_to_png
+            db.change_work_status("990511", WSt.DONE, title="t3", total_pages=1)
+            jpg511 = dl / "990511_p0.jpg"
+            Image.new("RGB", (6, 6), (8, 9, 10)).save(jpg511, "JPEG")
+
+            def _fake_norm(path, **kw):
+                return {"ok": False, "converted": False, "reason": "convert_failed",
+                        "current_path": str(path), "current_format": "jpg",
+                        "current_size": os.path.getsize(path),
+                        "source_format": None, "source_file_size": None,
+                        "source_md5": None, "converted_at": None,
+                        "note": "PNG 保存失败（synthetic）"}
+            imf.normalize_to_png = _fake_norm
+            try:
+                ok7, conv7 = c._finalize_downloaded_page(
+                    "990511", 0, str(jpg511), old_rel=None, force_overwrite=False)
+            finally:
+                imf.normalize_to_png = orig_norm
+            assert ok7 and conv7["current_format"] == "jpg", conv7
+            assert jpg511.is_file()
+            r7rec = db.get_page_conversion("990511", 0)
+            assert "PNG 保存失败" in (r7rec["convert_note"] or ""), r7rec
+            assert any("后续可重试" in w or "需要处理" in w for w in c.reporter.warns)
+
+            # 转换记录写入失败: 文件与页登记保留, 提示具体阶段
+            db.change_work_status("990512", WSt.DONE, title="t4", total_pages=1)
+            jpg512 = dl / "990512_p0.jpg"
+            Image.new("RGB", (6, 6), (11, 12, 13)).save(jpg512, "JPEG")
+            orig_set = db.set_page_conversion
+
+            def _set_boom(*a, **k):
+                raise RuntimeError("synthetic conversion record failure")
+            db.set_page_conversion = _set_boom
+            try:
+                ok8, conv8 = c._finalize_downloaded_page(
+                    "990512", 0, str(jpg512), old_rel=None, force_overwrite=False)
+            finally:
+                db.set_page_conversion = orig_set
+            assert ok8, "文件与登记成功时不应整体失败"
+            assert (dl / "990512_p0.png").is_file()
+            assert any("转换记录写入失败" in w for w in c.reporter.warns), c.reporter.warns
         finally:
             db.close()
 
@@ -15782,8 +15885,9 @@ def t169_png_ingest_normalization() -> None:
         img.mkdir()
         input_root.mkdir()
         external = tmp / "external"
-        external.mkdir()
-        src_jpg = external / "990502_p0.jpg"
+        (external / "a").mkdir(parents=True)
+        (external / "b").mkdir(parents=True)
+        src_jpg = external / "a" / "990502_p0.jpg"
         Image.new("RGB", (12, 8), (30, 40, 50)).save(src_jpg, "JPEG")
 
         orig_ud = upaths.user_data
@@ -15809,16 +15913,17 @@ def t169_png_ingest_normalization() -> None:
             assert j["imported"] == ["990502_p0.png"], j
             assert (img / "990502_p0.png").is_file()
             assert not (img / "990502_p0.jpg").exists(), "图库不得保留原 JPG"
-            assert src_jpg.is_file(), "外部源文件在转换阶段保持原位"
-            assert recycle_calls and any(
-                Path(x).resolve() == src_jpg.resolve() for x in recycle_calls[-1]), recycle_calls
+            src_bytes = src_jpg.read_bytes()
+            assert src_jpg.is_file(), "外部源文件必须保持原位"
+            assert src_jpg.read_bytes() == src_bytes, "外部源文件字节不得改变"
+            assert recycle_calls == [], "导入流程不得调用回收站"
             cvt = client.get(
                 "/api/library/page-conversion?artwork_id=990502&page_num=0").get_json()
             assert cvt["status"] == "ok" and cvt["converted"] is True, cvt
             assert cvt["source_format"] == "jpg" and cvt["current_format"] == "png", cvt
             assert cvt["source_md5"] and cvt["source_file_size"] > 0, cvt
 
-            # 同一 JPG 重复导入: 原始指纹命中, 复用已有登记, 不落第二份
+            # 同一 JPG 重复导入: 原始指纹命中且现图可用, 复用已有登记, 不落第二份
             calls_before = len(recycle_calls)
             r2 = client.post("/api/library/import-from-path",
                              json={"paths": [str(src_jpg)]})
@@ -15829,11 +15934,13 @@ def t169_png_ingest_normalization() -> None:
                     "SELECT COUNT(*) FROM pages WHERE artwork_id='990502'").fetchone()[0]
                 assert n == 1, n
             assert (img / "990502_p0.png").is_file()
-            assert len(recycle_calls) == calls_before + 1, "复用后源文件按导入语义送回收站"
+            assert src_jpg.is_file() and src_jpg.read_bytes() == src_bytes, \
+                "重复导入后源文件仍在原位且字节不变"
+            assert len(recycle_calls) == calls_before, "重复导入不得调用回收站"
 
             # 同页已有 PNG 但内容不同: 保留现有登记, 列待确认, 源文件留在原处
             png_before = hashlib.md5((img / "990502_p0.png").read_bytes()).hexdigest()
-            src_diff = external / "990502_p0.jpg"
+            src_diff = external / "b" / "990502_p0.jpg"
             Image.new("RGB", (12, 8), (220, 20, 20)).save(src_diff, "JPEG")
             calls_before = len(recycle_calls)
             r3 = client.post("/api/library/import-from-path",
@@ -15842,9 +15949,52 @@ def t169_png_ingest_normalization() -> None:
             assert j3["imported"] == [] and j3["pending"], j3
             assert "无法确认" in j3["pending"][0]["reason"], j3
             assert src_diff.is_file() and len(recycle_calls) == calls_before, \
-                "待确认时源文件不得送回收站"
+                "待确认时源文件不得移动或送回收站"
             assert hashlib.md5((img / "990502_p0.png").read_bytes()).hexdigest() \
                 == png_before, "待确认不得覆盖现有 PNG"
+
+            # 问题 2: 现图被移出库后再导入同一 JPG → 必须补回, 不能只报 reused
+            moved_dir = external / "out_of_lib"
+            moved_dir.mkdir()
+            (img / "990502_p0.png").replace(moved_dir / "990502_p0.png")
+            r3b = client.post("/api/library/import-from-path",
+                              json={"paths": [str(src_jpg)]})
+            j3b = r3b.get_json()
+            assert (img / "990502_p0.png").is_file(), ("现图缺失时必须补回", j3b)
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                pg = db2.conn.execute(
+                    "SELECT local_path FROM pages WHERE artwork_id='990502' AND page_num=0"
+                ).fetchone()
+                assert pg and pg[0] == "990502_p0.png", pg
+            assert src_jpg.is_file() and src_jpg.read_bytes() == src_bytes, \
+                "补回流程同样不得动源文件"
+
+            # 问题 2: 现图存在但打不开 → 保留现有登记, 列待确认, 不覆盖损坏文件
+            broken = img / "990502_p0.png"
+            broken.write_bytes(b"broken-png")
+            broken_bytes = broken.read_bytes()
+            r3c = client.post("/api/library/import-from-path",
+                              json={"paths": [str(src_jpg)]})
+            j3c = r3c.get_json()
+            assert j3c["imported"] == [] and j3c["pending"], j3c
+            assert "无法打开" in j3c["pending"][0]["reason"], j3c
+            assert broken.read_bytes() == broken_bytes, "损坏现图不得被覆盖"
+            assert src_jpg.is_file() and len(recycle_calls) == calls_before
+
+            # 文件夹导入: 外部源文件同样保持原位
+            folder_src = external / "folder_src"
+            folder_src.mkdir()
+            f_jpg = folder_src / "990510_p0.jpg"
+            Image.new("RGB", (11, 7), (70, 80, 90)).save(f_jpg, "JPEG")
+            f_bytes = f_jpg.read_bytes()
+            r3d = client.post("/api/library/import-from-path",
+                              json={"path": str(folder_src)})
+            j3d = r3d.get_json()
+            assert j3d["imported"] == ["990510_p0.png"], j3d
+            assert (img / "990510_p0.png").is_file()
+            assert f_jpg.is_file() and f_jpg.read_bytes() == f_bytes, \
+                "文件夹导入不得移动或改动源文件"
+            assert len(recycle_calls) == calls_before
 
             # 原生 PNG / 动图 GIF / 静态 WEBP / 转换失败
             native_src = external / "990504_p0.png"
@@ -15856,6 +16006,7 @@ def t169_png_ingest_normalization() -> None:
             Image.new("RGB", (6, 6), (4, 5, 6)).save(webp_src, "WEBP")
             bad_src = external / "990507_p0.jpg"
             bad_src.write_bytes(b"broken")
+            bad_bytes = bad_src.read_bytes()
             r4 = client.post("/api/library/import-from-path",
                              json={"paths": [str(native_src), str(gif_src),
                                              str(webp_src), str(bad_src)]})
@@ -15864,6 +16015,10 @@ def t169_png_ingest_normalization() -> None:
             assert (img / "990505_p0.gif").is_file(), j4
             assert (img / "990506_p0.png").is_file(), j4
             assert (img / "990507_p0.jpg").is_file(), "转换失败要保留可用原文件"
+            for src in (native_src, gif_src, webp_src, bad_src):
+                assert src.is_file(), f"源文件必须保持原位: {src.name}"
+            assert bad_src.read_bytes() == bad_bytes
+            assert len(recycle_calls) == calls_before, "任何导入结果都不得调用回收站"
             cf = {x["name"]: x["reason"] for x in j4["convert_failed"]}
             assert "990507_p0.jpg" in cf, j4
             assert not (img / "990505_p0.png").exists(), "动图不得被转成 PNG"
@@ -15906,18 +16061,25 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261121g" in html
+    assert "20261121h" in html
     for token in ("转为 PNG", "重复导入已复用", "张待确认", "转 PNG 失败",
+                  "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
         assert token in js, f"缺少前端导入提示 {token}"
+    assert "源文件会被送进回收站" not in js, "导入文案不得再声称源文件进回收站"
+    assert "源文件已进回收站" not in js, "导入完成提示不得再声称源文件进回收站"
     srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
     for token in ("_ingest_image_file", "_record_ingested_conversions",
-                  "core.image_format", "normalize_to_png", "page-conversion"):
+                  "core.image_format", "normalize_to_png", "page-conversion",
+                  "外部源文件全程保持原位", "源文件原位"):
         assert token in srv, f"缺少服务端接入 {token}"
     craw = (PROJECT_ROOT / "core" / "crawler.py").read_text(encoding="utf-8")
     for token in ("normalize_to_png", "_normalize_download",
-                  "_record_page_conversion"):
+                  "_record_page_conversion", "_finalize_downloaded_page",
+                  "same_page_conflict", "is_readable", "cleanup_failed"):
         assert token in craw, f"缺少下载端接入 {token}"
+    assert craw.count("_finalize_downloaded_page") >= 3, \
+        "浏览器与 HTTP 两路都必须共用同一收尾流程"
 
 
 def main() -> int:

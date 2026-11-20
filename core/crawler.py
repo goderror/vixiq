@@ -584,16 +584,39 @@ class PixivDownloader:
 
     # ---- 入库格式统一 (2026-11-21 4B-1, 与上传/路径导入共用 core.image_format) ----
     def _normalize_download(self, save_path: str, force_overwrite: bool = False) -> dict:
-        """下载落盘后转 PNG。目标 PNG 已存在时先按像素核对:
+        """下载落盘后按入库规则处理 (普通下载/补页/强制重下共用)。
 
-        - 内容一致 → 删掉刚下的 JPG, 复用已有 PNG (不重复登记, 不动旧转换记录);
-        - 内容不同 → 旧 PNG 备份 `.bak` 后覆盖 (强制重下沿用既有备份流程)。"""
-        from core.image_format import normalize_to_png, same_pixels
-        conv = normalize_to_png(save_path, delete_source=True,
-                                overwrite=bool(force_overwrite))
-        if not conv.get("ok") and conv.get("note") == "目标 PNG 已存在":
+        - 目标 PNG 不存在: 静态图直接转 PNG;
+        - 目标 PNG 已存在且像素一致: 删掉刚下的 JPG, 复用已有 PNG;
+        - 已存在但内容不同/无法确认: 普通下载与补页保留现图 (conflict=True, 不覆盖),
+          只有明确强制重下才备份 `.bak` 后覆盖;
+        - 转换失败: 保留可用原文件; 打不开的输入标记 reason='unreadable'。"""
+        from core.image_format import normalize_to_png, same_pixels, is_readable
+        png = os.path.splitext(save_path)[0] + ".png"
+        had_existing = os.path.isfile(png)
+        conv = normalize_to_png(save_path, delete_source=True, overwrite=False)
+        if not conv.get("ok") and conv.get("reason") == "exists":
             png = os.path.splitext(save_path)[0] + ".png"
-            if same_pixels(save_path, png):
+            if not is_readable(save_path):
+                # 新下载文件打不开: 保留现图, 按「输入损坏」报告, 不能当同页冲突
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                conv.update({
+                    "ok": False, "conflict": True, "keep_existing": True,
+                    "current_path": png, "current_format": "png",
+                    "current_size": (os.path.getsize(png)
+                                     if os.path.isfile(png) else None),
+                    "source_format": None, "source_file_size": None,
+                    "source_md5": None, "converted_at": None,
+                    "reason": "unreadable",
+                    "note": "新下载文件无法打开，保留现有文件",
+                })
+                self.reporter.warn(
+                    f"⚠ 新下载文件无法打开，保留现有文件: {os.path.basename(png)}")
+                return conv
+            if had_existing and is_readable(png) and same_pixels(save_path, png):
                 try:
                     os.remove(save_path)
                 except Exception:
@@ -604,23 +627,43 @@ class PixivDownloader:
                     "current_size": os.path.getsize(png),
                     "source_format": None, "source_file_size": None,
                     "source_md5": None, "converted_at": None,
-                    "note": "已有相同 PNG，复用",
+                    "reason": "", "note": "已有相同 PNG，复用",
                 }
                 self.reporter.log(f"♻ 已有相同 PNG，复用: {os.path.basename(png)}")
+            elif not force_overwrite:
+                # 普通下载/补页: 同页已有不同内容 → 保留现图与登记, 只报告冲突
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                conv.update({
+                    "ok": False, "conflict": True, "keep_existing": True,
+                    "current_path": png, "current_format": "png",
+                    "current_size": (os.path.getsize(png)
+                                     if os.path.isfile(png) else None),
+                    "source_format": None, "source_file_size": None,
+                    "source_md5": None, "converted_at": None,
+                    "reason": "same_page_conflict",
+                    "note": "同页已有不同内容的图片，保留现有文件",
+                })
+                self.reporter.warn(
+                    f"⚠ 同页已有不同内容的图片，保留现有文件: {os.path.basename(png)}")
             else:
                 conv = normalize_to_png(save_path, delete_source=True, overwrite=True)
         if conv.get("converted"):
             self.reporter.log(
                 f"🔄 已转存为 PNG: {os.path.basename(conv['current_path'])}")
-        elif not conv.get("ok"):
+        elif not conv.get("ok") and not conv.get("conflict"):
             self.reporter.warn(
-                f"⚠ 保留原格式（{conv.get('note')}）: {os.path.basename(save_path)}")
+                f"⚠ 转换未完成（{conv.get('note')}）: {os.path.basename(save_path)}")
+        if conv.get("cleanup_failed"):
+            self.reporter.warn("⚠ 临时副本清理失败，可稍后手动清理")
         return conv
 
-    def _record_page_conversion(self, aid: str, pn: int, conv: dict) -> None:
+    def _record_page_conversion(self, aid: str, pn: int, conv: dict) -> bool:
         """把转换来源记录写到页上 (失败只补原因, 不清空已有来源记录)。"""
         if conv.get("reuse"):
-            return          # 复用已有 PNG: 旧记录仍然可信
+            return True     # 复用已有 PNG: 旧记录仍然可信
         ok = bool(conv.get("ok"))
         try:
             self.db.set_page_conversion(
@@ -633,8 +676,81 @@ class PixivDownloader:
                 convert_note=(conv.get("note") or None),
                 replace=ok,
             )
-        except Exception:
-            pass
+            return True
+        except Exception as e:
+            self.reporter.warn(
+                f"⚠ 转换记录写入失败（文件已保留，可重试）: {str(e).splitlines()[0]}")
+            return False
+
+    def _finalize_downloaded_page(self, aid: str, pn: int, save_path: str, *,
+                                  old_rel: "str | None" = None,
+                                  force_overwrite: bool = False) -> "tuple[bool, dict]":
+        """下载落盘后的统一收尾: 转 PNG → 校验 → 登记 → 写转换记录。
+
+        返回 (success, conv)。success=False 时原因必须出现在任务日志里:
+        - 同页已有不同内容: 保留现图与旧登记 (conv.conflict);
+        - 新文件无法打开: 不登记损坏文件; 旧图可用则保留旧登记, 否则标 FAILED;
+        - 转换失败但原格式可读: 登记原格式并在日志标为需要处理;
+        - 登记/转换记录写入失败: 保留可用文件并标明阶段, 可重试。"""
+        from core.image_format import is_readable
+        conv = self._normalize_download(save_path, force_overwrite)
+        if conv.get("conflict"):
+            return False, conv
+        cur_path = conv.get("current_path")
+        if not conv.get("ok") and (
+                conv.get("reason") == "unreadable"
+                or not cur_path or not is_readable(cur_path)):
+            # 损坏/打不开的下载产物绝不能成为当前图; 刚下载的文件不是用户源文件
+            try:
+                os.remove(save_path)
+            except Exception:
+                pass
+            old_ok = None
+            if old_rel:
+                cand = os.path.join(self.save_folder,
+                                    str(old_rel).replace("/", os.sep))
+                if os.path.isfile(cand) and is_readable(cand):
+                    old_ok = cand
+            if not old_ok:
+                try:
+                    self.db.mark_page_status(aid, pn, PSt.FAILED)
+                except Exception as e:
+                    self.reporter.warn(
+                        f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
+            self.reporter.warn(
+                f"⚠ 新下载文件无法打开，未登记: {os.path.basename(save_path)}"
+                + ("（已保留旧文件与登记）" if old_ok else ""))
+            return False, conv
+        if not cur_path:
+            self.reporter.warn("⚠ 转换结果缺少文件路径，未登记")
+            return False, conv
+        try:
+            rel_path = Path(cur_path).relative_to(self.save_folder).as_posix()
+        except Exception as e:
+            self.reporter.warn(
+                f"⚠ 入库路径无效，未登记: {str(e).splitlines()[0]}")
+            return False, conv
+        fmd5 = fsize = None
+        try:
+            from utils.hashutil import md5_of
+            fmd5 = md5_of(cur_path)
+            fsize = os.path.getsize(cur_path)
+        except Exception as e:
+            self.reporter.warn(
+                f"⚠ 读取新文件大小/指纹失败: {str(e).splitlines()[0]}")
+        try:
+            self.db.mark_page_status(aid, pn, PSt.DONE, rel_path,
+                                     md5=fmd5, file_size_bytes=fsize)
+        except Exception as e:
+            self.reporter.warn(
+                f"⚠ 登记失败（文件已保留，可重试）: {str(e).splitlines()[0]}")
+            return False, conv
+        self._record_page_conversion(aid, pn, conv)
+        if not conv.get("ok"):
+            self.reporter.warn(
+                f"⚠ 已保留原格式（{conv.get('note')}），后续可重试转 PNG: "
+                f"{os.path.basename(cur_path)}")
+        return True, conv
 
     def _download_http(self, artwork_id: str, ctx, *, author_id=None,
                        author_name=None, force_overwrite: bool = False, pages=None):
@@ -713,26 +829,26 @@ class PixivDownloader:
                     success_count += 1
                     continue
             if self.download_with_retry(img_url, save_path):
-                conv = self._normalize_download(save_path, force_overwrite)
-                save_path = conv["current_path"]
-                filename = os.path.basename(save_path)
-                rel_path = Path(save_path).relative_to(self.save_folder).as_posix()
-                fmd5 = fsize = None
-                try:
-                    from utils.hashutil import md5_of
-                    fmd5 = md5_of(save_path)
-                    fsize = os.path.getsize(save_path)
-                except Exception:
-                    pass
-                self.db.mark_page_status(artwork_id, pn, PSt.DONE, rel_path,
-                                         md5=fmd5, file_size_bytes=fsize)
-                self._record_page_conversion(artwork_id, pn, conv)
-                self.reporter.progress(i, total, f"{filename} → 成功")
+                ok, conv = self._finalize_downloaded_page(
+                    artwork_id, pn, save_path,
+                    old_rel=(pinfo.local_path if pinfo is not None else None),
+                    force_overwrite=force_overwrite)
+                if ok:
+                    filename = os.path.basename(conv["current_path"])
+                    self.reporter.progress(i, total, f"{filename} → 成功")
+                    success_count += 1
+                    newly_saved += 1
+                else:
+                    why = "同页冲突，保留现有文件" if conv.get("conflict") else "失败"
+                    self.reporter.progress(i, total, f"{filename} → {why}")
+                    self.not_found.append(filename)
                 self._fire_progress("artwork_page", i, total, filename[:10])
-                success_count += 1
-                newly_saved += 1
             else:
-                self.db.mark_page_status(artwork_id, pn, PSt.FAILED)
+                try:
+                    self.db.mark_page_status(artwork_id, pn, PSt.FAILED)
+                except Exception as e:
+                    self.reporter.warn(
+                        f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
                 self.reporter.progress(i, total, f"{filename} → 失败")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 self.not_found.append(filename)
@@ -948,7 +1064,9 @@ class PixivDownloader:
             filename = f"{aid}_p{page_num}.{ext}"
             save_path = os.path.join(save_dir, filename)
 
-            if not force_overwrite and self.db.get_page_info(aid, page_num).status == PSt.DONE:
+            pinfo = self.db.get_page_info(aid, page_num)
+            if not force_overwrite and pinfo is not None \
+                    and int(pinfo.status or 0) == PSt.DONE:
                 self.reporter.progress(i, total, f"{filename} → 已存在")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 success_count += 1
@@ -966,29 +1084,26 @@ class PixivDownloader:
                     self.reporter.warn(f"旧版备份失败(跳过备份): {str(e).splitlines()[0]}")
             if self.download_with_retry(url, save_path):
                 # 入库统一: 静态图转 PNG + 写转换记录 (动图保持原格式)
-                conv = self._normalize_download(save_path, force_overwrite)
-                save_path = conv["current_path"]
-                filename = os.path.basename(save_path)
-                # 图库规范: local_path 一律正斜杠 (Windows 的 str(Path) 会给反斜杠,
-                # 2026-09-15 审计发现新下载行仍在写 \, 与对账/同步口径不一致)
-                rel_path = Path(save_path).relative_to(self.save_folder).as_posix()
-                # 内容指纹落库: 移动/改名后对账也能凭 md5 认回来
-                fmd5 = fsize = None
-                try:
-                    from utils.hashutil import md5_of
-                    fmd5 = md5_of(save_path)
-                    fsize = os.path.getsize(save_path)
-                except Exception:
-                    pass
-                self.db.mark_page_status(aid, page_num, PSt.DONE, rel_path,
-                                         md5=fmd5, file_size_bytes=fsize)
-                self._record_page_conversion(aid, page_num, conv)
-                self.reporter.progress(i, total, f"{filename} → 成功")
+                ok, conv = self._finalize_downloaded_page(
+                    aid, page_num, save_path,
+                    old_rel=(pinfo.local_path if pinfo is not None else None),
+                    force_overwrite=force_overwrite)
+                if ok:
+                    filename = os.path.basename(conv["current_path"])
+                    self.reporter.progress(i, total, f"{filename} → 成功")
+                    success_count += 1
+                    newly_saved += 1
+                else:
+                    why = "同页冲突，保留现有文件" if conv.get("conflict") else "失败"
+                    self.reporter.progress(i, total, f"{filename} → {why}")
+                    self.not_found.append(filename)
                 self._fire_progress("artwork_page", i, total, filename[:10])
-                success_count += 1
-                newly_saved += 1
             else:
-                self.db.mark_page_status(aid, page_num, PSt.FAILED)
+                try:
+                    self.db.mark_page_status(aid, page_num, PSt.FAILED)
+                except Exception as e:
+                    self.reporter.warn(
+                        f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
                 self.reporter.progress(i, total, f"{filename} → 失败")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 self.not_found.append(filename)

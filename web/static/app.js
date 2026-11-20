@@ -4072,7 +4072,7 @@ async function libSync(showToast = false, periodic = false) {
   }
 }
 
-// 📁 把本地图片搬进图库 —— 先复制入库, 成功后**源文件送回收站**(可还原), 效果是搬动。
+// 📁 把本地图片导入图库 —— 外部源文件全程保持原位，应用只用临时副本处理。
 // 两个入口 (Windows 通用对话框一次只能"选多张文件"或"选一个文件夹", 没有合一的形态):
 //   选文件夹  → 递归其内所有图片
 //   选多张图片 → 只导选中的那几张
@@ -4115,7 +4115,7 @@ async function importLocalImages(mode) {
       '· 静态图片统一转为 PNG（图库只保留 PNG，原 JPG 不归档）',
     ];
     if (pre.conflicts) lines.push(`· 其中 ${pre.conflicts} 张目标已存在，将按来源指纹/像素核对复用或列为待确认`);
-    lines.push('', '♻ 导入成功后，源文件会被送进回收站（可从回收站还原），确定继续？');
+    lines.push('', '源文件全程保持原位（不会被移走或删除），确定继续？');
     if (!confirm(lines.join('\n'))) return;
   }
 
@@ -4132,10 +4132,9 @@ async function importLocalImages(mode) {
     if (r.reused && r.reused.length) parts.push(`♻ ${r.reused.length} 张重复导入已复用`);
     if (r.pending && r.pending.length) parts.push(`❓️ ${r.pending.length} 张待确认（${(r.pending[0] || {}).reason || '内容无法确认'}）`);
     if (r.convert_failed && r.convert_failed.length) parts.push(`⚠ ${r.convert_failed.length} 张转 PNG 失败，已保留原格式`);
-    if (r.recycled) parts.push(`♻ 源文件已进回收站 ${r.recycled} 个`);
-    if (r.skipped && r.skipped.length) parts.push(`⏭ ${r.skipped.length} 张库内已有，已跳过（源文件未动）`);
-    if (r.recycle_failed && r.recycle_failed.length) parts.push(`⚠ ${r.recycle_failed.length} 个源文件没能进回收站（仍在原处）`);
+    if (r.skipped && r.skipped.length) parts.push(`⏭ ${r.skipped.length} 张已存在，列为待确认/跳过`);
     if (r.failed && r.failed.length) parts.push(`✖ ${r.failed.length} 张复制失败`);
+    if (parts.length) parts.push('源文件保持原位');
     toast(parts.join(' · ') || '没有需要导入的文件',
           (r.imported && r.imported.length) ? 'ok' : 'info');
     await libSync(); loadLibrary(); loadStats(); loadLibFacets();
@@ -4163,7 +4162,7 @@ function _askImportMode(pre) {
       </label>
       ${pre.conflicts ? `<div class="hint" style="margin-top:8px">其中 ${pre.conflicts} 张目标已存在，会按来源指纹/像素核对复用或列为待确认（源文件不动）。</div>` : ''}
       <div class="hint" style="margin-top:10px">静态图片统一转 PNG（图库只保留 PNG，原 JPG 不归档）。</div>
-      <div class="hint" style="margin-top:10px">♻ 导入成功后源文件会送进回收站（可从回收站还原）。</div>
+      <div class="hint" style="margin-top:10px">外部源文件全程保持原位，不会被移走或删除。</div>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn accent" id="imp-ok">开始导入</button>
         <button class="btn ghost" id="imp-cancel">取消</button>

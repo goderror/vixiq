@@ -62,6 +62,20 @@ def same_pixels(a: "str | Path", b: "str | Path") -> bool:
     return bool(da and db and da == db)
 
 
+def is_readable(path: "str | Path") -> bool:
+    """文件是否存在且图片结构可校验通过 (复用/旧版本可用性判断)。"""
+    try:
+        from PIL import Image
+        p = Path(path)
+        if not p.is_file():
+            return False
+        with Image.open(p) as im:
+            im.verify()
+        return True
+    except Exception:
+        return False
+
+
 def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = None,
                      delete_source: bool = False,
                      overwrite: bool = False) -> dict:
@@ -72,14 +86,17 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
     - 静态 JPG/JPEG/WEBP/BMP/TIF/TIFF: 生成并校验 PNG 后替换目标
     - 转换失败: ok=False + note, 原文件保留
 
-    返回键: ok / converted / current_path / current_format / current_size /
-            source_format / source_file_size / source_md5 / converted_at / note
+    返回键: ok / converted / reason / current_path / current_format / current_size /
+            source_format / source_file_size / source_md5 / converted_at / note /
+            cleanup_failed
+    reason: unreadable=源图打不开; exists=目标已存在; convert_failed=生成/替换失败;
+            copy_failed=原生 PNG 复制失败; 空=正常。
     overwrite=True 时若目标 PNG 已存在, 先留一份 `.bak` 再覆盖 (沿用覆盖备份流程)。
     """
     src = Path(src_path)
     out = Path(out_path) if out_path else src.with_suffix(".png")
     result = {
-        "ok": True, "converted": False,
+        "ok": True, "converted": False, "reason": "",
         "current_path": str(src), "current_format": format_of(src),
         "current_size": None,
         "source_format": None, "source_file_size": None, "source_md5": None,
@@ -88,7 +105,8 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
     try:
         src_size = src.stat().st_size
     except OSError as e:
-        result.update(ok=False, note=f"源文件不可读：{str(e).splitlines()[0]}")
+        result.update(ok=False, reason="unreadable",
+                      note=f"源文件不可读：{str(e).splitlines()[0]}")
         return result
     result["current_size"] = src_size
     ext = src.suffix.lower()
@@ -98,7 +116,7 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
         try:
             if out.resolve() != src.resolve():
                 if out.exists() and not overwrite:
-                    result.update(ok=False, note="目标 PNG 已存在")
+                    result.update(ok=False, reason="exists", note="目标 PNG 已存在")
                     return result
                 out.parent.mkdir(parents=True, exist_ok=True)
                 if overwrite and out.exists():
@@ -108,12 +126,16 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
                         pass
                 shutil.copy2(str(src), str(out))
                 if delete_source:
-                    src.unlink(missing_ok=True)
+                    try:
+                        src.unlink(missing_ok=True)
+                    except Exception:
+                        result["cleanup_failed"] = True
             result["current_path"] = str(out)
             result["current_format"] = "png"
             result["current_size"] = out.stat().st_size
         except Exception as e:
-            result.update(ok=False, note=f"PNG 复制失败：{str(e).splitlines()[0]}")
+            result.update(ok=False, reason="copy_failed",
+                          note=f"PNG 复制失败：{str(e).splitlines()[0]}")
         return result
 
     # ② 动图/多帧: 保持原格式
@@ -127,7 +149,7 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
     # ③ 静态图 → PNG: 先写临时文件并校验, 再替换目标
     if out.exists() and out.resolve() != src.resolve():
         if not overwrite:
-            result.update(ok=False, note="目标 PNG 已存在")
+            result.update(ok=False, reason="exists", note="目标 PNG 已存在")
             return result
         try:
             shutil.copy2(str(out), str(out.with_name(out.name + ".bak")))
@@ -136,13 +158,23 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
     try:
         from PIL import Image, ImageOps
     except Exception as e:
-        result.update(ok=False, note=f"缺少图片库：{str(e).splitlines()[0]}")
+        result.update(ok=False, reason="convert_failed",
+                      note=f"缺少图片库：{str(e).splitlines()[0]}")
         return result
+    # 先确认源图真的能解码: 打不开的输入绝不能进入图库
+    try:
+        src_img = Image.open(src)
+        src_img.load()
+    except Exception as e:
+        result.update(ok=False, reason="unreadable",
+                      note=f"源图片无法打开：{str(e).splitlines()[0]}")
+        return result
+    cleanup_failed = False
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
         tmp = out.with_name(out.name + ".tmp.png")
         try:
-            with Image.open(src) as im:
+            with src_img as im:
                 im = ImageOps.exif_transpose(im)
                 if im.mode not in ("RGB", "RGBA", "L", "LA", "P"):
                     im = im.convert("RGB")
@@ -159,9 +191,10 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
             try:
                 tmp.unlink(missing_ok=True)
             except Exception:
-                pass
+                cleanup_failed = True
     except Exception as e:
-        result.update(ok=False, note=f"PNG 转换失败：{str(e).splitlines()[0]}")
+        result.update(ok=False, reason="convert_failed",
+                      note=f"PNG 转换失败：{str(e).splitlines()[0]}")
         return result
 
     try:
@@ -173,12 +206,14 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
         try:
             src.unlink(missing_ok=True)
         except Exception:
-            pass
+            cleanup_failed = True
     result.update({
-        "ok": True, "converted": True,
+        "ok": True, "converted": True, "reason": "",
         "current_path": str(out), "current_format": "png",
         "current_size": out.stat().st_size,
         "source_format": format_of(src), "source_file_size": src_size,
         "source_md5": src_md5, "converted_at": _now(), "note": "",
     })
+    if cleanup_failed:
+        result["cleanup_failed"] = True
     return result
