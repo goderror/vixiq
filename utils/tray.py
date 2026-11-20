@@ -8,7 +8,7 @@ exe 的生命周期原本是**围着浏览器转**的: 双击强制弹浏览器,
 本模块只做两件事, 都不碰业务/数据库:
 
 1. **托盘图标** (``Shell_NotifyIconW``): 悬停 tooltip 显示当前壁纸溯源结论, 右键菜单给出
-   打开图库 / 打开所在文件夹 / 设置 / 退出。(原来还有一项「图像溯源」, 2026-09-25 判定
+   打开图库 / 打开当前壁纸文件夹 / 打开图库文件夹 / 设置 / 退出。(原来还有一项「图像溯源」, 2026-09-25 判定
    「就弹个通知」没意义, 已删除 —— 要跑 ORB 的那个入口在小控件卡片的「图像溯源」按钮上。)
 2. **壁纸切换事件** (``RegNotifyChangeKeyValue``): 监听 ``HKCU\\Control Panel\\Desktop``,
    变了就通知托盘刷新 tooltip (事件驱动, 不轮询)。
@@ -41,10 +41,12 @@ CMD_SETTINGS = 1004
 CMD_QUIT = 1005
 CMD_TOGGLE_TUNNEL = 1006
 CMD_COPY_TUNNEL = 1007
+CMD_OPEN_LIBRARY = 1008
 
 _CMD_LABELS = {
     CMD_OPEN_GALLERY: "打开图库",
-    CMD_OPEN_FOLDER: "打开所在文件夹",
+    CMD_OPEN_FOLDER: "打开当前壁纸文件夹",
+    CMD_OPEN_LIBRARY: "打开图库文件夹",
     CMD_SETTINGS: "设置…",
     CMD_QUIT: "退出 Vixiq",
     CMD_TOGGLE_TUNNEL: "手机访问开关",
@@ -147,6 +149,7 @@ def tray_menu_items(info, tunnel=None) -> "list[tuple]":
         (0, "", "sep"),
         (CMD_OPEN_GALLERY, _CMD_LABELS[CMD_OPEN_GALLERY], "normal"),
         (CMD_OPEN_FOLDER, _CMD_LABELS[CMD_OPEN_FOLDER], "normal" if has_file else "gray"),
+        (CMD_OPEN_LIBRARY, _CMD_LABELS[CMD_OPEN_LIBRARY], "normal"),
         (0, "", "sep"),
         (0, _clip(_oneline(t_line), 90), "gray"),
         (CMD_TOGGLE_TUNNEL, t_toggle, "normal"),
@@ -774,6 +777,8 @@ class Tray:
             self._open_url(self.base_url + "#library")
         elif cmd == CMD_OPEN_FOLDER:
             self._open_folder()
+        elif cmd == CMD_OPEN_LIBRARY:
+            self._open_library_folder()
         elif cmd == CMD_TOGGLE_TUNNEL:
             self._toggle_tunnel()
         elif cmd == CMD_COPY_TUNNEL:
@@ -828,6 +833,20 @@ class Tray:
             proc.popen(["explorer", f"/select,{os.path.normpath(p)}"])
         except Exception:
             pass
+
+    def _open_library_folder(self) -> None:
+        """托盘「打开图库文件夹」= 图库根目录（F:\\Vixiq\\data\\img），不是程序目录。"""
+        try:
+            from utils.config import load_config
+            from utils import paths
+            cfg = load_config() or {}
+            rel = ((cfg.get("paths") or {}).get("img_subdir") or "data/img")
+            root = paths.user_data(rel)
+            root.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(root))
+        except Exception as e:
+            if self.log:
+                self.log(f"打开图库文件夹失败: {e}")
 
     # ---------- 壁纸事件 ----------
     def _on_wall_changed(self) -> None:

@@ -4184,16 +4184,69 @@ function paintLibHealth() {
     && (miss || empty || bad || showReport || checkRunning);
   bar.style.display = visible ? '' : 'none';
   bar.innerHTML = `<span class="lib-sync-line">🔄 已与磁盘同步 · 扫描 ${h ? h.scanned_images : 0} 图</span>` +
-    (miss ? `<span class="health-badge miss" title="作品有本地下载记录但磁盘文件已被删除">⚠ 文件缺失 ${miss}</span>` : '') +
-    (empty ? `<span class="health-badge empty">📁 空目录 ${empty}</span>` : '') +
-    (bad ? `<span class="health-badge bad">💥 损坏 ${bad}</span>` : '') +
-    (showReport ? `<span class="lib-sync-line" title="体检时间 ${esc(rc.time || '—')}｜系统异常可直接用界面按钮修复；缺信息需人工补齐（作者名、来源等）">🩺 上次体检：待处理 ${liveN}（系统异常 ${susN} · 缺信息 ${todoN}）</span>` : '') +
+    (miss ? `<button type="button" class="health-badge miss" title="点击查看具体是哪些作品" onclick="showLibHealthDetail('missing')">⚠ 文件缺失 ${miss}</button>` : '') +
+    (empty ? `<button type="button" class="health-badge empty" title="点击查看具体是哪些空文件夹" onclick="showLibHealthDetail('empty')">📁 空目录 ${empty}</button>` : '') +
+    (bad ? `<button type="button" class="health-badge bad" title="点击查看具体是哪些损坏文件" onclick="showLibHealthDetail('corrupt')">💥 损坏 ${bad}</button>` : '') +
+    (showReport ? `<span class="lib-sync-line lib-sync-clickable" title="点击查看上次体检的完整明细" onclick="showSelfCheckReport()">🩺 上次体检：待处理 ${liveN}（系统异常 ${susN} · 缺信息 ${todoN}）</span>` : '') +
     (checkRunning ? `<span class="lib-sync-line">⏳ 体检中：${esc(checkStepTitle(checkRunning))}</span>` : '') +
     (showReport ? `<button class="btn accent" onclick="showSelfCheckReport()">📋 查看详情</button>` : '') +
     (showReport ? `<button class="btn ghost icon-btn" title="收起这条提示（报告不删；下次体检会重新显示）" onclick="dismissCheckBar()">✕</button>` : '') +
     (miss ? `<button class="btn danger" onclick="cleanMissing()">🗑️ 清理缺失</button>` : '') +
     `<button class="btn ghost" onclick="runSelfCheck()">🩺 体检</button>`;
 }
+
+// 点击健康条徽标 → 看具体是哪些空文件夹 / 缺失作品 / 损坏文件
+window.showLibHealthDetail = function (kind) {
+  const h = window._libHealth || {};
+  const map = {
+    empty: {
+      title: '📁 空目录明细',
+      note: '这些文件夹里已经没有任何图片，可以直接删除。',
+      items: h.empty_dirs || [],
+      type: 'path',
+      action: '<button class="btn danger" onclick="cleanEmptyDirs()">🗑️ 删除空文件夹</button>',
+    },
+    missing: {
+      title: '⚠ 文件缺失明细',
+      note: '数据库里有下载记录，但磁盘上的图片文件已经不存在。',
+      items: h.missing_ids || [],
+      type: 'id',
+      action: '<button class="btn danger" onclick="cleanMissing()">🗑️ 清理缺失记录</button>',
+    },
+    corrupt: {
+      title: '💥 损坏文件明细',
+      note: '文件还在，但无法正常打开。可到「🩺 体检」里用「重下修复」处理。',
+      items: h.corrupt_files || [],
+      type: 'path',
+      action: '',
+    },
+  };
+  const cfg = map[kind];
+  if (!cfg) return;
+  const arr = cfg.items;
+  const rows = arr.slice(0, 200).map(x => {
+    const v = String(x);
+    if (cfg.type === 'id') {
+      return `<li><span class="id-chip" title="点击跳到图库定位这个作品" onclick="libFocusArtwork('${esc(v)}')">#${esc(v)}</span><span class="hint">磁盘文件已丢失</span></li>`;
+    }
+    return `<li><code>${esc(v)}</code><button class="btn ghost mini" title="在资源管理器中打开" onclick="openHealthPath('${esc(v)}')">📂 打开</button></li>`;
+  }).join('');
+  const more = arr.length > 200 ? `<div class="hint">…其余 ${arr.length - 200} 项从略</div>` : '';
+  openLibModal(cfg.title, `<div class="lib-health-detail">
+      <div class="hint">${cfg.note} 共 <b>${arr.length}</b> 项。</div>
+      ${arr.length ? `<ul>${rows}</ul>${more}` : '<div class="hint">当前没有这类问题。</div>'}
+      ${arr.length && cfg.action ? `<div class="btn-row">${cfg.action}</div>` : ''}
+    </div>`, { lg: true });
+};
+
+window.openHealthPath = async function (p) {
+  try {
+    await api('/api/library/open-folder', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: p }),
+    });
+  } catch (e) { toast('打开失败: ' + e.message, 'err'); }
+};
 
 // 收起图库顶部那条体检汇总 (落盘记住; 下次真跑体检自动恢复)
 window.dismissCheckBar = async function () {

@@ -5,7 +5,7 @@ Vixiq · Web 版启动器 (替代 Tkinter 主窗口)。
 启动流程:
   1. 用 Flask 起本地服务 (http://127.0.0.1:<port>)
   2. **默认只驻右下角托盘** (launcher.tray_enabled): 悬停看当前壁纸溯源, 右键出菜单
-     (打开图库 / 打开所在文件夹 / 图像溯源 / 设置 / 退出 Vixiq)
+     (打开图库 / 打开当前壁纸文件夹 / 打开图库文件夹 / 设置 / 退出 Vixiq)
   3. 是否启动时自动弹浏览器由 launcher.auto_open_browser 决定 (默认关)
   4. 退出唯一口径 = 托盘右键「退出 Vixiq」(Ctrl+C 仍可用);
      心跳守护「关页面即退出」由 launcher.exit_on_browser_close 决定 (默认关)

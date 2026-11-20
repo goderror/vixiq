@@ -3061,6 +3061,7 @@ def run_suite() -> SuiteResult:
     suite.add("T159", "🏷 图库按标签类别筛选: 作品/图片双视图 + 类别与标签叠加 + 未分类 + 停用标签不参与 + facets 带类别 + 前端接线 (隔离数据)", t159_library_tag_category_filter)
     suite.add("T160", "🚀 外接数据盘缺失时启动不卡动画: /api/health 不依赖数据盘 + HTTP 500 也算服务活着 + 启动轮询接线 (离线)", t160_health_and_port_alive)
     suite.add("T161", "🧰 图库筛选栏两行紧凑布局: 29px/4px + 窄屏更多筛选 + 320px 不第三行 + 文案四项 + 来源滑杆图标 + 重置非 R18 + 前端接线 (离线)", t161_gallery_filter_layout)
+    suite.add("T162", "🔎 健康条点击看明细 + 托盘「打开当前壁纸文件夹/打开图库文件夹」接线 (离线)", t162_health_detail_and_tray_folder)
     suite.write_report()
     return suite
 
@@ -10394,7 +10395,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261119c" and _mss.group(1) == "20261119c", \
+    assert _mjs and _mss and _mjs.group(1) == "20261120a" and _mss.group(1) == "20261120a", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10489,7 +10490,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261119c', html) and _re.search(r'app\.js\?v=20261119c', html), \
+    assert _re.search(r'style\.css\?v=20261120a', html) and _re.search(r'app\.js\?v=20261120a', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10897,7 +10898,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261119c" in html and "app.js?v=20261119c" in html, \
+        assert "style.css?v=20261120a" in html and "app.js?v=20261120a" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -10939,8 +10940,8 @@ def t128_tray_pure_functions():
     """🖥 托盘常驻 (右下角任务栏 + 桌面小控件):
     ① tooltip ≤120 字符且**无换行** (Shell_NotifyIcon 的 szTip 硬上限 128 wchar 含 NUL),
        格式 `Vixiq · #ID · 作者 · 标题`, 溯源不出来退化成「Vixiq · 壁纸未溯源」;
-    ② 菜单结构 = 两行灰字只读信息 + 打开图库/打开所在文件夹 + 分隔线 + 设置/退出,
-       缺文件时「打开所在文件夹」必须是灰字 (点了也没用);
+    ② 菜单结构 = 两行灰字只读信息 + 打开图库/打开当前壁纸文件夹/打开图库文件夹 +
+       分隔线 + 设置/退出, 缺文件时「打开当前壁纸文件夹」必须是灰字 (点了也没用);
     ③ 命令 id 唯一且能翻成人话 (菜单直接返回 id 当命令, 不认就静默没反应);
     ④ 窗口消息 → 动作名 的映射覆盖全部分支 (ctypes 层只按名字执行);
     ⑤ NOTIFYICONDATAW 的结构尺寸/字段偏移**钉死实测值** —— 抄网上 V1/V2 的旧 size 会让
@@ -10979,10 +10980,11 @@ def t128_tray_pure_functions():
     cmds = [c for c, _l, s in items if s != "sep"]
     labels = [l for _c, l, s in items if s != "sep"]
     # 非 sep 项里 cmd=0 的是只读灰字行 (顶部两行 + 手机访问状态), 其余必须是各命令 id
-    assert cmds == [0, 0, tray.CMD_OPEN_GALLERY, tray.CMD_OPEN_FOLDER, 0,
+    assert cmds == [0, 0, tray.CMD_OPEN_GALLERY, tray.CMD_OPEN_FOLDER,
+                    tray.CMD_OPEN_LIBRARY, 0,
                     tray.CMD_TOGGLE_TUNNEL, tray.CMD_COPY_TUNNEL,
                     tray.CMD_SETTINGS, tray.CMD_QUIT], cmds
-    assert labels[2:4] == ["打开图库", "打开所在文件夹"], labels
+    assert labels[2:5] == ["打开图库", "打开当前壁纸文件夹", "打开图库文件夹"], labels
     assert labels[-2:] == ["设置…", "退出 Vixiq"], labels
     # 「图像溯源」这一项 2026-09-25 已删 (没意义), 别再加回来
     assert not hasattr(tray, "CMD_TRACE") and "图像溯源" not in labels, labels
@@ -10992,6 +10994,7 @@ def t128_tray_pure_functions():
     # 没有壁纸文件时: 依赖文件的项要灰掉 (否则用户点了毫无反应)
     nofile = {c: s for c, _l, s in tray.tray_menu_items({"file": {}})}
     assert nofile[tray.CMD_OPEN_FOLDER] == "gray", nofile
+    assert nofile[tray.CMD_OPEN_LIBRARY] == "normal", nofile
     assert nofile[tray.CMD_OPEN_GALLERY] == "normal" and nofile[tray.CMD_QUIT] == "normal"
 
     # ---------- ②b 手机访问 ----------
@@ -11012,12 +11015,13 @@ def t128_tray_pure_functions():
         full, {"running": False, "error": "网络不通"}))
 
     # ---------- ③ 命令 id ----------
-    ids = [tray.CMD_OPEN_GALLERY, tray.CMD_OPEN_FOLDER,
+    ids = [tray.CMD_OPEN_GALLERY, tray.CMD_OPEN_FOLDER, tray.CMD_OPEN_LIBRARY,
            tray.CMD_SETTINGS, tray.CMD_QUIT,
            tray.CMD_TOGGLE_TUNNEL, tray.CMD_COPY_TUNNEL]
     assert len(set(ids)) == len(ids), "命令 id 撞了 → 菜单会点错功能"
     assert tray.menu_cmd_label(tray.CMD_QUIT) == "退出 Vixiq"
-    assert tray.menu_cmd_label("1002") == "打开所在文件夹", "字符串 id 也要认"
+    assert tray.menu_cmd_label("1002") == "打开当前壁纸文件夹", "字符串 id 也要认"
+    assert tray.menu_cmd_label("1008") == "打开图库文件夹", "字符串 id 也要认"
     assert tray.menu_cmd_label(None).startswith("#"), "怪 id 不能抛异常"
 
     # ---------- ④ 消息 → 动作 ----------
@@ -13277,7 +13281,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261119c" in _h and "style.css?v=20261119c" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261120a" in _h and "style.css?v=20261120a" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14646,7 +14650,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261119c" in html and "app.js?v=20261119c" in html
+            assert "style.css?v=20261120a" in html and "app.js?v=20261120a" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14755,7 +14759,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261119c" in html and "app.js?v=20261119c" in html
+            assert "style.css?v=20261120a" in html and "app.js?v=20261120a" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14866,7 +14870,37 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261119c" in html and "app.js?v=20261119c" in html
+    assert "style.css?v=20261120a" in html and "app.js?v=20261120a" in html
+
+
+def t162_health_detail_and_tray_folder() -> None:
+    """T162: 健康条点开看明细 + 托盘文件夹入口（2026-11-20）。
+
+    ① 健康条徽标（文件缺失/空目录/损坏）可点击，弹出具体路径或作品 ID；
+    ② 明细里的路径可直接在资源管理器打开；空目录/缺失明细带清理按钮；
+    ③ 托盘「打开当前壁纸文件夹」表述明确，并新增「打开图库文件夹」。
+    """
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    tray_src = (PROJECT_ROOT / "utils" / "tray.py").read_text(encoding="utf-8")
+
+    for kind in ("missing", "empty", "corrupt"):
+        assert f"showLibHealthDetail('{kind}')" in js, f"徽标点击缺 {kind}"
+    assert "window.showLibHealthDetail" in js
+    assert "window.openHealthPath" in js
+    assert "'/api/library/open-folder'" in js
+    assert "lib-health-detail" in js and ".lib-health-detail" in css
+    assert "lib-sync-clickable" in js and ".lib-sync-clickable" in css
+    assert "showSelfCheckReport()" in js, "体检汇总也应可点开明细"
+    assert "cleanEmptyDirs()" in js and "cleanMissing()" in js
+
+    assert "打开当前壁纸文件夹" in tray_src
+    assert "打开图库文件夹" in tray_src
+    assert "CMD_OPEN_LIBRARY" in tray_src
+    assert "def _open_library_folder" in tray_src
+    assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
+    assert "20261120a" in html
 
 
 def t154_tidy_rmdir_safety() -> None:

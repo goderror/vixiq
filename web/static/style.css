@@ -1159,6 +1159,18 @@ main.cards-collapsed #tab-wallpapers .wf-card .wf-meta { padding: 8px 10px; }
 .pager-info .lib-page-input:focus { outline: none; border-color: var(--accent); }
 .health-badge.empty { background: #fff7e0; color: #b98a00; border: 1px solid #f2dc9a; }
 .health-badge.bad { background: #f6ecfb; color: #8e44ad; border: 1px solid #e2c5f2; }
+button.health-badge { cursor: pointer; font-family: inherit; }
+button.health-badge:hover { filter: brightness(.96); }
+button.health-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lib-sync-clickable { cursor: pointer; text-decoration: underline dotted; }
+.lib-sync-clickable:hover { color: var(--accent); }
+.lib-health-detail { max-height: 55vh; overflow-y: auto; }
+.lib-health-detail ul { list-style: none; margin: 8px 0; padding: 0; }
+.lib-health-detail li { display: flex; align-items: center; gap: 8px; padding: 6px 2px;
+  border-bottom: 1px solid var(--border); }
+.lib-health-detail li code { flex: 1; min-width: 0; font-size: 12px; word-break: break-all; }
+.lib-health-detail li .hint { margin: 0; }
+.lib-health-detail .btn-row { margin-top: 10px; }
 .health-row .btn { padding: 3px 10px; font-size: 12px; }
 
 /* 图库卡片/列表: 缺失文件高亮 */
