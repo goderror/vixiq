@@ -4112,8 +4112,9 @@ async function importLocalImages(mode) {
       `将从以下位置导入 ${pre.total} 张图片：`,
       pre.path, '',
       `· 全部含作品ID ${pre.with_id} 张 → 直接入库（自动补全标题/标签并归入作者文件夹）`,
+      '· 静态图片统一转为 PNG（图库只保留 PNG，原 JPG 不归档）',
     ];
-    if (pre.conflicts) lines.push(`· 其中 ${pre.conflicts} 张库内已有同名，将跳过（源文件不动）`);
+    if (pre.conflicts) lines.push(`· 其中 ${pre.conflicts} 张目标已存在，将按来源指纹/像素核对复用或列为待确认`);
     lines.push('', '♻ 导入成功后，源文件会被送进回收站（可从回收站还原），确定继续？');
     if (!confirm(lines.join('\n'))) return;
   }
@@ -4128,6 +4129,9 @@ async function importLocalImages(mode) {
     if (r.imported && r.imported.length) parts.push(`📥 入库 ${r.imported.length} 张`);
     if (r.custom_created && r.custom_created.length) parts.push(`🖼️ 建自定义作品 ${r.custom_created.length} 个`);
     if (r.redirected && r.redirected.length) parts.push(`🔍 ${r.redirected.length} 张无作品ID已转反搜收件箱`);
+    if (r.reused && r.reused.length) parts.push(`♻ ${r.reused.length} 张重复导入已复用`);
+    if (r.pending && r.pending.length) parts.push(`❓️ ${r.pending.length} 张待确认（${(r.pending[0] || {}).reason || '内容无法确认'}）`);
+    if (r.convert_failed && r.convert_failed.length) parts.push(`⚠ ${r.convert_failed.length} 张转 PNG 失败，已保留原格式`);
     if (r.recycled) parts.push(`♻ 源文件已进回收站 ${r.recycled} 个`);
     if (r.skipped && r.skipped.length) parts.push(`⏭ ${r.skipped.length} 张库内已有，已跳过（源文件未动）`);
     if (r.recycle_failed && r.recycle_failed.length) parts.push(`⚠ ${r.recycle_failed.length} 个源文件没能进回收站（仍在原处）`);
@@ -4157,7 +4161,8 @@ function _askImportMode(pre) {
         <input type="radio" name="imp-mode" value="custom">
         直接建自定义作品（标题=文件名 · 来源=其他来源）
       </label>
-      ${pre.conflicts ? `<div class="hint" style="margin-top:8px">其中 ${pre.conflicts} 张库内已有同名，会跳过（源文件不动）。</div>` : ''}
+      ${pre.conflicts ? `<div class="hint" style="margin-top:8px">其中 ${pre.conflicts} 张目标已存在，会按来源指纹/像素核对复用或列为待确认（源文件不动）。</div>` : ''}
+      <div class="hint" style="margin-top:10px">静态图片统一转 PNG（图库只保留 PNG，原 JPG 不归档）。</div>
       <div class="hint" style="margin-top:10px">♻ 导入成功后源文件会送进回收站（可从回收站还原）。</div>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn accent" id="imp-ok">开始导入</button>

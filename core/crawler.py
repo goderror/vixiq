@@ -72,26 +72,16 @@ def build_missing_page_urls(urls, want_pages) -> set:
 
 
 def convert_to_png(src_path: str) -> "str | None":
-    """将 jpg/jpeg 图片转存为无损 PNG, 删除原文件, 返回新路径。
+    """兼容旧接口: jpg/jpeg → PNG 并删除原文件, 成功返回新路径, 否则 None。
 
-    pixiv 原图由画师上传时决定格式, jpg 已是有损压缩——转 PNG 不恢复画质,
-    仅避免后续再压缩; 体积通常增大 3-10 倍。CMYK 等非常规模式先转 RGB。
-    非 jpg 路径或转换失败返回 None (调用方保留原文件)。"""
+    2026-11-21 起真正的入库转换统一走 `core.image_format.normalize_to_png`
+    (含转换来源记录); 这个函数只保留给旧调用/回归用例。"""
     ext = os.path.splitext(src_path)[1].lower()
     if ext not in (".jpg", ".jpeg"):
         return None
-    png_path = src_path.rsplit(".", 1)[0] + ".png"
-    try:
-        from PIL import Image
-        with Image.open(src_path) as img:
-            # PNG 不支持 CMYK 等模式, 先安全转换
-            if img.mode not in ("RGB", "RGBA", "L", "LA", "P"):
-                img = img.convert("RGB")
-            img.save(png_path, "PNG")
-        os.remove(src_path)
-        return png_path
-    except Exception:
-        return None
+    from core.image_format import normalize_to_png
+    r = normalize_to_png(src_path, delete_source=True)
+    return r["current_path"] if (r.get("ok") and r.get("converted")) else None
 
 
 # ===== 动图 (ugoira) =====
@@ -592,6 +582,60 @@ class PixivDownloader:
         self._author_dir_cache[cache_key] = d
         return d
 
+    # ---- 入库格式统一 (2026-11-21 4B-1, 与上传/路径导入共用 core.image_format) ----
+    def _normalize_download(self, save_path: str, force_overwrite: bool = False) -> dict:
+        """下载落盘后转 PNG。目标 PNG 已存在时先按像素核对:
+
+        - 内容一致 → 删掉刚下的 JPG, 复用已有 PNG (不重复登记, 不动旧转换记录);
+        - 内容不同 → 旧 PNG 备份 `.bak` 后覆盖 (强制重下沿用既有备份流程)。"""
+        from core.image_format import normalize_to_png, same_pixels
+        conv = normalize_to_png(save_path, delete_source=True,
+                                overwrite=bool(force_overwrite))
+        if not conv.get("ok") and conv.get("note") == "目标 PNG 已存在":
+            png = os.path.splitext(save_path)[0] + ".png"
+            if same_pixels(save_path, png):
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                conv = {
+                    "ok": True, "converted": False, "reuse": True,
+                    "current_path": png, "current_format": "png",
+                    "current_size": os.path.getsize(png),
+                    "source_format": None, "source_file_size": None,
+                    "source_md5": None, "converted_at": None,
+                    "note": "已有相同 PNG，复用",
+                }
+                self.reporter.log(f"♻ 已有相同 PNG，复用: {os.path.basename(png)}")
+            else:
+                conv = normalize_to_png(save_path, delete_source=True, overwrite=True)
+        if conv.get("converted"):
+            self.reporter.log(
+                f"🔄 已转存为 PNG: {os.path.basename(conv['current_path'])}")
+        elif not conv.get("ok"):
+            self.reporter.warn(
+                f"⚠ 保留原格式（{conv.get('note')}）: {os.path.basename(save_path)}")
+        return conv
+
+    def _record_page_conversion(self, aid: str, pn: int, conv: dict) -> None:
+        """把转换来源记录写到页上 (失败只补原因, 不清空已有来源记录)。"""
+        if conv.get("reuse"):
+            return          # 复用已有 PNG: 旧记录仍然可信
+        ok = bool(conv.get("ok"))
+        try:
+            self.db.set_page_conversion(
+                aid, pn,
+                source_format=conv.get("source_format"),
+                source_file_size=conv.get("source_file_size"),
+                source_md5=conv.get("source_md5"),
+                converted_at=conv.get("converted_at"),
+                current_format=conv.get("current_format"),
+                convert_note=(conv.get("note") or None),
+                replace=ok,
+            )
+        except Exception:
+            pass
+
     def _download_http(self, artwork_id: str, ctx, *, author_id=None,
                        author_name=None, force_overwrite: bool = False, pages=None):
         """cookies 直连通道: ajax/illust 取元数据 + ajax/illust/pages 取每页原图直链,
@@ -669,11 +713,9 @@ class PixivDownloader:
                     success_count += 1
                     continue
             if self.download_with_retry(img_url, save_path):
-                _png = convert_to_png(save_path)
-                if _png:
-                    save_path = _png
-                    filename = os.path.basename(save_path)
-                    self.reporter.log(f"🔄 已转存为 PNG: {filename}")
+                conv = self._normalize_download(save_path, force_overwrite)
+                save_path = conv["current_path"]
+                filename = os.path.basename(save_path)
                 rel_path = Path(save_path).relative_to(self.save_folder).as_posix()
                 fmd5 = fsize = None
                 try:
@@ -684,6 +726,7 @@ class PixivDownloader:
                     pass
                 self.db.mark_page_status(artwork_id, pn, PSt.DONE, rel_path,
                                          md5=fmd5, file_size_bytes=fsize)
+                self._record_page_conversion(artwork_id, pn, conv)
                 self.reporter.progress(i, total, f"{filename} → 成功")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 success_count += 1
@@ -922,13 +965,10 @@ class PixivDownloader:
                 except Exception as e:
                     self.reporter.warn(f"旧版备份失败(跳过备份): {str(e).splitlines()[0]}")
             if self.download_with_retry(url, save_path):
-                # 入库统一无损 PNG: jpg → png (pixiv 原图是有损 jpg,
-                # 转格式不恢复画质但避免后续再压缩; 动画 gif/ugoira 不走此流程)
-                _png = convert_to_png(save_path)
-                if _png:
-                    save_path = _png
-                    filename = os.path.basename(save_path)
-                    self.reporter.log(f"🔄 已转存为 PNG: {filename}")
+                # 入库统一: 静态图转 PNG + 写转换记录 (动图保持原格式)
+                conv = self._normalize_download(save_path, force_overwrite)
+                save_path = conv["current_path"]
+                filename = os.path.basename(save_path)
                 # 图库规范: local_path 一律正斜杠 (Windows 的 str(Path) 会给反斜杠,
                 # 2026-09-15 审计发现新下载行仍在写 \, 与对账/同步口径不一致)
                 rel_path = Path(save_path).relative_to(self.save_folder).as_posix()
@@ -942,6 +982,7 @@ class PixivDownloader:
                     pass
                 self.db.mark_page_status(aid, page_num, PSt.DONE, rel_path,
                                          md5=fmd5, file_size_bytes=fsize)
+                self._record_page_conversion(aid, page_num, conv)
                 self.reporter.progress(i, total, f"{filename} → 成功")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 success_count += 1

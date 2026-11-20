@@ -933,6 +933,77 @@ class PixivDatabase:
             self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
             return None
 
+    # ---- 入库格式转换记录 (2026-11-21 4B-1) ----
+    def set_page_conversion(self, aid, page, *, source_format=None,
+                            source_file_size=None, source_md5=None,
+                            converted_at=None, current_format=None,
+                            convert_note=None, replace: bool = False) -> None:
+        """写入页的 PNG 转换来源记录。
+
+        replace=True: 本次结果整体替换 (转换成功 / 原生 PNG 直接登记, 可清空旧记录);
+        replace=False: 只更新失败原因与当前格式, 保留已有来源记录 (转换失败不清空旧信息)。
+        记录挂在 pages 行上, 整理/改名只改 local_path, 记录随页保留。
+        """
+        try:
+            with self.conn:
+                if replace:
+                    self.conn.execute(
+                        "UPDATE pages SET source_format=?, source_file_size=?, "
+                        "source_md5=?, converted_at=?, current_format=?, convert_note=? "
+                        "WHERE artwork_id=? AND page_num=?",
+                        (source_format, source_file_size, source_md5, converted_at,
+                         current_format, convert_note, str(aid), int(page)))
+                else:
+                    self.conn.execute(
+                        "UPDATE pages SET convert_note=?, "
+                        "current_format=COALESCE(?, current_format) "
+                        "WHERE artwork_id=? AND page_num=?",
+                        (convert_note, current_format, str(aid), int(page)))
+        except sqlite3.Error as e:
+            self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
+
+    def get_page_conversion(self, aid, page) -> "dict | None":
+        """读页的格式转换记录 (只读)。"""
+        try:
+            row = self.conn.execute(
+                "SELECT artwork_id, page_num, local_path, md5, file_size_bytes, "
+                "       source_format, source_file_size, source_md5, converted_at, "
+                "       current_format, convert_note "
+                "  FROM pages WHERE artwork_id=? AND page_num=?",
+                (str(aid), int(page))).fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
+            return None
+
+    def find_page_by_source_md5(self, md5: str) -> "dict | None":
+        """凭「转换前原始指纹」找回同一页 (重复导入同一 JPG 时复用已有登记)。"""
+        if not md5:
+            return None
+        try:
+            row = self.conn.execute(
+                "SELECT artwork_id, page_num, local_path, current_format "
+                "  FROM pages WHERE source_md5=? AND trashed_at IS NULL "
+                "  ORDER BY artwork_id, page_num LIMIT 1", (str(md5),)).fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
+            return None
+
+    def find_page_by_local_path(self, rel: str) -> "dict | None":
+        """按当前本地相对路径找页 (入库对账后补写格式转换记录用)。"""
+        if not rel:
+            return None
+        try:
+            row = self.conn.execute(
+                "SELECT artwork_id, page_num, local_path FROM pages "
+                " WHERE local_path=? AND trashed_at IS NULL LIMIT 1",
+                (str(rel).replace("\\", "/"),)).fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
+            return None
+
     def get_artwork_info(self, aid):
         """兼容旧调用: 返回 namedtuple(status, total_pages, exist_list)。
         新代码请用 get_artwork_metadata() 取完整元数据(title/tags 等)。"""

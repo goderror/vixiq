@@ -920,6 +920,152 @@ def _sync_changed(resp) -> bool:
         return True
 
 
+def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
+    """把应用临时副本按入库规则落成 PNG, 并处理重复导入/同页已有文件。
+
+    2026-11-21 4B-1: 上传与路径导入共用。src_copy 必须是**应用临时目录里的副本**
+    (外部源文件保持原位); 调用方负责事后清理整个临时目录。
+    返回 {kind: imported|reused|pending|failed, name, target, converted, note,
+          source_md5, source_format, source_file_size, current_format, converted_at}
+    - reused: 原始指纹或像素确认一致, 复用已有登记, 不落第二份;
+    - pending: 同页/同名已有文件但无法确认一致, 保留现有登记, 等人工确认;
+    - failed: 入库移动失败 (临时文件仍可用于排查)。
+    """
+    import shutil as _sh
+    from core.image_format import normalize_to_png, same_pixels
+    from utils.hashutil import md5_of
+
+    src_copy = Path(src_copy)
+    dest_root = Path(dest_root)
+    try:
+        src_md5 = md5_of(str(src_copy))
+    except Exception:
+        src_md5 = None
+
+    conv = normalize_to_png(src_copy, out_path=src_copy.with_name(src_copy.stem + ".png"),
+                            delete_source=True)
+    ok = bool(conv.get("ok"))
+    final_tmp = Path(conv.get("current_path") or src_copy)
+    target_name = final_tmp.name if ok else src_copy.name
+    result = {
+        "kind": "imported", "name": target_name, "target": None,
+        "ok": ok, "converted": bool(conv.get("converted")),
+        "note": conv.get("note") or "", "source_md5": src_md5,
+        "source_format": conv.get("source_format"),
+        "source_file_size": conv.get("source_file_size"),
+        "current_format": conv.get("current_format"),
+        "converted_at": conv.get("converted_at"),
+    }
+
+    # ① 转换前的原始指纹命中同一页 → 重复导入, 复用已有登记
+    if src_md5:
+        with _db() as db:
+            hit = db.find_page_by_source_md5(src_md5)
+        nkey_self = pixiv_natural_key(target_name) or pixiv_natural_key(src_copy.name)
+        if hit and (not nkey_self
+                    or (str(hit["artwork_id"]), int(hit["page_num"])) == nkey_self):
+            result.update(kind="reused", note="已有同一来源的转换记录，复用已有登记")
+            return result
+
+    nkey = pixiv_natural_key(target_name) or pixiv_natural_key(src_copy.name)
+    target = dest_root / target_name
+    if nkey:
+        # ② 同一作品页已有登记: 只认像素核对一致; 无法确认一律保留现有登记
+        with _db() as db:
+            page = db.get_page_info(nkey[0], nkey[1])
+        existing_rel = getattr(page, "local_path", None) if page else None
+        existing = (img_root / str(existing_rel)) if existing_rel else None
+        if existing is not None and existing.is_file():
+            if (conv.get("current_format") == "png"
+                    and same_pixels(final_tmp, existing)):
+                result.update(kind="reused", note="同页已有相同 PNG，复用已有登记")
+            else:
+                result.update(kind="pending",
+                              note="同页已有文件，但内容无法确认一致；保留现有登记")
+            return result
+        # ③ 目标同名文件存在 (可能尚未登记) → 同样只认像素一致
+        if target.exists():
+            if (conv.get("current_format") == "png"
+                    and same_pixels(final_tmp, target)):
+                result.update(kind="reused", note="目标已有相同 PNG，复用")
+            else:
+                result.update(kind="pending",
+                              note="目标已有同名文件，内容无法确认一致；保留现有文件")
+            return result
+    elif target.exists():
+        # 无作品页身份的图片: 同名自动换序 (与原有导入语义一致)
+        stem, suf = target.stem, target.suffix
+        i = 2
+        while (dest_root / f"{stem} ({i}){suf}").exists():
+            i += 1
+        target = dest_root / f"{stem} ({i}){suf}"
+
+    # ④ 真正入库: 移动临时结果 (临时目录由调用方统一清理)
+    try:
+        dest_root.mkdir(parents=True, exist_ok=True)
+        _sh.move(str(final_tmp), str(target))
+    except Exception as e:
+        result.update(kind="failed",
+                      note=f"入库失败：{str(e).splitlines()[0]}")
+        return result
+    result.update(kind="imported", name=target.name, target=str(target))
+    return result
+
+
+def _new_ingest_tmpdir() -> Path:
+    """本次导入专用的应用临时目录 (位于项目 temp_root 内, 用完整体清理)。"""
+    import tempfile as _tf
+    root = paths.temp_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return Path(_tf.mkdtemp(prefix="vixiq-ingest-", dir=str(root)))
+
+
+def _cleanup_ingest_tmpdir(tmpdir: Path) -> None:
+    """只清理本次导入自己创建的临时目录 (确认在 temp_root 下)。"""
+    import shutil as _sh
+    try:
+        t = Path(tmpdir).resolve()
+        root = paths.temp_root().resolve()
+        if t == root or root not in t.parents:
+            return
+        _sh.rmtree(str(t), ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _record_ingested_conversions(img_root: Path, results: "list[dict]") -> int:
+    """入库文件对账补页后, 按 local_path 找到页补写格式转换记录。
+
+    上传/路径导入是「先落文件 → 对账补页」, 转换记录要在页存在之后写;
+    归位/整理只改 local_path, 这些列随页保留。"""
+    n = 0
+    try:
+        with _db() as db:
+            for r in results:
+                if r.get("kind") != "imported" or not r.get("target"):
+                    continue
+                try:
+                    rel = Path(r["target"]).relative_to(img_root).as_posix()
+                except Exception:
+                    continue
+                page = db.find_page_by_local_path(rel)
+                if not page:
+                    continue
+                db.set_page_conversion(
+                    page["artwork_id"], page["page_num"],
+                    source_format=r.get("source_format"),
+                    source_file_size=r.get("source_file_size"),
+                    source_md5=r.get("source_md5"),
+                    converted_at=r.get("converted_at"),
+                    current_format=r.get("current_format"),
+                    convert_note=(None if r.get("ok") else (r.get("note") or None)),
+                    replace=bool(r.get("ok")))
+                n += 1
+    except Exception:
+        pass
+    return n
+
+
 def _adopt_authors_from_folders(db, img_root: Path) -> int:
     """离线补作者名: 图库文件夹规范为「作者名_作者ID」, 扫描后 upsert 到 authors 表。
     反搜归档/手动放图的作品 authors 表常缺行, 导致图库作者列显示裸 ID;
@@ -7516,6 +7662,27 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         except Exception as e:
             return jsonify({"status": "error", "msg": str(e)}), 500
 
+    @app.route("/api/library/page-conversion")
+    def api_library_page_conversion():
+        """只读: 某页的入库格式与转换来源 (4B-1 验收/页详情用)。
+
+        返回 current_format / file_size_bytes / source_format / source_file_size /
+        source_md5 / converted_at / convert_note; 没有转换记录时 converted_at 为空。"""
+        aid = str(request.args.get("artwork_id") or "").strip()
+        if not aid:
+            return jsonify({"status": "error", "error": "缺少作品 ID"}), 400
+        try:
+            page = int(request.args.get("page_num") or 0)
+        except Exception:
+            page = 0
+        with _db() as db:
+            rec = db.get_page_conversion(aid, page)
+        if not rec:
+            return jsonify({"status": "error", "error": "页不存在"}), 404
+        rec["status"] = "ok"
+        rec["converted"] = bool(rec.get("converted_at"))
+        return jsonify(rec)
+
     @app.route("/api/library/missing-items")
     def api_library_missing_items():
         """缺失清理预览: 列出当前缺失作品与残留文件, 供勾选后再决定怎么处理。
@@ -10052,7 +10219,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
           对账登记 + 后台联网补标题/标签/作者 + 自动归入作者文件夹;
         - 文件名无作品 ID (截图/随便命名) → 转存 input/ 反搜收件箱, 去反搜页识别;
         - 只取 basename 防路径穿越; 重名自动加 (2)。
-        批量场景也可以直接把文件/文件夹拷进 data/img 目录, 打开图库自动同步。"""
+        2026-11-21 4B-1: 静态图片统一转 PNG; 重复导入/同页已有文件按来源指纹
+        与像素核对复用, 无法确认的保留现有登记并列为待确认。
+        """
         import os as _os
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
         input_root = Path(paths.user_data(_config["paths"].get("input_subdir", "input")))
@@ -10060,33 +10229,45 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         input_root.mkdir(parents=True, exist_ok=True)
         IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         imported, redirected, rejected = [], [], []
-
-        def _save_unique(folder: Path, base: str, f) -> str:
-            target = folder / base
-            if target.exists():
-                stem, suf = target.stem, target.suffix
-                i = 2
-                while (folder / f"{stem} ({i}){suf}").exists():
-                    i += 1
-                target = folder / f"{stem} ({i}){suf}"
-            f.save(str(target))
-            return target.name
-
-        for f in request.files.getlist("files") or request.files.getlist("images"):
-            base = _os.path.basename((f.filename or "").replace("\\", "/"))
-            if not base or Path(base).suffix.lower() not in IMG_EXT:
-                rejected.append(base or "(空文件名)")
-                continue
-            try:
-                if pixiv_natural_key(base):
-                    imported.append(_save_unique(img_root, base, f))
+        reused, pending, convert_failed = [], [], []
+        ingest_records: "list[dict]" = []
+        tmpdir = _new_ingest_tmpdir()
+        try:
+            for f in request.files.getlist("files") or request.files.getlist("images"):
+                base = _os.path.basename((f.filename or "").replace("\\", "/"))
+                if not base or Path(base).suffix.lower() not in IMG_EXT:
+                    rejected.append(base or "(空文件名)")
+                    continue
+                tmp_src = tmpdir / base
+                if tmp_src.exists():      # 同名上传: 临时副本换序, 防互相覆盖
+                    stem, suf = tmp_src.stem, tmp_src.suffix
+                    i = 2
+                    while (tmpdir / f"{stem} ({i}){suf}").exists():
+                        i += 1
+                    tmp_src = tmpdir / f"{stem} ({i}){suf}"
+                try:
+                    f.save(str(tmp_src))
+                except Exception:
+                    rejected.append(base)
+                    continue
+                dest_root = img_root if pixiv_natural_key(base) else input_root
+                r = _ingest_image_file(tmp_src, dest_root, img_root)
+                ingest_records.append(r)
+                if r["kind"] == "imported":
+                    (imported if dest_root == img_root else redirected).append(r["name"])
+                elif r["kind"] == "reused":
+                    reused.append(r["name"])
+                elif r["kind"] == "pending":
+                    pending.append({"name": base, "reason": r["note"]})
                 else:
-                    # 无作品 ID: 图库无法登记归属, 转反搜收件箱
-                    redirected.append(_save_unique(input_root, base, f))
-            except Exception:
-                rejected.append(base)
+                    rejected.append(base)
+                if not r["ok"]:
+                    convert_failed.append({"name": base, "reason": r["note"]})
+        finally:
+            _cleanup_ingest_tmpdir(tmpdir)
         # 落盘即对账登记 + 离线作者回填 + 根目录散落图即时归位/去重
         rep = _cached_reconcile(force=True)
+        _record_ingested_conversions(img_root, ingest_records)
         with _db() as db:
             _adopt_authors_from_folders(db, img_root)
             db.cleanup_orphans()
@@ -10094,14 +10275,19 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             rep = _cached_reconcile(force=True)  # 归位后 MD5 自愈刷新 local_path
         if rep.new_pages_linked > 0:
             _kick_metadata_fill()
-        if imported or redirected:
+        if imported or redirected or reused or convert_failed:
             audit_log.record("add", "导入图片",
                              f"图库入库 {len(imported)} 张，转反搜收件箱 {len(redirected)} 张"
+                             + (f"，重复复用 {len(reused)} 张" if reused else "")
+                             + (f"，待确认 {len(pending)} 张" if pending else "")
+                             + (f"，转换失败保留原格式 {len(convert_failed)} 张" if convert_failed else "")
                              + (f"，跳过非图片 {len(rejected)} 个" if rejected else "")
                              + (f"，新登记 {rep.new_pages_linked} 页" if rep.new_pages_linked else ""),
                              len(imported) + len(redirected))
         return jsonify({"status": "ok", "imported": imported,
                         "redirected": redirected, "rejected": rejected,
+                        "reused": reused, "pending": pending,
+                        "convert_failed": convert_failed,
                         "new_pages": rep.new_pages_linked,
                         "conflicts": getattr(rep, "conflicts", []) or []})
 
@@ -10248,34 +10434,65 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
         n_pixiv = sum(1 for x in plan if x[2] == "pixiv")
         n_custom = sum(1 for x in plan if x[2] == "custom")
-        taken = sum(1 for fp, dr, _k in plan if (dr / fp.name).exists())
+
+        def _planned_target_name(fp: Path) -> str:
+            # 预览只按扩展名估计转换后的目标名 (GIF/PNG 保持原名; 多帧 WEBP 实际执行时会保持)
+            return fp.name if fp.suffix.lower() in (".png", ".gif") else fp.stem + ".png"
+
+        taken = sum(1 for fp, dr, _k in plan
+                    if (dr / _planned_target_name(fp)).exists())
         if dry:
             return jsonify({"status": "ok", "dry_run": True, "path": src_label,
                             "total": len(plan), "with_id": n_pixiv,
                             "without_id": len(plan) - n_pixiv, "conflicts": taken})
 
         imported, redirected, skipped, failed, to_recycle = [], [], [], [], []
-        custom_files: "list[Path]" = []      # 待登记的「自定义作品」文件 (复制成功才登记)
-        for fp, dest_root, kind in plan:
-            target = dest_root / fp.name
-            if target.exists():
-                skipped.append(fp.name)   # 库内已有同名 → 跳过, 源文件留在原处
-                continue
-            try:
-                dest_root.mkdir(parents=True, exist_ok=True)
-                _sh.copy2(str(fp), str(target))   # 先复制入库 (此步失败则源文件原封不动)
-            except Exception:
-                failed.append(fp.name)
-                continue
-            if kind == "pixiv":
-                imported.append(fp.name)
-            elif kind == "custom":
-                custom_files.append(target)
-            else:
-                redirected.append(fp.name)
-            to_recycle.append(str(fp))
+        reused, pending, convert_failed = [], [], []
+        ingest_records: "list[dict]" = []
+        custom_files: "list[Path]" = []      # 待登记的「自定义作品」文件 (入库成功才登记)
+        tmpdir = _new_ingest_tmpdir()
+        try:
+            for fp, dest_root, kind in plan:
+                # 外部源文件只读: 先复制到应用临时副本, 转换失败也不动原文件
+                tmp_src = tmpdir / fp.name
+                if tmp_src.exists():
+                    stem, suf = tmp_src.stem, tmp_src.suffix
+                    i = 2
+                    while (tmpdir / f"{stem} ({i}){suf}").exists():
+                        i += 1
+                    tmp_src = tmpdir / f"{stem} ({i}){suf}"
+                try:
+                    _sh.copy2(str(fp), str(tmp_src))
+                except Exception:
+                    failed.append(fp.name)
+                    continue
+                r = _ingest_image_file(tmp_src, dest_root, img_root)
+                ingest_records.append(r)
+                if r["kind"] == "imported":
+                    if kind == "pixiv":
+                        imported.append(r["name"])
+                    elif kind == "custom":
+                        custom_files.append(Path(r["target"]))
+                    else:
+                        redirected.append(r["name"])
+                    to_recycle.append(str(fp))
+                elif r["kind"] == "reused":
+                    reused.append(fp.name)
+                    to_recycle.append(str(fp))   # 图库已有同一张: 按导入语义送回收站
+                elif r["kind"] == "pending":
+                    pending.append({"name": fp.name, "reason": r["note"]})
+                    skipped.append(fp.name)      # 保留现有登记, 源文件留在原处
+                else:
+                    failed.append(fp.name)
+                if not r["ok"]:
+                    convert_failed.append({"name": fp.name, "reason": r["note"]})
+        finally:
+            _cleanup_ingest_tmpdir(tmpdir)
         # 入库成功后才动源文件: 送回收站 (可恢复), 失败只报告
-        recycled, recycle_bad = _recycle_files(to_recycle)
+        if to_recycle:
+            recycled, recycle_bad = _recycle_files(to_recycle)
+        else:
+            recycled, recycle_bad = 0, []
         recycle_failed = [Path(x).name for x in recycle_bad]
 
         # 「建自定义作品」: 把复制进 #其他来源#/ 的文件登记成 ext_ 壳作品 (标题=文件名)
@@ -10292,6 +10509,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
         # 落盘即对账 + 作者归位 + 后台补全 (与上传导入同一套收尾)
         rep = _cached_reconcile(force=True)
+        _record_ingested_conversions(img_root, ingest_records)
         with _db() as db:
             _adopt_authors_from_folders(db, img_root)
             db.cleanup_orphans()
@@ -10300,11 +10518,14 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         if rep.new_pages_linked > 0:
             _kick_metadata_fill()
         n = len(imported) + len(redirected) + len(custom_created)
-        if n or skipped or failed or custom_created:
+        if n or skipped or failed or custom_created or reused or convert_failed:
             audit_log.record("add", "导入图片(源文件进回收站)",
                              f"从 {src_label} 入库 {len(imported)} 张，"
                              f"转反搜收件箱 {len(redirected)} 张"
                              + (f"，建自定义作品 {len(custom_created)} 个" if custom_created else "")
+                             + (f"，重复复用 {len(reused)} 张" if reused else "")
+                             + (f"，待确认 {len(pending)} 张" if pending else "")
+                             + (f"，转换失败保留原格式 {len(convert_failed)} 张" if convert_failed else "")
                              + (f"，源文件已送回收站 {recycled} 个" if recycled else "")
                              + (f"，同名跳过 {len(skipped)} 张(源文件未动)" if skipped else "")
                              + (f"，送回收站失败 {len(recycle_failed)} 个" if recycle_failed else "")
@@ -10312,7 +10533,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                              n)
         return jsonify({"status": "ok", "imported": imported,
                         "redirected": redirected, "custom_created": custom_created,
-                        "skipped": skipped,
+                        "skipped": skipped, "reused": reused, "pending": pending,
+                        "convert_failed": convert_failed,
                         "failed": failed, "recycled": recycled,
                         "recycle_failed": recycle_failed,
                         "new_pages": rep.new_pages_linked,
