@@ -3904,7 +3904,7 @@ class PixivDatabase:
             if target_dir is None:
                 target_dir = d
             elif d != target_dir:
-                raise ValueError("各页不在同一目录，无法直接认领，请先用一键整理归拢")
+                raise ValueError("各页不在同一目录，无法直接认领，请先用整理文件夹归拢")
             seen_new_pages[new_pn] = Path(old_rel).name
             plan.append({"old_pn": r["page_num"], "new_pn": new_pn,
                          "old_rel": old_rel, "status": r["status"],

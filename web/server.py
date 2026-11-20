@@ -9199,7 +9199,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 _parts.append(f"命名规范 {rep['filenamed']} 个")
             if rep.get("rmdirs"):
                 _parts.append(f"清理空夹 {rep['rmdirs']} 个")
-            audit_log.record("update", "一键整理",
+            audit_log.record("update", "整理文件夹",
                              "，".join(_parts) + (f"（{len(_fl)} 项失败）" if _fl else ""), _n)
         return jsonify({"status": "ok", **rep})
 

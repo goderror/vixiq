@@ -7045,7 +7045,7 @@ async function claimPixiv(aid, pid) {
   loadLibrary();
 }
 
-// 🪄 认领散落页 (并入「🧹 一键整理」预览): 离线扫描结果 → 弹窗内分区 HTML。
+// 🪄 认领散落页 (并入「🧹 整理文件夹」预览): 离线扫描结果 → 弹窗内分区 HTML。
 // 勾选后批量转正, 防再次出现「被拆/错并后合不回来」(去掉独立按钮)。
 let claimScanData = null;
 function claimSectionHtml(r) {
@@ -8042,7 +8042,7 @@ async function openTidyPreview() {
     const counts = r.counts || {};
     const claimHtml = claimSectionHtml(scan);
     if (!counts.total) {
-      openLibModal('🧹 一键整理',
+      openLibModal('🧹 整理文件夹',
         (claimHtml || '<div class="hint">图库摆放已经全部规范：没有需要规范、认领或待确认的内容 ✓</div>') +
         '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
         { lg: true });
@@ -8109,7 +8109,7 @@ async function openTidyPreview() {
             <li>名字本身可读的（含中文/日文/英文单词/人名）<b>一律保留不动</b>；同一文件夹内撞名才加「 (2)」。</li>
           </ul></li>
           <li><b>🧹 清理空夹</b> · ${esc(TYPE_TIP.rmdir)}<ul>
-            <li>为什么整理要管这个：<b>归位/平铺会把图从一个夹搬到另一个夹，从而留下空夹</b>；善后放同一次「一键」里做完，不用再跑去健康面板点一遍「删除空文件夹」。</li>
+            <li>为什么整理要管这个：<b>归位/平铺会把图从一个夹搬到另一个夹，从而留下空夹</b>；善后放同一次「整理」里做完，不用再跑去健康面板点一遍「删除空文件夹」。</li>
             <li>只列最外面那一处（子夹随它一起删），所以同一片残留不会列出一排重复行。</li>
           </ul></li>
           <li><b>❓️ 待确认</b> · ${esc(TYPE_TIP.categorize)}<ul>
@@ -8119,7 +8119,7 @@ async function openTidyPreview() {
         </ul>
         <div class="doc-note">底下表格逐条列出「当前 → 目标」与理由，请核对后再执行。点行内 <b>📂</b> 可在资源管理器中打开所在位置核对。</div>
       </div>`;
-    openLibModal(`🧹 一键整理 · 预览 ${counts.total} 项`,
+    openLibModal(`🧹 整理文件夹 · 预览 ${counts.total} 项`,
       `<div class="hint tidy-sum"><button type="button" class="help-toggle" onclick="tidyHelpToggle(this)" title="展开 / 收起各项操作的说明">❔ 说明</button>` +
         `目录规范 <b>${counts.rename}</b> · 位置规范 <b>${counts.move}</b> · 命名规范 <b>${counts.filrename || 0}</b> · 清理空夹 <b>${counts.rmdir || 0}</b> · 待确认 <b>${counts.categorize}</b>　可自动执行 <b>${counts.auto}</b> 项 / 共涉及 <b>${counts.files}</b> 个文件</div>` +
       claimHtml +
@@ -8155,7 +8155,7 @@ async function openTidyPreview() {
     document.querySelectorAll('.tidy-chk').forEach(cb =>
       cb.addEventListener('change', syncSel));
   } catch (e) {
-    openLibModal('🧹 一键整理', `<div class="hint err-text">预览失败: ${esc(e.message)}</div>` +
+    openLibModal('🧹 整理文件夹', `<div class="hint err-text">预览失败: ${esc(e.message)}</div>` +
       '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>');
   }
 }
