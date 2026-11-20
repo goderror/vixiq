@@ -1159,6 +1159,9 @@ main.cards-collapsed #tab-wallpapers .wf-card .wf-meta { padding: 8px 10px; }
 .pager-info .lib-page-input:focus { outline: none; border-color: var(--accent); }
 .health-badge.empty { background: #fff7e0; color: #b98a00; border: 1px solid #f2dc9a; }
 .health-badge.bad { background: #f6ecfb; color: #8e44ad; border: 1px solid #e2c5f2; }
+.health-ok { display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+  background: #e7f5ea; color: var(--success); border: 1px solid #bfe3c6; }
 button.health-badge { cursor: pointer; font-family: inherit; }
 button.health-badge:hover { filter: brightness(.96); }
 button.health-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

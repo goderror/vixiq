@@ -4180,10 +4180,15 @@ function paintLibHealth() {
   // (这条"上次体检：…"一直显示 —— 它是上次的快照, 现在: 解决完了自动消失,
   //  没解决但不想看也能收起; 下次真跑体检会重新显示。)
   const showReport = !!rc && liveN > 0 && !rc.bar_dismissed;
+  // 只要同步过一次就常驻显示（正常时也给出「未发现异常」的明确反馈）。
+  // 同步磁盘 / 万能刷新 / 整理文件夹 / 导入 都会走 libSync → 这里重画。
+  const hasHealth = !!h;
+  const clean = hasHealth && !miss && !empty && !bad && !showReport;
   const visible = $('#tab-library').classList.contains('active')
-    && (miss || empty || bad || showReport || checkRunning);
+    && (hasHealth || showReport || checkRunning);
   bar.style.display = visible ? '' : 'none';
   bar.innerHTML = `<span class="lib-sync-line">🔄 已与磁盘同步 · 扫描 ${h ? h.scanned_images : 0} 图</span>` +
+    (clean ? `<span class="health-ok">✓ 未发现异常</span>` : '') +
     (miss ? `<button type="button" class="health-badge miss" title="点击查看具体是哪些作品" onclick="showLibHealthDetail('missing')">⚠ 文件缺失 ${miss}</button>` : '') +
     (empty ? `<button type="button" class="health-badge empty" title="点击查看具体是哪些空文件夹" onclick="showLibHealthDetail('empty')">📁 空目录 ${empty}</button>` : '') +
     (bad ? `<button type="button" class="health-badge bad" title="点击查看具体是哪些损坏文件" onclick="showLibHealthDetail('corrupt')">💥 损坏 ${bad}</button>` : '') +
