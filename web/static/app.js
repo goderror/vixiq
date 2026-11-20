@@ -10764,7 +10764,7 @@ function paintSmartRefresh() {
 // 前台只重拉当前视图/计数, 不等待磁盘核对; 后台按 lastAction / 无范围时的磁盘索引同步。
 // 同一范围连续点击复用在途任务, 结果/失败/重试与整理入口显示在右下角状态条。
 let _refreshJobs = new Map();          // key -> job (含进度/渲染器)
-let _refreshRetry = null;              // {act} 最近一次失败, 供「重试」
+let _refreshRetries = new Map();       // key -> {act, stage}: 按范围保留失败, 可逐项重试
 let _refreshActiveKey = null;          // 当前状态条展示的任务; 其他任务在后台排队
 let _refreshStatusTimer = null;
 const REFRESH_STATUS_DELAY = 300;      // 短任务不弹浮层, 减少闪烁
@@ -10861,6 +10861,33 @@ function hideRefreshStatus(delay = 0) {
 }
 window.hideRefreshStatus = hideRefreshStatus;
 
+function _refreshRetryAction(key) {
+  const n = _refreshRetries.size;
+  return (_refreshRetries.has(key)
+      ? '<button class="btn danger" onclick="retryRefreshJob()">重试</button>' : '')
+    + (n > 1
+      ? `<button class="btn ghost" onclick="cycleRefreshRetry()">下一个失败（${n}）</button>`
+      : '');
+}
+
+function renderRetryStatus() {
+  const key = _refreshActiveKey;
+  const r = _refreshRetries.get(key);
+  if (!r) return;
+  renderRefreshStatus({
+    stage: r.stage, kind: 'err', bar: false,
+    actions: _refreshRetryAction(key),
+  });
+}
+
+window.cycleRefreshRetry = function () {
+  const keys = Array.from(_refreshRetries.keys());
+  if (!keys.length) return;
+  const i = keys.indexOf(_refreshActiveKey);
+  _refreshActiveKey = keys[(i + 1) % keys.length];
+  renderRetryStatus();
+};
+
 async function refreshAfterJob(act) {
   // 完成后只补刷受影响的数据; 保留搜索/筛选/页码/勾选
   if (Object.keys(_dirtyScopes).length) await flushDirty();
@@ -10920,19 +10947,21 @@ function _refreshResultText(act, r) {
   return '后台核对完成';
 }
 
-async function runRefreshJob(key, act) {
+async function runRefreshJob(key, act, forceActive = false) {
   // 同一范围连续点击: 复用在途任务与现有进度, 不从头开始
   const running = _refreshJobs.get(key);
   if (running) {
-    _refreshActiveKey = key;
+    if (forceActive || !(_refreshRetries.size && !_refreshRetries.has(key))) {
+      _refreshActiveKey = key;
+    }
     running.render(true);
     return running.promise;
   }
   // 新任务开始 → 取消上一个结果「3 秒自动收起」的定时器, 否则会把本次状态一起藏掉
   clearTimeout(_refreshStatusTimer);
-  // 另一个范围还有失败待重试 → 新任务在后台排队, 不抢走失败入口
-  const blockedByFailure = !!( _refreshRetry
-    && _refreshJobKey(_refreshRetry.act) !== key);
+  // 其他范围还有失败待重试 → 新任务后台排队; 重试某个失败范围时 forceActive 例外
+  const blockedByFailure = !forceActive
+    && _refreshRetries.size > 0 && !_refreshRetries.has(key);
 
   const ids = (act && (act.scope === 'work' || act.scope === 'author'))
     ? [...act.ids] : [];
@@ -11002,6 +11031,10 @@ async function runRefreshJob(key, act) {
         const syncErr = apiErr(result)
           || (result && result.status === 'error' ? (result.error || '磁盘同步失败') : '');
         if (syncErr) throw new Error(syncErr);
+        // HTTP 200 但数据库写入被跳过 = 部分同步, 不能当完整成功
+        if (result && result.write_skipped) {
+          throw new Error(`部分同步未完成：${result.write_skipped}`);
+        }
         window._libHealth = result;
         paintLibHealth(true);
       }
@@ -11029,40 +11062,46 @@ async function runRefreshJob(key, act) {
       const fast = !job.shown && !statusVisible
         && Date.now() - job.at < REFRESH_STATUS_DELAY && !failed.length;
       if (failed.length) {
-        // 失败优先: 即使另一个范围正在显示, 也要保留失败原因和重试入口
+        // 失败优先: 每个范围各自进失败队列, 状态条显示当前这一条
         _refreshActiveKey = job.key;
         job.bar = false;
         job.indeterminate = false;
         job.kind = 'err';
         job.stage = `${text}（${failed.length} 项失败：${failed[0]}）`;
-        job.actions = `<button class="btn danger" onclick="retryRefreshJob()">重试失败项</button>`;
-        _refreshRetry = { act: { ...act, ids: failedIds } };
+        _refreshRetries.set(key, {
+          act: { ...act, ids: failedIds },
+          stage: job.stage,
+        });
+        job.actions = _refreshRetryAction(key);
         job.render(true);
-      } else if (_refreshRetry && _refreshJobKey(_refreshRetry.act) !== key) {
-        // 另一个范围还有失败待重试: 本次成功不覆盖失败入口
-      } else if (_refreshActiveKey !== job.key) {
-        // 另一个范围正显示: 本次成功静默结束, 不抢/不收起别人的进度
-      } else if (others.length) {
-        // 还有在途任务: 让位给下一条, 不收起别人的进度
-        _refreshActiveKey = others[0];
-        const nxt = _refreshJobs.get(others[0]);
-        if (nxt) nxt.render(true);
-      } else if (fast) {
-        hideRefreshStatus();            // 短操作不弹浮层
       } else {
-        job.bar = false;
-        job.indeterminate = false;
-        job.kind = 'ok';
-        job.stage = `✓ ${text}`;
-        job.actions = tidyN > 0
-          ? `<button class="btn accent" onclick="openTidyPreview()">🧹 整理文件夹（${tidyN} 项）</button>`
-          : '';
-        // 只清掉自己的重试; 另一个范围保留的失败入口不能被这次成功覆盖
-        if (_refreshRetry && _refreshJobKey(_refreshRetry.act) === key) {
-          _refreshRetry = null;
+        _refreshRetries.delete(key);   // 重试成功后清掉自己的失败记录
+        if (_refreshRetries.size) {
+          // 别的范围还有失败待重试: 成功不覆盖; 若是自己重试成功, 切到下一条失败
+          if (_refreshActiveKey === job.key) {
+            _refreshActiveKey = _refreshRetries.keys().next().value;
+            renderRetryStatus();
+          }
+        } else if (_refreshActiveKey !== job.key) {
+          // 另一个范围正显示: 本次成功静默结束, 不抢/不收起别人的进度
+        } else if (others.length) {
+          // 还有在途任务: 让位给下一条, 不收起别人的进度
+          _refreshActiveKey = others[0];
+          const nxt = _refreshJobs.get(others[0]);
+          if (nxt) nxt.render(true);
+        } else if (fast) {
+          hideRefreshStatus();            // 短操作不弹浮层
+        } else {
+          job.bar = false;
+          job.indeterminate = false;
+          job.kind = 'ok';
+          job.stage = `✓ ${text}`;
+          job.actions = tidyN > 0
+            ? `<button class="btn accent" onclick="openTidyPreview()">🧹 整理文件夹（${tidyN} 项）</button>`
+            : '';
+          job.render(true);
+          if (!tidyN) hideRefreshStatus(REFRESH_DONE_HIDE);
         }
-        job.render(true);
-        if (!tidyN) hideRefreshStatus(REFRESH_DONE_HIDE);
       }
       return result;
     } catch (e) {
@@ -11077,12 +11116,14 @@ async function runRefreshJob(key, act) {
       const nRel = Number((result && result.pages_relinked) || 0);
       const part = (nDone || nRel)
         ? `已新增 ${nDone} 张 · 重新关联 ${nRel} 张；` : '';
-      job.stage = `⚠ ${part}后台核对失败：${e.message || '未知错误'}`;
-      job.actions = `<button class="btn danger" onclick="retryRefreshJob()">重试</button>`;
-      _refreshRetry = {
-        act: (act && failedIds.length && act.ids)
-          ? { ...act, ids: failedIds } : act,
-      };
+      const why = (result && result.write_skipped)
+        ? `部分同步未完成：${result.write_skipped}`
+        : `后台核对失败：${e.message || '未知错误'}`;
+      job.stage = `⚠ ${part}${why}`;
+      const retryAct = (act && failedIds.length && act.ids)
+        ? { ...act, ids: failedIds } : act;
+      _refreshRetries.set(key, { act: retryAct, stage: job.stage });
+      job.actions = _refreshRetryAction(key);
       job.render(true);
       return { error: e.message || '未知错误' };
     } finally {
@@ -11097,10 +11138,15 @@ async function runRefreshJob(key, act) {
 window.runRefreshJob = runRefreshJob;
 
 window.retryRefreshJob = function () {
-  const r = _refreshRetry;
+  let key = _refreshActiveKey;
+  if (!key || !_refreshRetries.has(key)) {
+    key = _refreshRetries.keys().next().value;
+  }
+  const r = key ? _refreshRetries.get(key) : null;
   if (!r) return;
-  _refreshRetry = null;
-  runRefreshJob(_refreshJobKey(r.act), r.act);
+  _refreshRetries.delete(key);
+  // 只重试当前失败范围; 其他范围的失败仍留在队列里, 成功后再切过去
+  runRefreshJob(key, r.act, true);
 };
 
 window.smartRefresh = async function () {

@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-21（当前前端版本 `20261121d`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-21（当前前端版本 `20261121e`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261121d`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261121e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -930,6 +930,26 @@
   - 部署：候选包 `built_at 03:12:26`；安装版/dist 已替换（前端 `20261121d`），备份
     `.backup-smart-refresh-review-20261121-031749` / `.backup-smart-refresh-review-20261121-031829`；
     四处资源与 exe 哈希一致。GitHub 本地提交，**未推送**。
+- **复验补缺（2026-11-21，版本 `20261121e`）**：
+  - 部分同步失败不再当全成功：`/api/library/sync` 返回 HTTP 200 但带 `write_skipped`
+    （如 `database is locked`）时进入失败态，保留已完成的新增/重新关联计数，显示
+    「部分同步未完成：<原因>」，可同范围重试；失败/部分失败一律不写 `_libHealth`。
+    HTTP 500 JSON 失败、正常完整同步成功两组行为保持不变。
+  - 多任务失败改为按范围保留：单值 `_refreshRetry` 换成 `_refreshRetries: Map<key,{act,stage}>`；
+    `_refreshRetryAction(key)` 生成「重试」+「下一个失败（N）」，`renderRetryStatus()` 渲染当前失败项，
+    `cycleRefreshRetry()` 循环切换，`retryRefreshJob()` 只消费当前 key。重试 B 只请求 B，
+    B 成功后仍能看到并重试 A；成功任务不吞掉其他范围失败，也不收起来在途任务。
+  - 回归脚本（均在忽略目录）：`check_smart_refresh_recheck.py`（write_skipped / HTTP 500 /
+    A、B 双失败独立重试、部分失败只重试失败 id）、`check_smart_refresh_review.py`、
+    `check_smart_refresh.py`（进度动画/快速完成/连续点击/并行进度/减少动态/390px）；
+    运行时实测：拦截返回 `{status:'ok',new_pages_linked:2,pages_relinked:1,write_skipped:'database is locked'}`
+    → 状态条显示部分失败与原因、健康数据不变、重试后成功；A/B 失败下 cycle 切到 A 后重试请求
+    仅 `{"scope":"work","ids":["<A>"]}`。全量 **158/158**，`py_compile`、`node --check` 通过。
+  - 部署：只改前端，`index.html` / `app.js` 已同步 `_dev_runtime/packages/vixiq`、`dist/vixiq`、
+    `D:\Program Files\Vixiq`（备份 `.backup-smart-refresh-recheck-20261121-033205`，`style.css` 未改）；
+    安装版未重新打包（exe 仍为 `built_at 03:12:26`），启动后 `/api/version` 前端
+    `20261121e-1795202798-1795201946-1795201946`，真实库 1603 作品 / 2191 图正常。
+    GitHub 本地提交，**未推送**。
 
 ---
 
