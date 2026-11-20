@@ -5422,6 +5422,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     # ---- 备份管理: OVERWRITE 强制重下时旧文件自动存 .bak, 这里提供列出/对比/恢复/删除 ----
     _BACKUP_MIME = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
                     '.webp': 'image/webp', '.gif': 'image/gif'}
+    # 安全模式下的占位图: 不含任何图片内容。备份预览接口在无法确认「明确全年龄」时返回它。
+    _SAFE_MASK_SVG = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="640">'
+        '<rect width="100%" height="100%" fill="#2a2d34"/>'
+        '<text x="240" y="320" font-family="sans-serif" font-size="34"'
+        ' fill="#d9a441" text-anchor="middle">安全模式已打码</text></svg>')
 
     def _local_bak_rel(rel: str) -> "Path | None":
         """把前端传的 .bak 相对路径解析成 img_root 内绝对路径; 跨出根目录返回 None。"""
@@ -5431,9 +5437,38 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return None
         return p
 
+    def _backup_rating(orig_rel: str) -> "tuple[bool, int | None]":
+        """按原图在 pages 的可靠归属返回 (owner_known, is_r18)。
+
+        只认数据库里 `pages.local_path == 原文件相对路径` 的归属; 找不到页面/作品
+        → 归属不明; `is_r18` 为 NULL → 分级未知。两者都不许加载真实图片。"""
+        rel = str(orig_rel or "").replace("\\", "/").strip("/")
+        if not rel:
+            return False, None
+        try:
+            with _db() as db:
+                row = db.conn.execute(
+                    "SELECT p.artwork_id, a.is_r18 FROM pages p "
+                    "LEFT JOIN artworks a ON a.artwork_id = p.artwork_id "
+                    "WHERE p.local_path = ? LIMIT 1", (rel,)).fetchone()
+        except Exception:
+            return False, None
+        if not row or not str(row["artwork_id"] or ""):
+            return False, None
+        return True, (int(row["is_r18"]) if row["is_r18"] is not None else None)
+
+    def _safemode_on() -> bool:
+        try:
+            return bool((load_config().get("safemode") or {}).get("enabled"))
+        except Exception:
+            return True    # 读不到配置按开启处理 (安全优先)
+
     @app.route("/api/library/backups")
     def api_library_backups():
-        """全库 .bak 备份清单 (按作品聚合, 供「备份管理」弹窗对比/恢复/删除)。"""
+        """全库 .bak 备份清单 (按作品聚合, 供「备份管理」弹窗对比/恢复/删除)。
+
+        每个条目都带可靠分级: owner_known=原文件在 pages 有归属, is_r18=0/1/None。
+        前端对比只在「安全模式关闭」或「明确全年龄」时加载真实图片。"""
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
         items = []
         if img_root.is_dir():
@@ -5457,7 +5492,31 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     "backup_exists": p.exists(),
                     "size": sz,
                     "mtime": mt,
+                    "owner_known": False,
+                    "is_r18": None,
                 })
+        # 可靠归属: 以 pages.local_path 指到的作品为准 (文件名的自然键只用于显示)
+        if items:
+            rels = [x["orig_rel"] for x in items]
+            owner = {}
+            try:
+                with _db() as db:
+                    ph = ",".join("?" * len(rels))
+                    for r in db.conn.execute(
+                            f"SELECT p.local_path, p.artwork_id, a.is_r18 "
+                            f"  FROM pages p LEFT JOIN artworks a "
+                            f"    ON a.artwork_id = p.artwork_id "
+                            f" WHERE p.local_path IN ({ph})", rels):
+                        owner[str(r["local_path"]).replace("\\", "/")] = (
+                            str(r["artwork_id"] or ""), r["is_r18"])
+            except Exception:
+                owner = {}
+            for x in items:
+                aid_db, r18 = owner.get(x["orig_rel"], ("", None))
+                if aid_db:
+                    x["artwork_id"] = aid_db
+                    x["owner_known"] = True
+                x["is_r18"] = int(r18) if r18 is not None else None
         items.sort(key=lambda x: (x["artwork_id"] or "", x["page_num"] or 0))
         return jsonify({"total": len(items), "items": items})
 
@@ -5470,6 +5529,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         p = _local_bak_rel(rel)
         if p is None or not p.is_file() or p.suffix.lower() != ".bak":
             return jsonify({"error": "not found"}), 404
+        # 安全模式兜底: 前端已按分级决定是否发请求, 这里再校验一次 ——
+        # 只有「可靠归属 + 明确全年龄」才返回真实字节; R18 / 分级未知 / 归属不明 → 占位。
+        if _safemode_on():
+            _known, _rating = _backup_rating(rel[:-4])
+            if not (_known and _rating == 0):
+                return Response(_SAFE_MASK_SVG, mimetype="image/svg+xml")
         stem = p.name[:-4]
         ext = Path(stem).suffix.lower()
         mime = _BACKUP_MIME.get(ext, "application/octet-stream")

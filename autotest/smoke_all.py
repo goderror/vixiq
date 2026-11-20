@@ -3064,6 +3064,7 @@ def run_suite() -> SuiteResult:
     suite.add("T162", "🔎 健康条点击看明细 + 托盘「打开当前壁纸文件夹/打开图库文件夹」接线 (离线)", t162_health_detail_and_tray_folder)
     suite.add("T163", "🧹 整理文件夹同一次收尾搬空目录: 预览标预计搬空 + 执行后逐级 rmdir + 含 PSD 保留 + 目标冲突/预览后放入文件/写库失败 (隔离数据)", t163_tidy_emptied_dirs_same_pass)
     suite.add("T164", "🧷 整理预览快照稳定: 同路径同大小替换源文件→stale 留原位 + 新增无关空目录不改变已确认项(按稳定 key 执行) (隔离数据)", t164_tidy_preview_snapshot_stability)
+    suite.add("T165", "🛡 备份对比接入安全模式: 可靠归属分级 + 安全模式下 R18/未知/归属不明两侧占位 + 后端 backup-img 兜底 + 全年龄正常加载 (隔离数据)", t165_backup_compare_safemode)
     suite.write_report()
     return suite
 
@@ -7642,16 +7643,10 @@ def t101_render_state_invariants() -> None:
         "重画要覆盖回收站与搜索结果, 不能只刷图库"
 
     # ③ 不允许裸 /api/local-img 进 <img> (必须走 imgSrc / safeThumb 才算打过码)。
-    #    allow-raw-img 标记可豁免**它后面 6 行**(给"刻意不走打码"的单点留口子, 见 compareBackup)。
+    #    备份对比也已接分级判定 (明确全年龄才加载, R18/未知/归属不明占位), 不再留豁免标记。
+    assert "allow-raw-img" not in appjs, "旧的裸图豁免标记应已移除"
     bad = []
-    lines = appjs.splitlines()
-    exempt_until = -1
-    for no, ln in enumerate(lines, 1):
-        if "allow-raw-img" in ln:
-            exempt_until = no + 6
-            continue
-        if no <= exempt_until:
-            continue
+    for no, ln in enumerate(appjs.splitlines(), 1):
         if "<img" in ln and "/api/local-img" in ln and "imgSrc(" not in ln and "safeThumb(" not in ln:
             bad.append(f"{no}: {ln.strip()[:90]}")
     assert not bad, ("这些 <img> 直接用了本地图片真实地址, 绕过了安全模式打码(会走光): "
@@ -10404,7 +10399,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261120g" and _mss.group(1) == "20261120g", \
+    assert _mjs and _mss and _mjs.group(1) == "20261121a" and _mss.group(1) == "20261121a", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10499,7 +10494,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261120g', html) and _re.search(r'app\.js\?v=20261120g', html), \
+    assert _re.search(r'style\.css\?v=20261121a', html) and _re.search(r'app\.js\?v=20261121a', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10907,7 +10902,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261120g" in html and "app.js?v=20261120g" in html, \
+        assert "style.css?v=20261121a" in html and "app.js?v=20261121a" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13290,7 +13285,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261120g" in _h and "style.css?v=20261120g" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261121a" in _h and "style.css?v=20261121a" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14659,7 +14654,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261120g" in html and "app.js?v=20261120g" in html
+            assert "style.css?v=20261121a" in html and "app.js?v=20261121a" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14768,7 +14763,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261120g" in html and "app.js?v=20261120g" in html
+            assert "style.css?v=20261121a" in html and "app.js?v=20261121a" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14879,7 +14874,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261120g" in html and "app.js?v=20261120g" in html
+    assert "style.css?v=20261121a" in html and "app.js?v=20261121a" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14919,7 +14914,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261120g" in html
+    assert "20261121a" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15227,6 +15222,103 @@ def t164_tidy_preview_snapshot_stability() -> None:
             assert (img / "a-empty").is_dir(), "新出现的无关目录不得被顺带删除"
         finally:
             db.close()
+
+
+def t165_backup_compare_safemode() -> None:
+    """T165: 备份对比接入安全模式（2026-11-21 第 2 项）。
+
+    可靠归属取 pages.local_path 指到的作品；安全模式下只有「明确全年龄」才加载真实图片，
+    R18 / is_r18 为空 / 归属无法确认一律占位。后端 backup-img 也做同样兜底。
+    """
+    import json as _json
+    import tempfile
+    from urllib.parse import quote
+    import utils.paths as upaths
+    import web.server as ws
+    from db.store import PixivDatabase, WSt, PSt
+
+    with tempfile.TemporaryDirectory(prefix="t165bak_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir()
+        db = PixivDatabase(str(tmp / "pixiv.db"))
+        db.upsert_author("1", "作者甲")
+        for aid, r18, rel in (
+                ("990301", 0, "作者甲_1/990301_p0.jpg"),
+                ("990302", 1, "作者甲_1/990302_p0.jpg"),
+                ("990303", None, "作者甲_1/990303_p0.jpg")):
+            db.change_work_status(aid, WSt.DONE, title=aid, author_id="1",
+                                  total_pages=1)
+            db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
+            db.conn.execute("UPDATE artworks SET is_r18=? WHERE artwork_id=?",
+                            (r18, aid))
+        db.conn.commit()
+        db.close()
+
+        for rel, data in (
+                ("作者甲_1/990301_p0.jpg", b"SAFE-BAK"),
+                ("作者甲_1/990302_p0.jpg", b"R18-BAK"),
+                ("作者甲_1/990303_p0.jpg", b"NULL-BAK"),
+                ("999999_p0.jpg", b"UNKNOWN-BAK")):
+            p = img / (rel + ".bak")
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+
+        orig_ud, orig_load = upaths.user_data, ws.load_config
+        upaths.user_data = lambda rel: tmp / str(rel)
+        cfg = _json.loads(_json.dumps(ws._config))
+        cfg["safemode"] = {"enabled": True}
+        cfg.setdefault("paths", {})["img_subdir"] = "img"
+        ws.load_config = lambda: cfg
+        try:
+            client = ws.create_app().test_client()
+            r = client.get("/api/library/backups")
+            assert r.status_code == 200, r.data
+            items = {x["orig_rel"]: x for x in r.get_json()["items"]}
+            assert items["作者甲_1/990301_p0.jpg"]["owner_known"] is True
+            assert items["作者甲_1/990301_p0.jpg"]["is_r18"] == 0
+            assert items["作者甲_1/990302_p0.jpg"]["is_r18"] == 1
+            assert items["作者甲_1/990303_p0.jpg"]["is_r18"] is None
+            assert items["999999_p0.jpg"]["owner_known"] is False
+            assert items["999999_p0.jpg"]["is_r18"] is None
+
+            def _get(rel):
+                return client.get("/api/library/backup-img?rel=" + quote(rel))
+
+            safe = _get("作者甲_1/990301_p0.jpg.bak")
+            try:
+                assert safe.status_code == 200 and safe.data == b"SAFE-BAK", safe.data
+            finally:
+                safe.close()
+            for rel in ("作者甲_1/990302_p0.jpg.bak",
+                        "作者甲_1/990303_p0.jpg.bak",
+                        "999999_p0.jpg.bak"):
+                rr = _get(rel)
+                try:
+                    assert rr.status_code == 200 and rr.mimetype == "image/svg+xml", \
+                        (rel, rr.status_code, rr.mimetype)
+                    assert "安全模式" in rr.get_data(as_text=True), rel
+                    assert b"BAK" not in rr.data, f"{rel} 泄露了真实备份字节"
+                finally:
+                    rr.close()
+
+            cfg["safemode"]["enabled"] = False
+            r18 = _get("作者甲_1/990302_p0.jpg.bak")
+            try:
+                assert r18.data == b"R18-BAK", r18.data
+            finally:
+                r18.close()
+        finally:
+            ws.load_config = orig_load
+            upaths.user_data = orig_ud
+
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    i = js.index("function compareBackup(it)")
+    body = js[i:i + 1800]
+    assert "safeThumb(" in body and "backup-img" in body and "/api/local-img" in body
+    assert "allow-raw-img" not in js
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    assert "_backup_rating" in srv and "owner_known" in srv
 
 
 def main() -> int:

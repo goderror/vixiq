@@ -7477,13 +7477,14 @@ async function deleteDbBackup(name) {
 }
 window.deleteDbBackup = deleteDbBackup;
 
-// 对比视图: 左=旧备份(.bak), 右=当前文件; 看完可恢复或删除
-// allow-raw-img: 这一处**刻意**不走 imgSrc —— 它是用户针对"自己刚备份的那一个文件"
-// 主动发起的对比(等价于 Lightbox 里点「显示」), 不是列表批量铺图, 所以不打码。
-// 冒烟 T101 扫描"裸本地图片地址的图片标签", 这段标记后面若干行是唯一豁免区。
+// 对比视图: 左=旧备份(.bak), 右=当前文件; 看完可恢复或删除。
+// 安全模式: 只有「可靠归属 + 明确全年龄」才加载真实图片; R18 / 分级未知 /
+// 归属无法确认一律用占位图 —— 在产生图片请求前就判定, 不把真实 URL 交给 <img>。
 function compareBackup(it) {
-  const oldUrl = '/api/library/backup-img?rel=' + encodeURIComponent(it.rel);
-  const newUrl = '/api/local-img?p=' + encodeURIComponent(it.orig_rel) + (it.orig_rel.toLowerCase().endsWith('.gif') ? '' : '');
+  const oldUrl = safeThumb('/api/library/backup-img?rel=' + encodeURIComponent(it.rel), it);
+  const newUrl = safeThumb('/api/local-img?p=' + encodeURIComponent(it.orig_rel), it);
+  const masked = safemode && !(it && it.is_r18 === 0);
+  const stamp = it.mtime ? new Date(it.mtime * 1000).toLocaleString('zh-CN') : '';
   openLibModal('🔀 对比备份 · ' + esc(it.orig_name),
     `<div class="bk-compare">
        <div class="bk-side">
@@ -7495,6 +7496,7 @@ function compareBackup(it) {
          <img class="bk-img" src="${newUrl}" alt="当前" onerror="this.parentNode.innerHTML+='<div class=hint>当前文件缺失</div>'">
        </div>
      </div>
+     <div class="hint">${esc(it.orig_name)} · ${fmtSize(it.size)}${stamp ? ' · ' + stamp : ''}${masked ? ' · 安全模式：R18 或分级未知，已用占位图；文件名/大小/时间仍可查看。' : ''}</div>
      <div class="btn-row">
        <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份中心</button>
        <button class="btn accent" onclick="restoreBackup('${esc(it.rel)}')">↩ 恢复此备份</button>
