@@ -68,7 +68,7 @@ from core.wallpaper_index import (
     upsert_wall_file as _wall_upsert_file,
 )
 from db.store import PixivDatabase, WSt, PSt, pixiv_natural_key, parse_foreign_account, \
-    folder_author_name_usable
+    folder_author_name_usable, ReconcileReport
 from utils import paths
 from utils import proc
 from utils import audit_log
@@ -834,22 +834,43 @@ _reconcile_lock = threading.Lock()
 
 def _cached_reconcile(force: bool = False):
     """返回最近一次(≤ TTL)的磁盘对账结果; force=True 强制重扫(前端刷新/同步)。
-    结果用于图库的 file_missing 标记与清理缺失。"""
+    结果用于图库的 file_missing 标记与清理缺失。
+
+    2026-11-21 第 4 项: 扫描前先确认图库根目录可访问。外接盘没接上时既不能 500,
+    也不能拿一次空扫描把全部作品判成「缺失」 —— 返回 root_available=False 的空报告,
+    缺失/清理入口全部暂缓; 盘接回后下一次调用立即重扫。"""
     now = time.time()
     state = _reconcile_state
-    if force or state["rep"] is None or (now - state["ts"]) > _RECONCILE_TTL:
+    img_root = paths.user_data(_config["paths"]["img_subdir"])
+    img_path = Path(img_root)
+    root_ok = img_path.is_dir()
+    if not root_ok:
+        # 用户手动删掉图片目录后也不该让图库接口 500: 父目录可写时照旧补建空目录
+        try:
+            img_path.mkdir(parents=True, exist_ok=True)
+            root_ok = img_path.is_dir()
+        except Exception:
+            root_ok = False
+    if not root_ok:
+        state["rep"] = ReconcileReport(
+            missing_ids=[], empty_dirs=[], corrupt_files=[],
+            scanned_images=0, new_pages_linked=0, db_artwork_count=0,
+            root_available=False)
+        state["ts"] = now
+        return state["rep"]
+
+    def _need_scan(t: float) -> bool:
+        rep0 = state["rep"]
+        return (force or rep0 is None
+                or not getattr(rep0, "root_available", True)
+                or (t - state["ts"]) > _RECONCILE_TTL)
+
+    if _need_scan(now):
         with _reconcile_lock:
             # 锁内二次检查: 等待期间可能已被别的调用方扫好
             now = time.time()
-            if not (force or state["rep"] is None
-                    or (now - state["ts"]) > _RECONCILE_TTL):
+            if not _need_scan(now):
                 return state["rep"]
-            img_root = paths.user_data(_config["paths"]["img_subdir"])
-            # 用户手动删掉图片目录后也不该让图库接口 500：扫描前补建空目录
-            try:
-                Path(img_root).mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
             with _db() as db:
                 state["rep"] = db.reconcile_output(img_root, verify_corrupt=False)
                 # 外来作品标题随文件移动刷新 (懒收敛: 整理/同步/归档搬走的 ext_ 标题不再过期)
@@ -873,6 +894,11 @@ def _reconcile_to_json(rep) -> dict:
         "total_issues": rep.total_issues(),
         "duplicates": getattr(rep, "duplicates", []) or [],
         "conflicts": getattr(rep, "conflicts", []) or [],
+        # 第 4 项: 同步结果要能区分「盘不可用/扫描不完整/多候选待确认」
+        "root_available": bool(getattr(rep, "root_available", True)),
+        "scan_incomplete": bool(getattr(rep, "scan_incomplete", False)),
+        "unreadable_dirs": getattr(rep, "unreadable_dirs", []) or [],
+        "pending": getattr(rep, "pending", []) or [],
     }
 
 
@@ -6513,6 +6539,17 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         """
         periodic = request.args.get("periodic", "") == "1"
         rep = _cached_reconcile(force=not periodic)
+        # 图库根目录不可访问: 明确告诉前端「图库不可用」, 本轮不产生缺失判定、不写库
+        if not getattr(rep, "root_available", True):
+            return jsonify({
+                "status": "error",
+                "error": "图库不可用：磁盘未连接或图库目录无法访问",
+                "root_available": False,
+                "missing_ids": [], "empty_dirs": [], "corrupt_files": [],
+                "scanned_images": 0, "new_pages_linked": 0, "pages_relinked": 0,
+                "duplicates": [], "conflicts": [], "pending": [],
+                "scan_incomplete": False, "unreadable_dirs": [],
+            }), 503
         resp = _reconcile_to_json(rep)
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
         if periodic:
@@ -6562,6 +6599,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         img_root = paths.user_data(_config["paths"]["img_subdir"])
         with _db() as db:
             rep = db.reconcile_output(img_root, verify_corrupt=True)
+        if not getattr(rep, "root_available", True):
+            return jsonify({
+                "status": "error",
+                "error": "图库不可用：磁盘未连接或图库目录无法访问",
+                "root_available": False,
+            }), 503
         return jsonify(_reconcile_to_json(rep))
 
     @app.route("/api/local-img")
@@ -7473,33 +7516,112 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         except Exception as e:
             return jsonify({"status": "error", "msg": str(e)}), 500
 
+    @app.route("/api/library/missing-items")
+    def api_library_missing_items():
+        """缺失清理预览: 列出当前缺失作品与残留文件, 供勾选后再决定怎么处理。
+
+        2026-11-21 第 4 项: 清理缺失必须先预览、勾选具体作品;
+        只返回本次对账仍判定为缺失的记录, 扫描不完整时如实标注。"""
+        rep = _cached_reconcile(force=False)
+        if not getattr(rep, "root_available", True):
+            return jsonify({
+                "status": "error",
+                "error": "图库不可用：磁盘未连接或图库目录无法访问",
+                "root_available": False,
+            }), 503
+        ids_arg = [x.strip() for x in (request.args.get("ids", "") or "").split(",")
+                   if x.strip()]
+        missing = [str(x) for x in (rep.missing_ids or [])]
+        missing_set = set(missing)
+        ids = [x for x in ids_arg if x in missing_set] if ids_arg else missing
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        items: "list[dict]" = []
+        with _db() as db:
+            rels = db.get_local_paths_by_artwork(ids)
+            for aid in ids:
+                meta = db.get_artwork_metadata(aid) or {}
+                author = db.get_author(str(meta.get("author_id") or "")) \
+                    if meta.get("author_id") else None
+                paths_out = []
+                for rel in rels.get(aid, []):
+                    try:
+                        exists = (img_root / rel).is_file()
+                    except OSError:
+                        exists = False
+                    paths_out.append({"rel": rel, "exists": exists})
+                items.append({
+                    "artwork_id": aid,
+                    "title": meta.get("title") or "",
+                    "author_id": str(meta.get("author_id") or ""),
+                    "author_name": (author or {}).get("name") or "",
+                    "source": meta.get("source") or "",
+                    "paths": paths_out,
+                    "existing_files": sum(1 for p in paths_out if p["exists"]),
+                })
+        return jsonify({
+            "status": "ok",
+            "items": items,
+            "total": len(items),
+            "root_available": True,
+            "scan_incomplete": bool(getattr(rep, "scan_incomplete", False)),
+            "unreadable_dirs": getattr(rep, "unreadable_dirs", []) or [],
+        })
+
     @app.route("/api/library/clean-missing", methods=["POST"])
     def api_library_clean_missing():
-        """一键清理所有「文件缺失」幽灵记录 (手动删了文件、库里的残留)。"""
-        rep = _cached_reconcile(force=True)
-        ids = list(rep.missing_ids or [])
+        """清理勾选的「文件缺失」记录 (body: {ids, recycle_files})。
+
+        - ids 必填: 只清理用户预览后勾选的作品, 不再默认清理全库;
+        - 执行前强制重新对账, 只处理仍然缺失的记录 (预览后文件恢复的不动);
+        - recycle_files=False 只删数据库索引; True 才把残留文件送 Windows 回收站
+          (绝不直接 unlink, 保持可还原)。
+        """
+        data = request.get_json(silent=True) or {}
+        ids = [str(x) for x in (data.get("ids") or []) if str(x).strip()]
         if not ids:
-            return jsonify({"status": "ok", "cleaned": 0, "files_removed": 0})
-        files_removed = 0
+            return jsonify({"status": "error", "error": "未选择要清理的作品"}), 400
+        recycle_files = bool(data.get("recycle_files"))
+        rep = _cached_reconcile(force=True)
+        if not getattr(rep, "root_available", True):
+            return jsonify({
+                "status": "error",
+                "error": "图库不可用：磁盘未连接或图库目录无法访问",
+                "root_available": False,
+            }), 503
+        verified = set(str(x) for x in (rep.missing_ids or []))
+        skipped = [x for x in ids if x not in verified]
+        ids = [x for x in ids if x in verified]
+        if not ids:
+            return jsonify({"status": "ok", "cleaned": 0, "files_recycled": 0,
+                            "recycle_failed": [], "skipped": skipped,
+                            "scan_incomplete": bool(getattr(rep, "scan_incomplete", False))})
         img_root = paths.user_data(_config["paths"]["img_subdir"])
         label_txt = _labels_inline(ids)   # 必须在删库前取: 删完就查不到标题/作者了
         with _db() as db:
             rel_paths = db.get_artwork_local_paths(ids)
             cleaned = db.delete_artworks(ids)
-        for rel in rel_paths:
-            try:
-                f = Path(img_root) / rel
-                if f.is_file():
-                    f.unlink(missing_ok=True)
-                    files_removed += 1
-            except Exception:
-                continue
+        files_recycled, recycle_failed = 0, []
+        if recycle_files:
+            existing = []
+            for rel in rel_paths:
+                try:
+                    f = Path(img_root) / rel
+                    if f.is_file():
+                        existing.append(str(f))
+                except OSError:
+                    continue
+            if existing:
+                files_recycled, recycle_failed = _recycle_files(existing)
         if cleaned:
             audit_log.record("delete", "清理缺失记录",
                              f"清理 {cleaned} 个「磁盘文件已丢失」的作品记录：{label_txt}"
-                             + (f"（同时删除残留文件 {files_removed} 个）" if files_removed else ""),
+                             + (f"（残留文件回收 {files_recycled} 个）" if files_recycled else ""),
                              cleaned, ids=ids)
-        return jsonify({"status": "ok", "cleaned": cleaned, "files_removed": files_removed})
+        return jsonify({"status": "ok", "cleaned": cleaned,
+                        "files_recycled": files_recycled,
+                        "recycle_failed": recycle_failed,
+                        "skipped": skipped,
+                        "scan_incomplete": bool(getattr(rep, "scan_incomplete", False))})
 
     @app.route("/api/library/facets")
     def api_library_facets():

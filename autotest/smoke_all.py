@@ -3067,6 +3067,7 @@ def run_suite() -> SuiteResult:
     suite.add("T165", "🛡 备份对比接入安全模式: 可靠归属分级 + 安全模式下 R18/未知/归属不明两侧占位 + 后端 backup-img 兜底 + 全年龄正常加载 (隔离数据)", t165_backup_compare_safemode)
     suite.add("T166", "🎯 智能刷新前后台拆分: 前台立即刷当前视图(保留页码/勾选) + 后台按作品/作者/磁盘范围核对 + 同范围复用在途任务 + 失败重试/整理入口接线 (离线)", t166_smart_refresh_front_background)
     suite.add("T167", "🛡 定向刷新作者只更新资料: refresh-scope author 不直接改磁盘文件夹 + 旧文件/本地路径保持 + 整理预览出现 rename 计划 (隔离数据)", t167_refresh_scope_author_no_disk_rename)
+    suite.add("T168", "🔄 同步磁盘索引: 根目录不可用/扫描不完整暂缓缺失/多候选待确认/缺失清理先勾选且索引与回收分离 (隔离数据)", t168_sync_disk_root_scan_pending_clean)
     suite.write_report()
     return suite
 
@@ -10401,7 +10402,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261121e" and _mss.group(1) == "20261121e", \
+    assert _mjs and _mss and _mjs.group(1) == "20261121f" and _mss.group(1) == "20261121f", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10496,7 +10497,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261121e', html) and _re.search(r'app\.js\?v=20261121e', html), \
+    assert _re.search(r'style\.css\?v=20261121f', html) and _re.search(r'app\.js\?v=20261121f', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10904,7 +10905,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261121e" in html and "app.js?v=20261121e" in html, \
+        assert "style.css?v=20261121f" in html and "app.js?v=20261121f" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13287,7 +13288,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261121e" in _h and "style.css?v=20261121e" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261121f" in _h and "style.css?v=20261121f" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14656,7 +14657,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261121e" in html and "app.js?v=20261121e" in html
+            assert "style.css?v=20261121f" in html and "app.js?v=20261121f" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14765,7 +14766,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261121e" in html and "app.js?v=20261121e" in html
+            assert "style.css?v=20261121f" in html and "app.js?v=20261121f" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14876,7 +14877,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261121e" in html and "app.js?v=20261121e" in html
+    assert "style.css?v=20261121f" in html and "app.js?v=20261121f" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14916,7 +14917,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261121e" in html
+    assert "20261121f" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15448,6 +15449,199 @@ def t167_refresh_scope_author_no_disk_rename() -> None:
             _sec.load_cookies_smart = orig_cookies
             ws.load_config = orig_load
             upaths.user_data = orig_ud
+
+
+def t168_sync_disk_root_scan_pending_clean() -> None:
+    """T168: 同步磁盘索引（2026-11-21 第 4 项）。
+
+    - 根目录不可访问 → root_available=False / 接口 503「图库不可用」, 不产生缺失;
+      不可达期间清理接口同样 503; 恢复后重新对账能再次报告缺失。
+    - 子目录读不了 → scan_incomplete=True, 该目录下已登记作品暂缓缺失判定。
+    - 同一 MD5 对多个候选 → 进 pending, 不自动重指 local_path。
+    - 清理缺失必须传 ids 且执行前重新核对; 默认只清索引, recycle_files 才走回收站。
+    """
+    import hashlib
+    import json as _json
+    import tempfile
+    import utils.paths as upaths
+    import db.store as store_mod
+    import web.server as ws
+    from db.store import PixivDatabase, WSt, PSt
+
+    same_md5 = hashlib.md5(b"SAME").hexdigest()
+    with tempfile.TemporaryDirectory(prefix="t168sync_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        (img / "作者甲_1").mkdir(parents=True)
+        (img / "locked").mkdir()
+        (img / "moved").mkdir()
+        (img / "作者甲_1" / "990401_p0.jpg").write_bytes(b"GOOD")
+        (img / "作者甲_1" / "renamed_unknown.jpg").write_bytes(b"RESIDUAL")
+        (img / "moved" / "unknown_name.jpg").write_bytes(b"SAME")
+
+        db = PixivDatabase(str(tmp / "pixiv.db"))
+        db.upsert_author("1", "作者甲")
+        for aid in ("990401", "990402", "990403", "990404", "990405", "990406"):
+            db.change_work_status(aid, WSt.DONE, title=f"作品{aid}", author_id="1",
+                                  total_pages=1)
+        db.mark_page_status("990401", 0, PSt.DONE,
+                            local_path="作者甲_1/990401_p0.jpg", md5="good")
+        db.mark_page_status("990402", 0, PSt.DONE,
+                            local_path="作者甲_1/990402_p0.jpg", md5="gone")
+        db.mark_page_status("990403", 0, PSt.DONE,
+                            local_path="作者甲_1/990403_p0.jpg", md5=same_md5)
+        db.mark_page_status("990404", 0, PSt.DONE,
+                            local_path="作者甲_1/990404_p0.jpg", md5=same_md5)
+        db.mark_page_status("990405", 0, PSt.DONE,
+                            local_path="locked/990405_p0.jpg", md5="locked")
+        db.mark_page_status("990406", 0, PSt.DONE,
+                            local_path="作者甲_1/renamed_unknown.jpg", md5=None)
+        db.close()
+
+        # ① 模拟子目录不可读: locked/ 不进入, 触发 os.walk 的 onerror
+        real_walk = store_mod._walk_tree
+
+        def fake_walk(root, onerror=None):
+            for dirpath, dirnames, filenames in real_walk(root, None):
+                if "locked" in dirnames:
+                    dirnames.remove("locked")
+                    if onerror:
+                        onerror(PermissionError(13, "权限不足", str(Path(dirpath) / "locked")))
+                yield dirpath, dirnames, filenames
+
+        store_mod._walk_tree = fake_walk
+        try:
+            with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                rep = db2.reconcile_output(img)
+                lp = dict(db2.conn.execute(
+                    "SELECT artwork_id, local_path FROM pages "
+                    "WHERE artwork_id IN ('990403','990404')").fetchall())
+        finally:
+            store_mod._walk_tree = real_walk
+        assert rep.root_available is True
+        assert rep.scan_incomplete is True, "子目录读不了必须标记扫描不完整"
+        assert any("locked" in str(x) for x in rep.unreadable_dirs), rep.unreadable_dirs
+        assert "990402" in rep.missing_ids, rep.missing_ids
+        assert "990405" not in rep.missing_ids, "不可读目录下的作品不得判缺失"
+        assert len(rep.pending) == 1 and rep.pending[0]["kind"] == "ambiguous_md5", \
+            rep.pending
+        assert rep.pages_relinked == 0, "多候选不得自动重指"
+        assert lp["990403"] == "作者甲_1/990403_p0.jpg"
+        assert lp["990404"] == "作者甲_1/990404_p0.jpg"
+
+        # ② 根目录不可用: 父路径是文件 → 不扫描、不产生缺失、不抛异常
+        blocked = tmp / "blocked"
+        blocked.write_bytes(b"x")
+        with PixivDatabase(str(tmp / "pixiv.db")) as db3:
+            rep_bad = db3.reconcile_output(blocked / "img")
+        assert rep_bad.root_available is False
+        assert rep_bad.missing_ids == [] and rep_bad.scanned_images == 0
+
+        # ③ 接口: 正常 → 不可用 503 → 恢复后重新对账
+        orig_ud = upaths.user_data
+        orig_subdir = ws._config["paths"]["img_subdir"]
+        orig_recycle = ws._recycle_files
+        orig_get_paths = PixivDatabase.get_artwork_local_paths
+        upaths.user_data = lambda rel: tmp / str(rel)
+        ws._config["paths"]["img_subdir"] = "img"
+        ws._reconcile_state["rep"] = None
+        ws._reconcile_state["ts"] = 0.0
+        try:
+            client = ws.create_app().test_client()
+            r = client.post("/api/library/sync")
+            assert r.status_code == 200, r.data
+            j = r.get_json()
+            assert j["root_available"] is True
+            assert "990402" in j["missing_ids"], j["missing_ids"]
+            assert j["pending"] and j["pending"][0]["kind"] == "ambiguous_md5", j["pending"]
+            assert j["scan_incomplete"] is False, "接口路径没有 locked 目录不可读场景"
+
+            ws._config["paths"]["img_subdir"] = "blocked/img"
+            ws._reconcile_state["rep"] = None
+            ws._reconcile_state["ts"] = 0.0
+            r2 = client.post("/api/library/sync")
+            assert r2.status_code == 503, r2.data
+            j2 = r2.get_json()
+            assert j2["root_available"] is False and j2["error"], j2
+            assert j2["missing_ids"] == [], "图库不可用时不得报缺失"
+            r3 = client.post("/api/library/clean-missing", json={"ids": ["990402"]})
+            assert r3.status_code == 503, r3.data
+            with PixivDatabase(str(tmp / "pixiv.db")) as dbx:
+                assert dbx.get_artwork_metadata("990402") is not None, \
+                    "不可用期间不得清理记录"
+
+            ws._config["paths"]["img_subdir"] = "img"
+            ws._reconcile_state["rep"] = None
+            ws._reconcile_state["ts"] = 0.0
+            r4 = client.post("/api/library/sync")
+            assert r4.status_code == 200 and "990402" in r4.get_json()["missing_ids"], \
+                "恢复后要能重新对账并再次报告缺失"
+
+            # ④ 清理缺失: 必须勾选; 只删所选; 默认不动磁盘; 显式才走回收站
+            r5 = client.post("/api/library/clean-missing", json={})
+            assert r5.status_code == 400, r5.data
+
+            residual = tmp / "residual.jpg"
+            residual.write_bytes(b"R")
+            calls = []
+            ws._recycle_files = lambda paths: (calls.append(list(paths)) or (len(paths), []))
+            PixivDatabase.get_artwork_local_paths = \
+                lambda self, ids: [str(residual)] if ids else []
+
+            r6 = client.post("/api/library/clean-missing",
+                             json={"ids": ["990402"], "recycle_files": False})
+            assert r6.status_code == 200, r6.data
+            j6 = r6.get_json()
+            assert j6["cleaned"] == 1 and j6["files_recycled"] == 0, j6
+            assert calls == [] and residual.is_file(), "默认只清索引, 不得动磁盘"
+            with PixivDatabase(str(tmp / "pixiv.db")) as dbx:
+                assert dbx.get_artwork_metadata("990402") is None
+
+            # 未勾选的缺失作品不受影响; 已恢复/不缺失的 id 进 skipped
+            with PixivDatabase(str(tmp / "pixiv.db")) as dbx:
+                dbx.change_work_status("990407", WSt.DONE, title="作品990407",
+                                       author_id="1", total_pages=1)
+                dbx.mark_page_status("990407", 0, PSt.DONE,
+                                     local_path="作者甲_1/990407_p0.jpg", md5="gone7")
+            ws._reconcile_state["rep"] = None
+            ws._reconcile_state["ts"] = 0.0
+            r7 = client.post("/api/library/clean-missing",
+                             json={"ids": ["990407", "990401"], "recycle_files": True})
+            assert r7.status_code == 200, r7.data
+            j7 = r7.get_json()
+            assert j7["cleaned"] == 1 and j7["files_recycled"] == 1, j7
+            assert j7["skipped"] == ["990401"], j7
+            assert len(calls) == 1 and calls[0] == [str(residual)], calls
+            assert residual.is_file(), "回收走 _recycle_files 替身, 不直接 unlink"
+            with PixivDatabase(str(tmp / "pixiv.db")) as dbx:
+                assert dbx.get_artwork_metadata("990401") is not None, \
+                    "不缺失的作品不得被误删"
+                assert dbx.get_artwork_metadata("990407") is None
+        finally:
+            ws._recycle_files = orig_recycle
+            PixivDatabase.get_artwork_local_paths = orig_get_paths
+            ws._config["paths"]["img_subdir"] = orig_subdir
+            upaths.user_data = orig_ud
+            ws._reconcile_state["rep"] = None
+            ws._reconcile_state["ts"] = 0.0
+
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "同步磁盘索引" in html and "20261121f" in html
+    for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
+                  "applyMissingCleanup", "/api/library/missing-items",
+                  "recycle_files", "root_available", "scan_incomplete",
+                  "待确认", "查看同步结果", "只清理索引记录",
+                  "清理索引并回收残留文件", "_libUnavailable", "扫描不完整"):
+        assert token in js, f"缺少 {token}"
+    assert ".miss-clean-list" in css, "缺少缺失清理预览样式"
+    i = js.index("$('#lib-sync-btn').addEventListener")
+    assert "manualSyncDisk()" in js[i:i + 200], "手动同步要复用后台进度条"
+    j0 = js.index("async function libSync")
+    body = js[j0:js.index("// 📁 把本地图片搬进图库", j0)]
+    assert "clean-missing" not in body and "cleanMissing" not in body, \
+        "周期轮询/普通同步不得触发缺失清理"
 
 
 def main() -> int:

@@ -93,10 +93,20 @@ class ReconcileReport:
     pages_relinked: int = 0      # 页面记录已存在但文件被移动/改名, 凭指纹/自然键重新指向新路径的页数
     duplicates: list = field(default_factory=list)  # 同内容(MD5)多份副本: [{md5, artwork_id, page, paths:[rel...]}]
     conflicts: list = field(default_factory=list)   # 同名(同作品ID+页码)但内容不同的冒名副本: [{artwork_id,page,registered,path}]
+    # 2026-11-21 第 4 项: 同步磁盘时不能把「盘没接上/目录读不了」当成文件全丢
+    root_available: bool = True     # 图库根目录是否可访问; False = 本次未扫描, 不产生缺失判定
+    scan_incomplete: bool = False   # 有子目录/文件读不了 → 本次扫描不完整, 相应范围暂缓缺失判定
+    unreadable_dirs: list = field(default_factory=list)  # 读不了的目录/文件绝对路径
+    pending: list = field(default_factory=list)          # 待确认: 多候选移动等无法唯一确定的条目
 
     def total_issues(self) -> int:
         return (len(self.missing_ids) + len(self.empty_dirs)
                 + len(self.corrupt_files) + len(self.duplicates))
+
+
+def _walk_tree(root, onerror):
+    """遍历图库目录的薄封装 (测试可替换, 用于模拟子目录不可读)。"""
+    return os.walk(str(root), onerror=onerror)
 
 
 @dataclass
@@ -2638,6 +2648,23 @@ class PixivDatabase:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def get_local_paths_by_artwork(self, artwork_ids: "list[str]") -> "dict[str, list[str]]":
+        """按作品分组返回 pages 里登记的本地文件相对路径 (缺失清理预览用)。"""
+        if not artwork_ids:
+            return {}
+        placeholders = ','.join('?' * len(artwork_ids))
+        rows = self.conn.execute(
+            f"SELECT artwork_id, local_path FROM pages "
+            f"WHERE artwork_id IN ({placeholders}) "
+            f"  AND local_path IS NOT NULL AND local_path != '' "
+            f"ORDER BY artwork_id, page_num",
+            artwork_ids,
+        ).fetchall()
+        out: "dict[str, list[str]]" = {}
+        for r in rows:
+            out.setdefault(str(r[0]), []).append(str(r[1]))
+        return out
+
     def get_first_local_paths(self, artwork_ids: "list[str]") -> "dict[str, str]":
         """每个作品在 pages 里记录的第一个本地文件相对路径(用于图库本地缩略图)。
         返回 {artwork_id: local_path}。"""
@@ -2765,28 +2792,76 @@ class PixivDatabase:
         from utils.hashutil import md5_of
         img_root = Path(img_root)
         IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
-        # ① 扫磁盘
+        db_count = self.conn.execute(
+            "SELECT COUNT(*) FROM artworks WHERE trashed_at IS NULL").fetchone()[0] or 0
+        # ⓪ 根目录不可访问 (外接盘未接上/目录被删且无法补建) → 直接返回不可用报告。
+        #    绝不能拿一次空扫描去判「全部作品缺失」, 否则清理入口会把整个图库记录删光。
+        if not img_root.is_dir():
+            return ReconcileReport(
+                missing_ids=[], empty_dirs=[], corrupt_files=[],
+                scanned_images=0, new_pages_linked=0, db_artwork_count=db_count,
+                root_available=False,
+            )
+        # ① 扫磁盘 (os.walk 带 onerror: 子目录读不了时记下来, 暂缓对应范围的缺失判定)
         scan_files: "list[tuple[Path, str, int]]" = []
         disk_rels: "set[str]" = set()
         disk_by_aid: "dict[str, set[int]]" = {}
-        for p in img_root.rglob('*'):
-            if not p.is_file() or p.suffix.lower() not in IMG_EXT:
+        unreadable: "list[str]" = []
+
+        def _walk_error(err):
+            p = getattr(err, "filename", "") or ""
+            if p:
+                unreadable.append(str(p))
+
+        for dirpath, _dirnames, filenames in _walk_tree(img_root, _walk_error):
+            for fn in filenames:
+                p = Path(dirpath) / fn
+                if p.suffix.lower() not in IMG_EXT:
+                    continue
+                try:
+                    sz = p.stat().st_size
+                except OSError:
+                    unreadable.append(str(p))
+                    continue
+                rel = str(p.relative_to(img_root)).replace("\\", "/")
+                scan_files.append((p, rel, sz))
+                disk_rels.add(rel)
+                key = pixiv_natural_key(p.name)
+                if key:
+                    disk_by_aid.setdefault(key[0], set()).add(key[1])
+        # 不可读路径 → 相对图库根的路径前缀, 供缺失判定与重指候选过滤
+        unreadable_rels: "set[str]" = set()
+        for u in unreadable:
+            try:
+                unreadable_rels.add(
+                    Path(u).resolve().relative_to(img_root.resolve()).as_posix())
+            except Exception:
+                continue
+
+        def _under_unreadable(rel: str) -> bool:
+            if not unreadable_rels:
+                return False
+            r = str(rel or "").replace("\\", "/")
+            return any(r == u or r.startswith(u + "/") for u in unreadable_rels)
+
+        # ② 空目录 (顶层子目录; 根目录本身永不清理; 读不了的目录不当成空目录)
+        empty_dirs: "list[str]" = []
+        try:
+            top_dirs = [d for d in img_root.iterdir() if d.is_dir()]
+        except OSError:
+            top_dirs = []
+        for d in top_dirs:
+            try:
+                d_rel = d.relative_to(img_root).as_posix()
+            except Exception:
+                d_rel = d.name
+            if _under_unreadable(d_rel):
                 continue
             try:
-                sz = p.stat().st_size
+                if not any(f.is_file() and f.suffix.lower() in IMG_EXT for f in d.rglob('*')):
+                    empty_dirs.append(str(d))
             except OSError:
-                continue
-            rel = str(p.relative_to(img_root)).replace("\\", "/")
-            scan_files.append((p, rel, sz))
-            disk_rels.add(rel)
-            key = pixiv_natural_key(p.name)
-            if key:
-                disk_by_aid.setdefault(key[0], set()).add(key[1])
-        # ② 空目录
-        empty_dirs: "list[str]" = []
-        for d in img_root.iterdir():
-            if d.is_dir() and not any(f.is_file() and f.suffix.lower() in IMG_EXT for f in d.rglob('*')):
-                empty_dirs.append(str(d))
+                unreadable.append(str(d))
         # ③ DB pages 快照 + 索引
         rows = self.conn.execute(
             "SELECT artwork_id, page_num, status, local_path, md5, file_size_bytes "
@@ -2795,16 +2870,20 @@ class PixivDatabase:
         db_by_rel: "dict[str, sqlite3.Row]" = {}
         db_by_md5: "dict[str, list[sqlite3.Row]]" = {}
         page_by_key: "dict[tuple[str, int], sqlite3.Row]" = {}
+        db_rels_by_aid: "dict[str, list[str]]" = {}
         for r in rows:
             page_by_key[(str(r['artwork_id']), int(r['page_num']))] = r
             if r['local_path']:
-                db_by_rel[str(r['local_path']).replace("\\", "/")] = r
+                rel0 = str(r['local_path']).replace("\\", "/")
+                db_by_rel[rel0] = r
+                db_rels_by_aid.setdefault(str(r['artwork_id']), []).append(rel0)
             if r['md5']:
                 db_by_md5.setdefault(r['md5'], []).append(r)
 
         new_pages = 0
         relinked = 0
         conflicts: "list[dict]" = []
+        pending: "list[dict]" = []
         relinked_keys: "set[tuple[str, int]]" = set()
         md5_of_disk: "dict[str, str]" = {}   # rel -> md5 (本次算过或从 DB 复用)
         for (p, rel, sz) in scan_files:
@@ -2824,20 +2903,33 @@ class PixivDatabase:
                 md5_of_disk[rel] = h
             target_row = None
             if h and h in db_by_md5:
-                # 指纹命中: 优先旧路径已不在磁盘的那一页 (移动场景);
-                # 旧路径还在 = 这份是副本, 不重指, 留给重复检测
-                target_row = next(
-                    (c for c in db_by_md5[h]
-                     if (str(c['artwork_id']), int(c['page_num'])) not in relinked_keys
-                     and (not c['local_path']
-                          or str(c['local_path']).replace("\\", "/") not in disk_rels)),
-                    None)
+                # 指纹命中: 只认「旧路径已不在磁盘」的候选 (移动场景);
+                # 旧路径还在 = 副本, 不重指。多个候选都说得通 = 无法确认, 放待确认列表,
+                # 绝不随便挑第一个改 pages.local_path。
+                cands = [c for c in db_by_md5[h]
+                         if (str(c['artwork_id']), int(c['page_num'])) not in relinked_keys
+                         and (not c['local_path']
+                              or str(c['local_path']).replace("\\", "/") not in disk_rels)
+                         and not _under_unreadable(str(c['local_path'] or ""))]
+                if len(cands) == 1:
+                    target_row = cands[0]
+                elif len(cands) > 1:
+                    pending.append({
+                        "kind": "ambiguous_md5", "path": rel, "md5": h,
+                        "candidates": [{
+                            "artwork_id": str(c['artwork_id']),
+                            "page": int(c['page_num']),
+                            "local_path": (str(c['local_path']) or "").replace("\\", "/"),
+                        } for c in cands[:20]],
+                    })
+                    continue
             nkey = pixiv_natural_key(p.name)
             if target_row is None and nkey:
                 cand = page_by_key.get(nkey)
                 if cand is not None and nkey not in relinked_keys:
                     old_rel = (str(cand['local_path']) or "").replace("\\", "/")
-                    if not old_rel or old_rel not in disk_rels:
+                    if (not old_rel or old_rel not in disk_rels) \
+                            and not _under_unreadable(old_rel):
                         target_row = cand
             if target_row is not None:
                 ta, tp = str(target_row['artwork_id']), int(target_row['page_num'])
@@ -2900,6 +2992,8 @@ class PixivDatabase:
                 "AND md5 IS NOT NULL AND md5 != ''", (aid,)).fetchall()]
             if any(h in present_md5 for h in page_md5s):
                 continue  # 改名了但指纹还在
+            if any(_under_unreadable(rel0) for rel0 in db_rels_by_aid.get(aid, ())):
+                continue  # 登记路径落在读不了的目录里 → 本轮暂缓缺失判定, 不能据此清理
             missing_ids.append(aid)
         # ⑥ 损坏文件(可选, 需 PIL)
         #   判据只有两条: ① 空/极小文件(一定打不开); ② PIL 开图/校验**真的抛异常**。
@@ -2933,15 +3027,13 @@ class PixivDatabase:
                         if _bomb is not None and isinstance(_e, _bomb):
                             continue      # 像素数超 PIL 上限 → 跳过校验, 不报损坏
                         corrupt_files.append(str(p))
-        db_count = self.conn.execute(
-            "SELECT COUNT(*) FROM artworks WHERE trashed_at IS NULL").fetchone()[0] or 0
         # 对账日志只在「本次扫描实际做了事」时记 (补页/自愈), 避免 15s 轮询 + 自检把
         # 同一行全零结果刷成日志洪流; 缺失/损坏/空目录/冲突等持久状态由健康面板/对账响应展示。
         if new_pages or relinked:
             self.reporter.log(
                 f"[DB] 对账完成: 扫描 {len(scan_files)} 图, 缺失作品 {len(missing_ids)}, "
                 f"空目录 {len(empty_dirs)}, 损坏 {len(corrupt_files)}, 补页 {new_pages}, "
-                f"移动自愈 {relinked}, 重复 {len(duplicates)}"
+                f"移动自愈 {relinked}, 重复 {len(duplicates)}, 待确认 {len(pending)}"
             )
         return ReconcileReport(
             missing_ids=missing_ids,
@@ -2953,6 +3045,9 @@ class PixivDatabase:
             pages_relinked=relinked,
             duplicates=duplicates,
             conflicts=conflicts,
+            scan_incomplete=bool(unreadable),
+            unreadable_dirs=sorted(set(unreadable)),
+            pending=pending,
         )
 
     def delete_artworks(self, artwork_ids: "list[str]") -> int:

@@ -4038,6 +4038,17 @@ async function libSync(showToast = false, periodic = false) {
   try {
     // periodic=1: 定时轮询用, 后端 TTL 内不强制全量重扫磁盘 (图库大时避免每 15s 抢磁盘 IO)
     const h = await api('/api/library/sync' + (periodic ? '?periodic=1' : ''), { method: 'POST' });
+    // 图库不可用(外接盘没接上/目录无法访问): 保留上次健康数据但明确提示, 不能显示成「缺失」
+    if (h && (h.root_available === false || h.status === 'error')) {
+      window._libUnavailable = true;
+      window._libUnavailableReason = h.error || '图库不可用';
+      paintLibHealth(!periodic);
+      if (showToast) toast('同步失败: ' + (h.error || '图库不可用'), 'err');
+      return h;
+    }
+    window._libUnavailable = false;
+    window._libUnavailableReason = '';
+    window._syncResult = h;
     window._libHealth = h;
     paintLibHealth(!periodic);
     if (h && h.new_pages_linked > 0) {
@@ -4171,9 +4182,13 @@ function paintLibHealth(flash = false) {
   const bar = $('#lib-health-hint');
   if (!bar) return;
   const h = window._libHealth;
-  const miss = h && h.missing_ids ? h.missing_ids.length : 0;
-  const empty = h && h.empty_dirs ? h.empty_dirs.length : 0;
-  const bad = h && h.corrupt_files ? h.corrupt_files.length : 0;
+  const unavailable = !!window._libUnavailable;
+  const miss = (!unavailable && h && h.missing_ids) ? h.missing_ids.length : 0;
+  const empty = (!unavailable && h && h.empty_dirs) ? h.empty_dirs.length : 0;
+  const bad = (!unavailable && h && h.corrupt_files) ? h.corrupt_files.length : 0;
+  const pend = (!unavailable && h)
+    ? ((h.pending || []).length + (h.conflicts || []).length) : 0;
+  const incomplete = !!(!unavailable && h && h.scan_incomplete);
   // 体检报告: 由本函数统一渲染, 每次同步/轮询重画都不会丢 —— 用户随时能点进去看明细
   const rc = lastCheckReport;
   const susN = rc ? (rc.suspicious || []).length : 0;
@@ -4185,7 +4200,8 @@ function paintLibHealth(flash = false) {
   const showReport = !!rc && liveN > 0 && !rc.bar_dismissed;
   // 正常态只亮一小会儿: 同步磁盘/刷新/整理文件夹等主动操作后 flash 一下, 8 秒后自动收起;
   // 周期轮询不重新点亮。有异常/体检报告/体检中则一直显示, 直到问题解决。
-  const issue = !!(miss || empty || bad || showReport || checkRunning);
+  const issue = !!(unavailable || miss || empty || bad || pend || incomplete
+                   || showReport || checkRunning);
   const tabActive = $('#tab-library').classList.contains('active');
   let visible;
   if (issue) {
@@ -4203,23 +4219,55 @@ function paintLibHealth(flash = false) {
   }
   bar.style.display = visible ? '' : 'none';
   if (!visible) { bar.innerHTML = ''; return; }
-  const clean = !!(h && !miss && !empty && !bad && !showReport && !checkRunning);
+  const clean = !!(h && !unavailable && !miss && !empty && !bad && !pend
+                   && !incomplete && !showReport && !checkRunning);
+  if (unavailable) {
+    bar.innerHTML = `<span class="lib-sync-line">⚠ ${esc(window._libUnavailableReason || '图库不可用：磁盘未连接或图库目录无法访问')}</span>`
+      + `<span class="hint">缺失判定与清理已暂缓，磁盘恢复后重新同步即可。</span>`
+      + `<button class="btn ghost" onclick="manualSyncDisk()">重试同步</button>`;
+    return;
+  }
   bar.innerHTML = `<span class="lib-sync-line">🔄 已与磁盘同步 · 扫描 ${h ? h.scanned_images : 0} 图</span>` +
     (clean ? `<span class="health-ok">✓ 未发现异常</span>` : '') +
+    (incomplete ? `<span class="lib-sync-line" title="这些目录/文件本次读不了，其中的作品暂不判缺失">⚠ 扫描不完整：${(h.unreadable_dirs || []).length} 项不可读 · 缺失判定已暂缓</span>` : '') +
     (miss ? `<button type="button" class="health-badge miss" title="点击查看具体是哪些作品" onclick="showLibHealthDetail('missing')">⚠ 文件缺失 ${miss}</button>` : '') +
+    (pend ? `<button type="button" class="health-badge miss" title="点击查看多候选移动 / 同名不同内容" onclick="showLibHealthDetail('pending')">❓️ 待确认 ${pend}</button>` : '') +
     (empty ? `<button type="button" class="health-badge empty" title="点击查看具体是哪些空文件夹" onclick="showLibHealthDetail('empty')">📁 空目录 ${empty}</button>` : '') +
     (bad ? `<button type="button" class="health-badge bad" title="点击查看具体是哪些损坏文件" onclick="showLibHealthDetail('corrupt')">💥 损坏 ${bad}</button>` : '') +
     (showReport ? `<span class="lib-sync-line lib-sync-clickable" title="点击查看上次体检的完整明细" onclick="showSelfCheckReport()">🩺 上次体检：待处理 ${liveN}（系统异常 ${susN} · 缺信息 ${todoN}）</span>` : '') +
     (checkRunning ? `<span class="lib-sync-line">⏳ 体检中：${esc(checkStepTitle(checkRunning))}</span>` : '') +
     (showReport ? `<button class="btn accent" onclick="showSelfCheckReport()">📋 查看详情</button>` : '') +
     (showReport ? `<button class="btn ghost icon-btn" title="收起这条提示（报告不删；下次体检会重新显示）" onclick="dismissCheckBar()">✕</button>` : '') +
-    (miss ? `<button class="btn danger" onclick="cleanMissing()">🗑️ 清理缺失</button>` : '') +
+    (miss ? `<button class="btn danger" onclick="openMissingCleanup()">🗑️ 清理缺失</button>` : '') +
     `<button class="btn ghost" onclick="runSelfCheck()">🩺 体检</button>`;
 }
 
-// 点击健康条徽标 → 看具体是哪些空文件夹 / 缺失作品 / 损坏文件
+// 点击健康条徽标 → 看具体是哪些空文件夹 / 缺失作品 / 损坏文件 / 待确认项
 window.showLibHealthDetail = function (kind) {
   const h = window._libHealth || {};
+  if (kind === 'pending') {
+    const items = [
+      ...((h.pending || []).map(x => ({
+        label: '多候选移动',
+        path: x.path || '',
+        detail: (x.candidates || [])
+          .map(c => `#${c.artwork_id} p${c.page}（${c.local_path || '无旧路径'}）`).join('、'),
+      }))),
+      ...((h.conflicts || []).map(x => ({
+        label: '同名不同内容',
+        path: x.path || '',
+        detail: `已登记：${x.registered || '（无）'}（#${x.artwork_id} p${x.page}）`,
+      }))),
+    ];
+    const rows = items.slice(0, 200).map(x =>
+      `<li><b>${esc(x.label)}</b> <code>${esc(x.path)}</code><div class="hint">${esc(x.detail)}</div></li>`
+    ).join('');
+    openLibModal('❓️ 待确认明细', `<div class="lib-health-detail">
+        <div class="hint">这些文件能对上多个候选或与已登记内容冲突，无法自动确定归属；自动对账不会改动它们。共 <b>${items.length}</b> 项。</div>
+        ${items.length ? `<ul>${rows}</ul>` : '<div class="hint">当前没有待确认项。</div>'}
+      </div>`, { lg: true });
+    return;
+  }
   const map = {
     empty: {
       title: '📁 空目录明细',
@@ -4230,10 +4278,10 @@ window.showLibHealthDetail = function (kind) {
     },
     missing: {
       title: '⚠ 文件缺失明细',
-      note: '数据库里有下载记录，但磁盘上的图片文件已经不存在。',
+      note: '数据库里有下载记录，但磁盘上的图片文件已经不存在。清理前会先预览并勾选具体作品。',
       items: h.missing_ids || [],
       type: 'id',
-      action: '<button class="btn danger" onclick="cleanMissing()">🗑️ 清理缺失记录</button>',
+      action: '<button class="btn danger" onclick="openMissingCleanup()">🗑️ 预览并清理缺失</button>',
     },
     corrupt: {
       title: '💥 损坏文件明细',
@@ -4280,16 +4328,126 @@ window.dismissCheckBar = async function () {
   } catch (e) { toast('收起失败: ' + e.message, 'err'); }
 };
 
-async function cleanMissing() {
-  if (!confirm('清理所有「文件缺失」的幽灵记录？（把磁盘上已经没有文件、库里的残留记录一并清掉，保持数据库干净）')) return;
+// 清理缺失: 先预览、勾选具体作品; 「只清理索引」与「同时回收残留文件」是两个明确动作。
+// 旧 cleanMissing() 保留为入口别名, 不再直接清全库。
+async function cleanMissing() { return openMissingCleanup(); }
+
+window.openMissingCleanup = async function () {
+  openLibModal('🗑️ 清理缺失记录', '<div class="hint">正在读取缺失作品…</div>', { lg: true });
+  let r = null;
   try {
-    const r = await api('/api/library/clean-missing', { method: 'POST' });
+    r = await api('/api/library/missing-items');
+  } catch (e) {
+    $('#lib-modal-body').innerHTML =
+      `<div class="hint">读取失败：${esc(e.message || '未知错误')}</div>`;
+    return;
+  }
+  const err = apiErr(r);
+  if (err || (r && r.root_available === false)) {
+    $('#lib-modal-body').innerHTML =
+      `<div class="hint">⚠ ${esc(err || '图库不可用：磁盘未连接或图库目录无法访问')}</div>`;
+    return;
+  }
+  const items = (r && r.items) || [];
+  window._missingPreview = items;
+  if (!items.length) {
+    $('#lib-modal-body').innerHTML = '<div class="hint">当前没有被判定为「文件缺失」的作品。</div>';
+    return;
+  }
+  const rows = items.map(it => {
+    const files = (it.paths || []).filter(p => p.exists).map(p => p.rel);
+    const fileHint = files.length
+      ? `残留文件 ${files.length} 个：${esc(files.slice(0, 3).join('、'))}${files.length > 3 ? '…' : ''}`
+      : '磁盘上已无对应文件';
+    return `<li class="miss-clean-item">
+      <label><input type="checkbox" class="miss-clean-cb" value="${esc(it.artwork_id)}" checked>
+        <b>${esc(it.title || '（无标题）')}</b>
+        <span class="hint">#${esc(it.artwork_id)}${it.author_name ? ' · ' + esc(it.author_name) : ''}</span>
+      </label>
+      <div class="hint">${fileHint}</div>
+    </li>`;
+  }).join('');
+  $('#lib-modal-body').innerHTML = `
+    <div class="hint">只清理勾选的作品。执行前会重新核对，文件已恢复的会自动跳过。</div>
+    ${r.scan_incomplete ? '<div class="hint">⚠ 本次扫描不完整，部分目录的缺失判定已暂缓；建议确认磁盘读取正常后再清理。</div>' : ''}
+    <div class="hint" style="margin:8px 0">
+      <label><input type="checkbox" id="miss-clean-all" checked onchange="toggleMissingAll(this.checked)"> 全选（${items.length} 个作品）</label>
+    </div>
+    <ul class="miss-clean-list">${rows}</ul>
+    <div class="btn-row">
+      <button class="btn danger" onclick="applyMissingCleanup(false)">只清理索引记录</button>
+      <button class="btn danger" onclick="applyMissingCleanup(true)">清理索引并回收残留文件</button>
+      <button class="btn ghost" onclick="closeLibModal()">取消</button>
+    </div>`;
+};
+
+window.toggleMissingAll = function (on) {
+  $$('.miss-clean-cb').forEach(cb => { cb.checked = !!on; });
+};
+
+window.applyMissingCleanup = async function (recycleFiles) {
+  const ids = $$('.miss-clean-cb').filter(cb => cb.checked).map(cb => cb.value);
+  if (!ids.length) { toast('请先勾选要清理的作品', 'err'); return; }
+  const tip = recycleFiles
+    ? `清理 ${ids.length} 个缺失作品的索引记录，并把残留文件送进 Windows 回收站（可还原）？`
+    : `只清理 ${ids.length} 个缺失作品的索引记录？磁盘文件不动。`;
+  if (!confirm(tip)) return;
+  try {
+    const r = await api('/api/library/clean-missing', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, recycle_files: !!recycleFiles }),
+    });
+    const err = apiErr(r);
+    if (err) throw new Error(err);
+    closeLibModal();
+    const parts = [`已清理 ${r.cleaned || 0} 条缺失记录`];
+    if (r.files_recycled) parts.push(`回收残留文件 ${r.files_recycled} 个`);
+    if ((r.recycle_failed || []).length) parts.push(`${r.recycle_failed.length} 个文件没能进回收站`);
+    if ((r.skipped || []).length) parts.push(`${r.skipped.length} 个已恢复/不缺失，已跳过`);
+    toast(parts.join(' · '), (r.recycle_failed || []).length ? 'err' : 'ok');
     libSelected.clear();
-    toast(`已清理 ${r.cleaned} 条缺失记录 ✓`, 'ok');
     await libSync();
     loadLibrary(); loadStats(); loadLibFacets();
   } catch (e) { toast('清理失败: ' + e.message, 'err'); }
-}
+};
+
+// 同步磁盘索引结果: 分别展示新增/重连/缺失/待确认/失败, 缺失进入勾选清理
+window.showSyncResult = function () {
+  const r = window._syncResult || {};
+  const miss = (r.missing_ids || []).length;
+  const pend = (r.pending || []).length + (r.conflicts || []).length;
+  const unread = (r.unreadable_dirs || []).length;
+  const writeSkip = r.write_skipped || '';
+  const cell = (n, label) => `<div><b style="font-size:18px">${n}</b><div class="hint">${label}</div></div>`;
+  const pendRows = [
+    ...((r.pending || []).map(x => `<li><b>多候选移动</b> <code>${esc(x.path)}</code>` +
+      `<div class="hint">${esc((x.candidates || []).map(c => `#${c.artwork_id} p${c.page}`).join('、'))}</div></li>`)),
+    ...((r.conflicts || []).map(x => `<li><b>同名不同内容</b> <code>${esc(x.path)}</code>` +
+      `<div class="hint">已登记：${esc(x.registered || '（无）')}</div></li>`)),
+  ].join('');
+  openLibModal('🔄 同步磁盘索引结果', `
+    <div class="hint">${r.scan_incomplete
+      ? '⚠ 本次扫描不完整：有目录/文件读不了，相应范围的缺失判定已暂缓。'
+      : '✓ 扫描完整。'}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin:12px 0;text-align:center">
+      ${cell(r.new_pages_linked || 0, '新增')}
+      ${cell(r.pages_relinked || 0, '重新关联')}
+      ${cell(miss, '缺失')}
+      ${cell(pend, '待确认')}
+      ${cell(writeSkip ? 1 : 0, '写库失败')}
+    </div>
+    ${writeSkip ? `<div class="hint">⚠ 写库被跳过：${esc(writeSkip)}（本次只完成了读取与对账）</div>` : ''}
+    ${unread ? `<div class="hint">不可读 ${unread} 项：<code>${esc((r.unreadable_dirs || []).slice(0, 8).join('、'))}</code></div>` : ''}
+    ${pend ? `<div class="hint" style="margin-top:10px">待确认（自动对账不会改动这些条目）：</div><ul>${pendRows}</ul>` : ''}
+    ${miss ? `<div class="btn-row"><button class="btn danger" onclick="closeLibModal();openMissingCleanup()">预览并清理缺失（${miss}）</button></div>` : ''}
+    <div class="hint" style="margin-top:10px">扫描 ${r.scanned_images || 0} 张图片 · 库内作品 ${r.db_artwork_count || 0} 个</div>
+  `, { lg: true });
+};
+
+// 手动入口: 复用智能刷新的后台进度条与失败重试; 结果保留「查看同步结果」
+window.manualSyncDisk = function () {
+  return runRefreshJob('disk', { type: 'disk', label: '磁盘索引' }, true);
+};
 
 // ===== 🩺 体检 (2026-09-16: 原「一键自检」拆成 6 个可独立运行的检查项) =====
 //   旧版把磁盘对账/离线清理/联网补全/文件整理全塞进一次后台跑: 耗时长、进度只有"第几步"、
@@ -4632,7 +4790,7 @@ window.clearOperations = clearOperations;
 // 条目按钮用下标传参 (window._chkItems)，避免文件名里的引号破坏 onclick 属性。
 const CHK_GROUPS = [
   ['missing_file', '⚠ 文件丢失：数据库有记录，但磁盘图片文件已找不到（可清理记录，或重新下载）',
-   `<button class="btn danger" onclick="cleanMissing()">🗑️ 一键清理这类记录</button>`],
+   `<button class="btn danger" onclick="cleanMissing()">🗑️ 预览并清理这类记录</button>`],
   ['corrupt', '💥 损坏图片：文件存在但无法正常打开', ''],
   ['duplicate', '🧩 重复图片：同一文件在图库中存在多份副本',
    `<button class="btn accent" onclick="dedupDups()">🧹 清理重复副本（每组保留画师文件夹内一份）</button>`],
@@ -9399,7 +9557,8 @@ function bind() {
   if (obSkipBtn) obSkipBtn.addEventListener('click', obSkip);
 
   // 图库同步按钮 + 「仅看缺失文件」筛选 (走后端, 与缺元数据 AND)
-  $('#lib-sync-btn').addEventListener('click', () => libSync(true));
+  // 手动同步复用智能刷新的后台进度条: 阶段/计数/失败重试与自动核对一致
+  $('#lib-sync-btn').addEventListener('click', () => manualSyncDisk());
   // 🔍 本地以图搜图 (ORB+颜色): 上传一张图 → 图库相似结果弹窗
   $('#lib-similar-btn').addEventListener('click', () => $('#lib-similar-file').click());
   $('#lib-similar-file').addEventListener('change', async function () {
@@ -10904,7 +11063,7 @@ async function refreshAfterJob(act) {
 
 async function _refreshTidyHint(act, result) {
   // 磁盘核对/作者改名可能带出新整理需求; 作品本地重算不为此扫全库
-  const should = (!act || act.scope === 'library')
+  const should = (!act || !act.scope || act.scope === 'library')
     || (act.scope === 'author' && Number((result && result.renamed) || 0) > 0);
   if (!should) return 0;
   try {
@@ -10924,16 +11083,19 @@ function _mergeScopeResult(acc, r) {
 }
 
 function _refreshResultText(act, r) {
-  if (!act || act.scope === 'library') {
+  if (!act || !act.scope || act.scope === 'library') {
     const n = Number((r && r.new_pages_linked) || 0);
     const rel = Number((r && r.pages_relinked) || 0);
     const miss = ((r && r.missing_ids) || []).length;
+    const pend = ((r && r.pending) || []).length + ((r && r.conflicts) || []).length;
     const empty = ((r && r.empty_dirs) || []).length;
     const bad = ((r && r.corrupt_files) || []).length;
     return `新增 ${n} 张 · 重新关联 ${rel} 张`
       + (miss ? ` · 缺失 ${miss}` : '')
+      + (pend ? ` · 待确认 ${pend}` : '')
       + (empty ? ` · 空目录 ${empty}` : '')
-      + (bad ? ` · 损坏 ${bad}` : '');
+      + (bad ? ` · 损坏 ${bad}` : '')
+      + ((r && r.scan_incomplete) ? ' · 扫描不完整' : '');
   }
   if (act.scope === 'work') {
     const miss = ((r && r.missing_files) || []).length;
@@ -11029,12 +11191,17 @@ async function runRefreshJob(key, act, forceActive = false) {
         job.render();
         result = await api('/api/library/sync', { method: 'POST' });
         const syncErr = apiErr(result)
-          || (result && result.status === 'error' ? (result.error || '磁盘同步失败') : '');
+          || (result && result.status === 'error' ? (result.error || '磁盘同步失败') : '')
+          || (result && result.root_available === false
+              ? '图库不可用：磁盘未连接或图库目录无法访问' : '');
         if (syncErr) throw new Error(syncErr);
         // HTTP 200 但数据库写入被跳过 = 部分同步, 不能当完整成功
         if (result && result.write_skipped) {
           throw new Error(`部分同步未完成：${result.write_skipped}`);
         }
+        window._syncResult = result;
+        window._libUnavailable = false;
+        window._libUnavailableReason = '';
         window._libHealth = result;
         paintLibHealth(true);
       }
@@ -11052,6 +11219,11 @@ async function runRefreshJob(key, act, forceActive = false) {
       job.render();
       const tidyN = await _refreshTidyHint(act, result);
       const text = _refreshResultText(act, result);
+      // 磁盘同步有缺失/待确认/扫描不完整时, 结果条保留「查看同步结果」入口, 不自动收起
+      const issueSync = (!act || !act.scope || act.scope === 'library') && result
+        && (((result.missing_ids || []).length)
+            || ((result.pending || []).length) || ((result.conflicts || []).length)
+            || result.scan_incomplete);
       job.done = true;
       clearTimeout(job._showTimer);
       const statusEl = $('#refresh-status');
@@ -11096,11 +11268,13 @@ async function runRefreshJob(key, act, forceActive = false) {
           job.indeterminate = false;
           job.kind = 'ok';
           job.stage = `✓ ${text}`;
-          job.actions = tidyN > 0
-            ? `<button class="btn accent" onclick="openTidyPreview()">🧹 整理文件夹（${tidyN} 项）</button>`
-            : '';
+          job.actions = (issueSync
+              ? '<button class="btn ghost" onclick="showSyncResult()">查看同步结果</button>' : '')
+            + (tidyN > 0
+              ? `<button class="btn accent" onclick="openTidyPreview()">🧹 整理文件夹（${tidyN} 项）</button>`
+              : '');
           job.render(true);
-          if (!tidyN) hideRefreshStatus(REFRESH_DONE_HIDE);
+          if (!tidyN && !issueSync) hideRefreshStatus(REFRESH_DONE_HIDE);
         }
       }
       return result;
@@ -11118,8 +11292,16 @@ async function runRefreshJob(key, act, forceActive = false) {
         ? `已新增 ${nDone} 张 · 重新关联 ${nRel} 张；` : '';
       const why = (result && result.write_skipped)
         ? `部分同步未完成：${result.write_skipped}`
-        : `后台核对失败：${e.message || '未知错误'}`;
+        : (result && result.root_available === false)
+          ? (result.error || '图库不可用')
+          : `后台核对失败：${e.message || '未知错误'}`;
       job.stage = `⚠ ${part}${why}`;
+      if (result && result.root_available === false) {
+        // 图库不可用: 健康条同步进入不可用态, 不显示「缺失」等过期结论
+        window._libUnavailable = true;
+        window._libUnavailableReason = result.error || '图库不可用';
+        paintLibHealth(true);
+      }
       const retryAct = (act && failedIds.length && act.ids)
         ? { ...act, ids: failedIds } : act;
       _refreshRetries.set(key, { act: retryAct, stage: job.stage });

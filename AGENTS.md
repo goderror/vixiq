@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-21（当前前端版本 `20261121e`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-21（当前前端版本 `20261121f`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 158 用例，必须全过，2026-11-21 已 158/158 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 159 用例，必须全过，2026-11-21 已 159/159 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，158 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，159 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 148 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 159 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261121e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261121f`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -950,6 +950,36 @@
     安装版未重新打包（exe 仍为 `built_at 03:12:26`），启动后 `/api/version` 前端
     `20261121e-1795202798-1795201946-1795201946`，真实库 1603 作品 / 2191 图正常。
     GitHub 本地提交，**未推送**。
+
+### 4.39 同步磁盘索引：对账结果分项、缺失单独处理（2026-11-21，版本 `20261121f`）
+
+- **入口**：图库工具栏「🔄 同步磁盘索引」（`#lib-sync-btn`）改走 `manualSyncDisk()`，
+  复用智能刷新的 `#refresh-status` 进度条（阶段「检查目录」、失败重试、完成后保留「查看同步结果」）。
+- **对账口径**（`db/store.py` `reconcile_output`）：
+  - 扫描前确认图库根目录可访问：外接盘未接上时返回 `root_available=False` 的空报告，
+    **不产生缺失判定**；盘接回后下一次调用立即重扫。`/api/library/sync` 与 `/api/library/health`
+    此时返回 503 +「图库不可用」，不可达期间 `clean-missing` 同样 503，不写缺失、不清理记录。
+  - 磁盘遍历改 `os.walk(onerror=...)`：子目录/文件读不了时 `scan_incomplete=True`、
+    `unreadable_dirs` 记录路径；该目录下已登记作品的缺失判定暂缓，重指候选也跳过。
+  - 同 MD5 对多个候选时不再随便挑第一个重指，统一进 `pending`（`ambiguous_md5`）；
+    同名不同内容的 `conflicts` 也计入待确认，前端健康条显示「❓️ 待确认 N」。
+  - 对账响应新增 `root_available / scan_incomplete / unreadable_dirs / pending`。
+- **缺失处理**：`GET /api/library/missing-items` 预览（标题/作者/每条登记路径是否存在）；
+  `POST /api/library/clean-missing` 必须传勾选 `ids`，执行前强制重新对账，只处理仍缺失的；
+  `recycle_files=false` 只删索引，`true` 才把残留文件送 Windows 回收站（`_recycle_files`，
+  不再直接 `unlink`）。预览弹窗默认全选、可逐项取消，两个按钮为「只清理索引记录」
+  「清理索引并回收残留文件」。
+- **验收**：T168（隔离库：根目录不可用、子目录不可读暂缓缺失、多候选 pending、接口 503、
+  恢复后重对账、勾选清理/默认不动磁盘/回收替身），全量 **159/159**，
+  `py_compile`、`node --check` 通过。源码 7811 与冻结候选 7813 浏览器实测：
+  手动入口阶段「检查目录」→ 完成「新增 1 张 · 重新关联 2 张 · 缺失 1 · 待确认 1」；
+  结果面板分项展示；缺失预览 2 项默认全选，取消一项后请求仅勾选 id 且 `recycle_files=false`；
+  图库不可用时状态条/健康条均为「图库不可用」，周期轮询静默；恢复后重试成功。
+- **部署**：后端+前端，候选包 `built_at 04:07:21` 在 7813 合成数据验收通过；
+  安装版 `D:\Program Files\Vixiq` 与 `dist\vixiq` 已替换 `vixiq.exe` + 7 个前端资源
+  （哈希一致，`config/user.json` 未变），备份 `.backup-sync-disk-20261121-041859`；
+  安装版已启动（前端 `20261121f`），真实库 1603 作品 / 2191 图、缺失 0、安全模式开启。
+  GitHub 本地提交，**未推送**。
 
 ---
 

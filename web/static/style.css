@@ -1216,6 +1216,13 @@ button.health-badge:focus-visible { outline: 2px solid var(--accent); outline-of
 .lib-health-detail .btn-row { margin-top: 10px; }
 .health-row .btn { padding: 3px 10px; font-size: 12px; }
 
+/* 缺失清理预览 (2026-11-21 第 4 项): 逐项勾选, 只清理所选作品 */
+.miss-clean-list { list-style: none; margin: 8px 0; padding: 0; max-height: 48vh; overflow-y: auto; }
+.miss-clean-item { padding: 7px 2px; border-bottom: 1px solid var(--border); }
+.miss-clean-item:last-child { border-bottom: 0; }
+.miss-clean-item label { display: flex; align-items: baseline; gap: 6px; cursor: pointer; }
+.miss-clean-item .hint { margin: 2px 0 0 22px; }
+
 /* 图库卡片/列表: 缺失文件高亮 */
 .work-card.is-missing { border-color: var(--error); box-shadow: 0 0 0 1px var(--error) inset; }
 .table.lib-list tr.is-missing { background: #fdf6f6; }
