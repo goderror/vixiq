@@ -3075,7 +3075,7 @@ def run_suite() -> SuiteResult:
     suite.add("T168", "🔄 同步磁盘索引: 根目录不可用/扫描不完整暂缓缺失/多候选待确认/缺失清理先勾选且索引与回收分离 (隔离数据)", t168_sync_disk_root_scan_pending_clean)
     suite.add("T169", "🖼 入库统一转 PNG: 静态 JPG/WEBP 转换 + 原生 PNG/动图保持 + 转换记录随页 + 重复导入/同页冲突 + 下载端复用/备份 (隔离数据)", t169_png_ingest_normalization)
     suite.add("T170", "🛡 强制重下保留现图: 两条通道先写暂存 + 真实下载函数校验失败/异常/中断不碰旧图 + 同格式替换前备份 (隔离数据)", t170_force_redownload_keeps_old_image)
-    suite.add("T171", "🔒 正式切换与登记一致: 替换失败保旧图 + local_path/来源触发器整体回滚恢复 + 复用现图补齐登记 (隔离数据)", t171_png_ingest_commit_atomicity)
+    suite.add("T171", "🔒 正式切换与登记一致: 替换失败保原路径 + 单事务回滚恢复 + 复用补登记 + 扩展名切换保护既有目标 (隔离数据)", t171_png_ingest_commit_atomicity)
     suite.write_report()
     return suite
 
@@ -16205,10 +16205,14 @@ def t170_force_redownload_keeps_old_image() -> None:
 def t171_png_ingest_commit_atomicity() -> None:
     """T171: 正式文件与登记一致提交 (4B-1 提交阶段返修)。
 
-    1. 只让「候选 → 正式路径」的原子替换失败: 旧图字节/路径/指纹/来源不变;
+    1. 只让「候选 → 正式路径」的原子替换失败 (单次/持续拒绝): 当前图仍在原路径,
+       字节/路径/指纹/来源不变, 候选清理;
     2. `local_path` / `source_format` 触发器让单事务登记失败: 立即恢复旧图,
-       旧登记与来源保持一致; 去掉触发器后重试, 文件与登记一起更新;
-    3. 复用现图但页登记缺失: 补齐 local_path/md5/状态后才计成功, 只有一份 PNG。
+       旧登记与来源一致; 去掉触发器后重试, 文件与登记一起更新;
+       替换成功但登记与恢复都失败时保留 `.bak` 并记录恢复路径;
+    3. 复用现图但页登记缺失: 补齐 local_path/md5/状态后才计成功, 只有一份 PNG;
+    4. 目标 PNG 已存在且不是当前登记文件 (JPG+PNG 并存): 内容不同必须冲突,
+       两份原文件与登记都保持; 目标不存在时才正常转换/登记, 失败只清理本次创建的文件。
     """
     import hashlib
     import tempfile
@@ -16287,6 +16291,27 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert not stage1.exists()
             assert any("替换正式文件失败" in w for w in c.reporter.warns)
 
+            # ①b 持续拒绝正式路径替换: 当前图仍留在原路径, 不产生临时残缺
+            stage1b = dl / ".stage-801b.png"
+            stage1b.write_bytes(new_bytes)
+
+            def _deny_always(src, dst):
+                if Path(dst) == old:
+                    raise PermissionError("synthetic persistent deny")
+                orig_replace(src, dst)
+
+            c._replace_file = _deny_always
+            try:
+                ok1b, conv1b = c._finalize_downloaded_page(
+                    "990801", 0, str(stage1b), str(old),
+                    old_rel="990801_p0.png", force_overwrite=True)
+            finally:
+                c._replace_file = orig_replace
+            assert not ok1b and conv1b.get("reason") == "replace_failed", conv1b
+            assert old.is_file() and old.read_bytes() == old_bytes
+            assert not stage1b.exists()
+            assert db.get_page_info("990801", 0).local_path == "990801_p0.png"
+
             # ② local_path 触发器: 事务整体回滚并恢复旧图
             db.conn.executescript(
                 "CREATE TRIGGER t171_loc BEFORE UPDATE OF local_path ON pages "
@@ -16353,6 +16378,48 @@ def t171_png_ingest_commit_atomicity() -> None:
                 and rec4["converted_at"] == "2026-01-01 00:00:00", rec4
             assert not stage4.exists()
 
+            # ③b 替换成功但登记失败、恢复也被拒绝: 保留可恢复副本并记录路径
+            Image.new("RGB", (8, 8), (200, 0, 0)).save(old, "PNG")
+            old_bytes = old.read_bytes()
+            db.mark_page_status("990801", 0, PSt.DONE,
+                                local_path="990801_p0.png",
+                                md5="oldmd5", file_size_bytes=len(old_bytes))
+            db.set_page_conversion("990801", 0, source_format="jpg",
+                                   source_file_size=123, source_md5="oldsrc",
+                                   converted_at="2026-01-01 00:00:00",
+                                   current_format="png", replace=True)
+            stage4b = dl / ".stage-801e.png"
+            stage4b.write_bytes(new_bytes)
+            allow_once = {"ok": False}
+
+            def _first_ok_then_deny(src, dst):
+                if Path(dst) == old:
+                    if not allow_once["ok"]:
+                        allow_once["ok"] = True
+                        return orig_replace(src, dst)
+                    raise PermissionError("synthetic restore denied")
+                orig_replace(src, dst)
+
+            db.conn.executescript(
+                "CREATE TRIGGER t171_loc2 BEFORE UPDATE OF local_path ON pages "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic db write failure'); END;")
+            c._replace_file = _first_ok_then_deny
+            try:
+                ok4b, conv4b = c._finalize_downloaded_page(
+                    "990801", 0, str(stage4b), str(old),
+                    old_rel="990801_p0.png", force_overwrite=True)
+            finally:
+                c._replace_file = orig_replace
+                db.conn.executescript("DROP TRIGGER IF EXISTS t171_loc2;")
+            assert not ok4b and conv4b.get("reason") == "register_failed", conv4b
+            bak = dl / "990801_p0.png.bak"
+            assert bak.is_file() and bak.read_bytes() == old_bytes, "必须保留可恢复副本"
+            assert any("恢复旧图失败" in w and ".bak" in w for w in c.reporter.warns), \
+                c.reporter.warns
+            info4b = db.get_page_info("990801", 0)
+            assert info4b.md5 == "oldmd5", "事务应回滚到旧登记"
+            assert not stage4b.exists()
+
             # ④ 复用现图时补齐缺失登记
             db.change_work_status("990802", WSt.DONE, title="t2", total_pages=1)
             db.mark_page_status("990802", 0, PSt.PLACEHOLDER)   # local_path 为空
@@ -16375,6 +16442,95 @@ def t171_png_ingest_commit_atomicity() -> None:
             same_page = [p for p in dl.iterdir()
                          if p.suffix.lower() == ".png" and p.name.startswith("990802")]
             assert len(same_page) == 1, same_page
+
+            # ⑤ 扩展名切换: 目标 PNG 已存在且不是当前登记文件 → 绝不覆盖
+            db.change_work_status("990803", WSt.DONE, title="t3", total_pages=1)
+            red_jpg = dl / "990803_p0.jpg"
+            green_png = dl / "990803_p0.png"
+            Image.new("RGB", (7, 7), (220, 0, 0)).save(red_jpg, "JPEG")
+            Image.new("RGB", (7, 7), (0, 220, 0)).save(green_png, "PNG")
+            red_bytes = red_jpg.read_bytes()
+            green_bytes = green_png.read_bytes()
+            db.mark_page_status("990803", 0, PSt.DONE,
+                                local_path="990803_p0.jpg",
+                                md5="jpgmd5", file_size_bytes=len(red_bytes))
+            db.set_page_conversion("990803", 0, source_format="jpg",
+                                   source_file_size=len(red_bytes),
+                                   source_md5="oldjpgmd5",
+                                   converted_at="2026-01-01 00:00:00",
+                                   current_format="jpg", replace=True)
+            blue_stage = dl / ".stage-803.jpg"
+            Image.new("RGB", (7, 7), (0, 0, 220)).save(blue_stage, "JPEG")
+
+            # 正常强制: 目标 PNG 内容不同 → 冲突, 两份原文件与登记保持
+            ok6, conv6 = c._finalize_downloaded_page(
+                "990803", 0, str(blue_stage), str(dl / "990803_p0.jpg"),
+                old_rel="990803_p0.jpg", force_overwrite=True)
+            assert not ok6 and conv6.get("reason") == "target_conflict", conv6
+            assert red_jpg.read_bytes() == red_bytes, "旧 JPG 不得改变"
+            assert green_png.read_bytes() == green_bytes, "既有 PNG 不得被覆盖"
+            info6 = db.get_page_info("990803", 0)
+            assert info6.local_path == "990803_p0.jpg" and info6.md5 == "jpgmd5", info6
+            rec6 = db.get_page_conversion("990803", 0)
+            assert rec6["source_md5"] == "oldjpgmd5", rec6
+            assert not blue_stage.exists()
+
+            # 同一场景 + 登记触发器: 仍按目标冲突处理, 两份原文件不变
+            db.conn.executescript(
+                "CREATE TRIGGER t171_loc3 BEFORE UPDATE OF local_path ON pages "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic db write failure'); END;")
+            try:
+                blue2 = dl / ".stage-803b.jpg"
+                Image.new("RGB", (7, 7), (0, 0, 220)).save(blue2, "JPEG")
+                ok7, conv7 = c._finalize_downloaded_page(
+                    "990803", 0, str(blue2), str(dl / "990803_p0.jpg"),
+                    old_rel="990803_p0.jpg", force_overwrite=True)
+            finally:
+                db.conn.executescript("DROP TRIGGER IF EXISTS t171_loc3;")
+            assert not ok7 and conv7.get("reason") == "target_conflict", conv7
+            assert red_jpg.read_bytes() == red_bytes
+            assert green_png.read_bytes() == green_bytes
+            assert db.get_page_info("990803", 0).local_path == "990803_p0.jpg"
+
+            # 目标不存在: 正常强制转换并登记 PNG, 旧 JPG 原文件保留
+            green_png.unlink()
+            blue3 = dl / ".stage-803c.jpg"
+            Image.new("RGB", (7, 7), (0, 0, 220)).save(blue3, "JPEG")
+            ok8, conv8 = c._finalize_downloaded_page(
+                "990803", 0, str(blue3), str(dl / "990803_p0.jpg"),
+                old_rel="990803_p0.jpg", force_overwrite=True)
+            assert ok8 and (dl / "990803_p0.png").is_file(), conv8
+            assert red_jpg.is_file(), "旧 JPG 原文件保留"
+            assert db.get_page_info("990803", 0).local_path == "990803_p0.png"
+            assert (dl / "990803_p0.jpg.bak").is_file()
+
+            # 目标不存在 + 登记失败: 只清理本次创建的 PNG, 保留旧 JPG 与登记
+            (dl / "990803_p0.png").unlink()
+            db.mark_page_status("990803", 0, PSt.DONE,
+                                local_path="990803_p0.jpg",
+                                md5="jpgmd5", file_size_bytes=len(red_bytes))
+            db.set_page_conversion("990803", 0, source_format="jpg",
+                                   source_file_size=len(red_bytes),
+                                   source_md5="oldjpgmd5",
+                                   converted_at="2026-01-01 00:00:00",
+                                   current_format="jpg", replace=True)
+            blue4 = dl / ".stage-803d.jpg"
+            Image.new("RGB", (7, 7), (0, 0, 220)).save(blue4, "JPEG")
+            db.conn.executescript(
+                "CREATE TRIGGER t171_loc4 BEFORE UPDATE OF local_path ON pages "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic db write failure'); END;")
+            try:
+                ok9, conv9 = c._finalize_downloaded_page(
+                    "990803", 0, str(blue4), str(dl / "990803_p0.jpg"),
+                    old_rel="990803_p0.jpg", force_overwrite=True)
+            finally:
+                db.conn.executescript("DROP TRIGGER IF EXISTS t171_loc4;")
+            assert not ok9 and conv9.get("reason") == "register_failed", conv9
+            assert not (dl / "990803_p0.png").exists(), "本次创建的 PNG 要清理"
+            assert red_jpg.read_bytes() == red_bytes, "旧 JPG 必须保留"
+            info9 = db.get_page_info("990803", 0)
+            assert info9.local_path == "990803_p0.jpg" and info9.md5 == "jpgmd5", info9
+            assert not blue4.exists()
 
             # 静态: 正式路径禁止直接覆写回退
             craw = (PROJECT_ROOT / "core" / "crawler.py").read_text(encoding="utf-8")
