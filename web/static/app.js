@@ -9851,7 +9851,159 @@ function bind() {
     };
   };
 
-  // ---- 轻量级大图预览 (Lightbox): 双叠层 + 隐藏层加载完成才淡入, 零空白帧 ----
+  // ---- 页级格式来源与「转为 JPG」 (2026-11-21 4B-2) ----
+  function fmtConversion(rec) {
+    const cur = String(rec.current_format || '').toLowerCase();
+    const src = String(rec.source_format || '').toLowerCase();
+    if (!rec.converted_at || !src || !cur) return '来源未记录';
+    const before = rec.source_file_size ? fmtSize(rec.source_file_size) : '';
+    const after = rec.file_size_bytes ? fmtSize(rec.file_size_bytes) : '';
+    return '由 ' + src.toUpperCase() + ' 转为 ' + cur.toUpperCase()
+      + ' · ' + rec.converted_at
+      + ((before && after) ? (' · ' + before + ' → ' + after) : '');
+  }
+
+  function _jpgMsg(r) {
+    if (!r) return '预览失败';
+    if (r.already_jpg) return '当前已经是 JPG，无需重复转换。';
+    if (r.target_conflict) return '目标 JPG 已存在，请先处理冲突（不会覆盖现有文件）。';
+    return r.error || '预览失败';
+  }
+
+  async function loadJpgPreview(aid, page) {
+    const st = window._jpgConvert;
+    if (!st) return;
+    const box = $('#jpg-preview');
+    const btn = $('#jpg-confirm-btn');
+    if (box) box.textContent = '正在生成预览…';
+    if (btn) btn.disabled = true;
+    let r = null;
+    try {
+      r = await api('/api/library/convert-to-jpg/preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artwork_id: aid, page_num: page, quality: st.quality }),
+      });
+    } catch (e) {
+      if (box) box.textContent = '预览失败：' + e.message;
+      return;
+    }
+    st.preview = r;
+    if (!r || r.status !== 'ok') {
+      if (box) {
+        box.innerHTML = '<b>⚠ ' + esc(_jpgMsg(r)) + '</b>'
+          + ((r && r.pending_recycle)
+            ? '<div style="margin-top:8px"><button class="btn ghost" onclick="retryJpgRecycle()">重试回收旧 PNG</button></div>'
+            : '');
+      }
+      return;
+    }
+    const saved = Number(r.saved_bytes) || 0;
+    if (box) {
+      box.innerHTML = '<div>当前：<b>' + fmtSize(r.current_size) + '</b>（'
+        + r.width + '×' + r.height + '）</div>'
+        + '<div>JPG（质量 ' + r.quality + '）：<b>' + fmtSize(r.jpg_size) + '</b></div>'
+        + '<div>' + (saved >= 0 ? '预计节省' : '预计变大') + '：<b>'
+        + fmtSize(Math.abs(saved)) + '</b>'
+        + (r.current_size ? '（' + Math.abs(r.saved_pct) + '%）' : '') + '</div>'
+        + (r.has_alpha
+          ? '<div style="margin-top:6px">⚠ 当前图含透明像素，透明区域将填充<b>白色背景</b>。</div>' : '')
+        + (r.pending_recycle
+          ? '<div style="margin-top:6px">⚠ 上次旧 PNG 回收失败，转换后可重试回收。</div>' : '')
+        + '<div style="margin-top:6px">' + esc(r.disk_note || '') + '</div>';
+    }
+    if (btn) btn.disabled = false;
+  }
+
+  window.openJpgConvert = function (aid, page, title) {
+    openLibModal('🗜️ 转为 JPG', `
+      <div class="hint">对当前 PNG 重新编码为 JPG，不会从原图恢复画质。</div>
+      <div class="hint">作品 #${esc(String(aid))} · 第 ${Number(page) + 1} 页${title ? ' · ' + esc(title) : ''}</div>
+      <label class="hint" style="display:flex;align-items:center;gap:8px;margin-top:10px">
+        压缩质量 <input type="range" id="jpg-quality" min="60" max="100" value="85" step="1" style="flex:1">
+        <b id="jpg-quality-val">85</b>
+      </label>
+      <div id="jpg-preview" class="hint" style="margin-top:10px">正在生成预览…</div>
+      <div class="btn-row">
+        <button class="btn accent" id="jpg-confirm-btn" disabled onclick="applyJpgConvert()">确认转换为 JPG</button>
+        <button class="btn ghost" onclick="closeLibModal()">取消</button>
+      </div>
+    `, { lg: true });
+    window._jpgConvert = { aid: String(aid), page: Number(page) || 0, quality: 85, preview: null };
+    const rng = $('#jpg-quality');
+    if (rng) {
+      rng.addEventListener('input', () => {
+        window._jpgConvert.quality = Number(rng.value);
+        $('#jpg-quality-val').textContent = rng.value;
+        clearTimeout(window._jpgPreviewTimer);
+        window._jpgPreviewTimer = setTimeout(
+          () => loadJpgPreview(window._jpgConvert.aid, window._jpgConvert.page), 250);
+      });
+    }
+    loadJpgPreview(String(aid), Number(page) || 0);
+  };
+
+  window.applyJpgConvert = async function () {
+    const st = window._jpgConvert;
+    if (!st) return;
+    const btn = $('#jpg-confirm-btn');
+    if (btn) btn.disabled = true;
+    let r = null;
+    try {
+      r = await api('/api/library/convert-to-jpg', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          artwork_id: st.aid, page_num: st.page,
+          quality: st.quality, confirm: true,
+        }),
+      });
+    } catch (e) {
+      toast('转换失败：' + e.message, 'err');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (!r || r.status !== 'ok') {
+      toast('转换失败：' + (r ? (r.error || _jpgMsg(r)) : '未知错误'), 'err');
+      if (btn) btn.disabled = false;
+      loadJpgPreview(st.aid, st.page);
+      return;
+    }
+    closeLibModal();
+    const saved = Number(r.saved_bytes) || 0;
+    toast('已转为 JPG · ' + fmtSize(r.current_size) + ' → ' + fmtSize(r.new_size)
+      + (saved >= 0 ? ' · 节省 ' + fmtSize(saved) : ' · 增大 ' + fmtSize(-saved))
+      + (r.retry_recycle ? ' · 旧 PNG 回收失败，可在页详情重试'
+                         : ' · 旧 PNG 已送回收站'),
+      r.retry_recycle ? 'err' : 'ok');
+    const lb = document.getElementById('lightbox');
+    if (lb) {
+      const close = lb.querySelector('.lightbox-close');
+      if (close) close.click(); else lb.remove();
+    }
+    libSelected.clear();
+    loadLibrary(); loadStats(); loadLibFacets();
+  };
+
+  window.retryJpgRecycle = async function () {
+    const st = window._jpgConvert;
+    if (!st) return;
+    let r = null;
+    try {
+      r = await api('/api/library/convert-to-jpg/retry-recycle', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artwork_id: st.aid, page_num: st.page }),
+      });
+    } catch (e) {
+      toast('回收失败：' + e.message, 'err');
+      return;
+    }
+    if (!r || r.status !== 'ok') {
+      toast('回收失败：' + ((r && r.error) || '未知错误'), 'err');
+      return;
+    }
+    toast('旧 PNG 已送回收站', 'ok');
+    loadJpgPreview(st.aid, st.page);
+  };
+
   // 父容器尺寸由 JS 按图片自然比例显式设定(叠层 absolute 不撑开父容器), 缩略图/原图
   // 同画幅 → 换层只有透明度过渡, 无布局跳变、无闪烁; 可见层绝不中途改 src。
   window.openLightbox = function (w, pageList, nav) {
@@ -9894,8 +10046,10 @@ function bind() {
       + '<span class="lb-title"></span>'
       + '<span class="lb-meta"></span>'
       + '<span class="lb-file"></span>'
+      + '<span class="lb-format"></span>'
       + '<span class="lb-nav"></span>'
       + '<button class="lb-reorder-btn" type="button" title="调整这个作品内的页序">↔ 调整页序</button>'
+      + '<button class="lb-jpg-btn hidden" type="button" title="把当前 PNG 重新编码为 JPG">🗜️ 转为 JPG</button>'
       + '</div>'
       + '<div class="lb-strip hidden">'
       + '<div class="lb-strip-hint">点 ◀ ▶ 调整页序（第 N 张即浏览顺序），改完点「完成」；文件会同步重命名</div>'
@@ -9915,6 +10069,8 @@ function bind() {
     const lbTitle = lb.querySelector('.lb-title');
     const lbMeta = lb.querySelector('.lb-meta');
     const lbFile = lb.querySelector('.lb-file');
+    const lbFormat = lb.querySelector('.lb-format');
+    const jpgBtn = lb.querySelector('.lb-jpg-btn');
     const lbInfo = lb.querySelector('.lightbox-info');   // 量信息行实测高度, 好把放大态竖屏额度算准
     const lbNav = lb.querySelector('.lb-nav');
     const wallBtn = lb.querySelector('.lightbox-wall');
@@ -10018,6 +10174,15 @@ function bind() {
       lb.remove();
     };
 
+    if (jpgBtn) {
+      jpgBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const pg = curPg || {};
+        if (!pg.artwork_id) { toast('这张图没有可用的作品页记录', 'err'); return; }
+        openJpgConvert(pg.artwork_id, Number(pg.page_num) || 0, pg.title || '');
+      });
+    }
+
     // 大图里直接设为壁纸: 取当前显示层, 交给裁剪界面
     if (wallBtn) {
       wallBtn.addEventListener('click', (ev) => {
@@ -10106,6 +10271,26 @@ function bind() {
       // 作品 ID 都变了, 一次算好显示态, 免得点了按钮操作到上一张卡片的页
       if (reorderBtn) reorderBtn.classList.toggle('hidden', !canReorderNow());
       if (wallBtn) wallBtn.classList.toggle('hidden', !pg.artwork_id);
+      if (jpgBtn) {
+        const canJpg = !!pg.artwork_id && String(pg.url || '').startsWith('/api/');
+        jpgBtn.classList.toggle('hidden', !canJpg);
+        jpgBtn.disabled = false;
+        jpgBtn.textContent = '🗜️ 转为 JPG';
+        lbFormat.textContent = '';
+        if (canJpg) {
+          const my = token;
+          api('/api/library/page-conversion?artwork_id='
+              + encodeURIComponent(pg.artwork_id)
+              + '&page_num=' + (Number(pg.page_num) || 0)).then((rec) => {
+            if (my !== seq || !rec || rec.status === 'error') return;
+            lbFormat.textContent = fmtConversion(rec);
+            const isJpg = String(rec.current_format || '').toLowerCase() === 'jpg';
+            jpgBtn.disabled = isJpg;
+            jpgBtn.textContent = isJpg ? '当前已是 JPG' : '🗜️ 转为 JPG';
+            jpgBtn.dataset.pendingRecycle = rec.pending_recycle ? '1' : '';
+          }).catch(() => {});
+        }
+      }
       refreshNavBtn();
       updateDim(pg.width, pg.height, pg);
       if (pg.width && pg.height) sizeWrap(pg.width, pg.height);

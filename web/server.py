@@ -1067,6 +1067,54 @@ def _cleanup_ingest_tmpdir(tmpdir: Path) -> None:
         pass
 
 
+def _encode_jpg(src: Path, quality: int, out: Path) -> dict:
+    """把当前图片重新编码为 JPG (透明区域填白), 并校验输出可打开、尺寸一致。"""
+    from PIL import Image
+    with Image.open(src) as im:
+        im.load()
+        has_alpha = (im.mode in ("RGBA", "LA")
+                     or (im.mode == "P" and "transparency" in im.info))
+        if has_alpha:
+            rgba = im.convert("RGBA")
+            rgb = Image.new("RGB", rgba.size, (255, 255, 255))
+            rgb.paste(rgba, mask=rgba.getchannel("A"))
+        else:
+            rgb = im.convert("RGB")
+        w, h = rgb.size
+        out.parent.mkdir(parents=True, exist_ok=True)
+        rgb.save(str(out), "JPEG", quality=int(quality), optimize=True)
+    with Image.open(out) as chk:
+        chk.load()
+        if chk.size != (w, h):
+            raise ValueError("输出尺寸与原图不一致")
+    return {"width": w, "height": h, "has_alpha": bool(has_alpha),
+            "background": "white" if has_alpha else ""}
+
+
+def _jpg_convert_targets(aid: str, page: int):
+    """校验页与当前 PNG, 返回 (rec, src_path, target_rel, target_path, err)。"""
+    with _db() as db:
+        rec = db.get_page_conversion(aid, page)
+    if not rec:
+        return None, None, None, None, ("页不存在", 404)
+    rel = str(rec.get("local_path") or "").replace("\\", "/")
+    if not rel:
+        return rec, None, None, None, ("该页还没有本地文件", 409)
+    img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+    src = img_root / rel
+    if not src.is_file():
+        return rec, None, None, None, ("当前文件不存在，请先同步磁盘", 409)
+    cur_fmt = str(rec.get("current_format")
+                  or src.suffix.lstrip(".")).lower()
+    if cur_fmt in ("jpg", "jpeg"):
+        return rec, src, None, None, ("当前已经是 JPG", 409)
+    target_rel = str(Path(rel).with_suffix(".jpg")).replace("\\", "/")
+    target = img_root / target_rel
+    if target.exists():
+        return rec, src, target_rel, target, ("目标 JPG 已存在，请先处理冲突", 409)
+    return rec, src, target_rel, target, None
+
+
 def _record_ingested_conversions(img_root: Path, results: "list[dict]") -> int:
     """入库文件对账补页后, 按 local_path 找到页补写格式转换记录。
 
@@ -7735,6 +7783,195 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         rec["status"] = "ok"
         rec["converted"] = bool(rec.get("converted_at"))
         return jsonify(rec)
+
+    @app.route("/api/library/convert-to-jpg/preview", methods=["POST"])
+    def api_library_convert_to_jpg_preview():
+        """按所选质量把当前 PNG 重新编码为 JPG, 只返回大小预览 (不落正式文件)。"""
+        data = request.get_json(silent=True) or {}
+        aid = str(data.get("artwork_id") or "").strip()
+        if not aid:
+            return jsonify({"status": "error", "error": "缺少作品 ID"}), 400
+        try:
+            page = int(data.get("page_num") or 0)
+            quality = max(1, min(100, int(data.get("quality") or 85)))
+        except Exception:
+            return jsonify({"status": "error", "error": "参数无效"}), 400
+        rec, src, target_rel, _target, err = _jpg_convert_targets(aid, page)
+        if err:
+            return jsonify({
+                "status": "error", "error": err[0], "stage": "precheck",
+                "already_jpg": "已经是 JPG" in err[0],
+                "target_conflict": "目标 JPG 已存在" in err[0],
+                "pending_recycle": (rec or {}).get("pending_recycle"),
+            }), err[1]
+        tmpdir = _new_ingest_tmpdir()
+        try:
+            out = tmpdir / f"{src.stem}.jpg"
+            info = _encode_jpg(src, quality, out)
+            cur_size = src.stat().st_size
+            new_size = out.stat().st_size
+        except Exception as e:
+            return jsonify({"status": "error",
+                            "error": f"预览失败：{str(e).splitlines()[0]}",
+                            "stage": "preview_failed"}), 500
+        finally:
+            _cleanup_ingest_tmpdir(tmpdir)
+        saved = cur_size - new_size
+        return jsonify({
+            "status": "ok", "quality": quality,
+            "current_size": cur_size, "jpg_size": new_size,
+            "saved_bytes": saved,
+            "saved_pct": round(saved * 100.0 / cur_size, 1) if cur_size else 0,
+            "width": info["width"], "height": info["height"],
+            "has_alpha": info["has_alpha"], "background": info["background"],
+            "target_rel": target_rel,
+            "registered_size": cur_size,
+            "disk_note": "图库切换后只保留一份 JPG；旧 PNG 会送进系统回收站，"
+                         "磁盘空间要等回收站清空后才真正释放。",
+            "pending_recycle": rec.get("pending_recycle"),
+        })
+
+    @app.route("/api/library/convert-to-jpg", methods=["POST"])
+    def api_library_convert_to_jpg():
+        """用户确认后把当前 PNG 换成 JPG: 校验新 JPG → 单事务登记 → 回收旧 PNG。"""
+        import uuid
+        from datetime import datetime
+        from utils.hashutil import md5_of
+        data = request.get_json(silent=True) or {}
+        if not data.get("confirm"):
+            return jsonify({"status": "error", "error": "需要用户确认后再切换",
+                            "stage": "unconfirmed"}), 400
+        aid = str(data.get("artwork_id") or "").strip()
+        if not aid:
+            return jsonify({"status": "error", "error": "缺少作品 ID"}), 400
+        try:
+            page = int(data.get("page_num") or 0)
+            quality = max(1, min(100, int(data.get("quality") or 85)))
+        except Exception:
+            return jsonify({"status": "error", "error": "参数无效"}), 400
+        rec, src, target_rel, target, err = _jpg_convert_targets(aid, page)
+        if err:
+            return jsonify({
+                "status": "error", "error": err[0], "stage": "precheck",
+                "already_jpg": "已经是 JPG" in err[0],
+                "target_conflict": "目标 JPG 已存在" in err[0],
+                "pending_recycle": (rec or {}).get("pending_recycle"),
+            }), err[1]
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        old_rel = str(rec.get("local_path") or "").replace("\\", "/")
+        try:
+            old_size = src.stat().st_size
+            old_md5 = md5_of(str(src))
+        except Exception as e:
+            return jsonify({"status": "error",
+                            "error": f"读取当前 PNG 失败：{str(e).splitlines()[0]}",
+                            "stage": "precheck"}), 500
+        candidate = target.parent / f".vixiq-jpg-{uuid.uuid4().hex}.tmp"
+        try:
+            _encode_jpg(src, quality, candidate)
+            new_md5 = md5_of(str(candidate))
+            new_size = candidate.stat().st_size
+        except Exception as e:
+            try:
+                candidate.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return jsonify({"status": "error",
+                            "error": f"JPG 编码/校验失败：{str(e).splitlines()[0]}",
+                            "stage": "encode_failed"}), 500
+        try:
+            os.replace(str(candidate), str(target))
+        except Exception as e:
+            try:
+                candidate.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return jsonify({"status": "error",
+                            "error": f"发布 JPG 失败：{str(e).splitlines()[0]}",
+                            "stage": "replace_failed"}), 500
+        conv = {
+            "source_format": "png", "source_file_size": old_size,
+            "source_md5": old_md5,
+            "converted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "current_format": "jpg", "note": None,
+        }
+        try:
+            with _db() as db:
+                db.store_page_result(
+                    aid, page, target_rel, new_md5, new_size,
+                    conversion=conv, replace_conversion=True,
+                    format_choice="jpg", clear_pending=True)
+        except Exception as e:
+            try:
+                os.remove(str(target))
+            except Exception:
+                pass
+            return jsonify({"status": "error",
+                            "error": f"登记失败，当前 PNG 未动：{str(e).splitlines()[0]}",
+                            "stage": "register_failed"}), 500
+        recycled, recycle_bad = _recycle_files([str(src)])
+        if recycle_bad:
+            try:
+                with _db() as db:
+                    db.set_pending_recycle(aid, page, old_rel)
+            except Exception:
+                pass
+            audit_log.record("edit", "转为 JPG",
+                             f"#{aid} p{page} 已换为 JPG（{old_size} → {new_size} 字节），"
+                             f"旧 PNG 回收失败：{len(recycle_bad)} 个", 1, ids=[aid])
+            return jsonify({
+                "status": "ok", "new_rel": target_rel, "old_rel": old_rel,
+                "current_size": old_size, "new_size": new_size,
+                "saved_bytes": old_size - new_size, "quality": quality,
+                "recycled": recycled, "recycle_failed": recycle_bad,
+                "retry_recycle": True,
+                "disk_note": "新 JPG 已生效；旧 PNG 仍在磁盘，请在页详情重试回收。",
+            })
+        audit_log.record("edit", "转为 JPG",
+                         f"#{aid} p{page} 已换为 JPG（{old_size} → {new_size} 字节），"
+                         f"旧 PNG 已送回收站", 1, ids=[aid])
+        return jsonify({
+            "status": "ok", "new_rel": target_rel, "old_rel": old_rel,
+            "current_size": old_size, "new_size": new_size,
+            "saved_bytes": old_size - new_size, "quality": quality,
+            "recycled": recycled, "recycle_failed": [],
+            "retry_recycle": False,
+            "disk_note": "图库已只保留一份 JPG；旧 PNG 在系统回收站，"
+                         "清空回收站后磁盘空间才真正释放。",
+        })
+
+    @app.route("/api/library/convert-to-jpg/retry-recycle", methods=["POST"])
+    def api_library_convert_to_jpg_retry_recycle():
+        """重试把转 JPG 后遗留的旧 PNG 送进系统回收站。"""
+        data = request.get_json(silent=True) or {}
+        aid = str(data.get("artwork_id") or "").strip()
+        try:
+            page = int(data.get("page_num") or 0)
+        except Exception:
+            page = 0
+        if not aid:
+            return jsonify({"status": "error", "error": "缺少作品 ID"}), 400
+        with _db() as db:
+            rec = db.get_page_conversion(aid, page)
+        pending = str((rec or {}).get("pending_recycle") or "")
+        if not pending:
+            return jsonify({"status": "ok", "retried": 0, "pending": False})
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        src = img_root / pending
+        if not src.is_file():
+            with _db() as db:
+                db.set_pending_recycle(aid, page, None)
+            return jsonify({"status": "ok", "retried": 0, "pending": False})
+        recycled, recycle_bad = _recycle_files([str(src)])
+        if recycle_bad:
+            return jsonify({"status": "error", "stage": "recycle_failed",
+                            "error": "旧 PNG 回收失败",
+                            "recycle_failed": recycle_bad}), 500
+        with _db() as db:
+            db.set_pending_recycle(aid, page, None)
+        audit_log.record("edit", "重试回收旧 PNG",
+                         f"#{aid} p{page} 旧 PNG 已送回收站", 1, ids=[aid])
+        return jsonify({"status": "ok", "retried": recycled, "pending": False})
 
     @app.route("/api/library/missing-items")
     def api_library_missing_items():

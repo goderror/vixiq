@@ -644,7 +644,9 @@ class PixivDatabase:
 
     def store_page_result(self, aid, page, local_path, md5=None, file_size_bytes=None,
                           *, conversion: "dict | None" = None,
-                          replace_conversion: bool = True) -> None:
+                          replace_conversion: bool = True,
+                          format_choice: "str | None" = None,
+                          clear_pending: bool = False) -> None:
         """在一个事务内提交「页当前文件 + 转换来源」(4B-1 正式切换返修)。
 
         文件替换与登记必须一起成功: 任何一步失败 (`local_path` 触发器、来源列触发器、
@@ -689,6 +691,11 @@ class PixivDatabase:
                         ((conversion.get("note") or None),
                          conversion.get("current_format"),
                          str(aid), int(page)))
+            if format_choice is not None or clear_pending:
+                self.conn.execute(
+                    "UPDATE pages SET format_choice=COALESCE(?, format_choice), "
+                    "pending_recycle=NULL WHERE artwork_id=? AND page_num=?",
+                    (format_choice, str(aid), int(page)))
 
     def change_work_status(self, aid, status,
                            total_pages: "object" = 'hold',
@@ -1016,13 +1023,24 @@ class PixivDatabase:
             row = self.conn.execute(
                 "SELECT artwork_id, page_num, local_path, md5, file_size_bytes, "
                 "       source_format, source_file_size, source_md5, converted_at, "
-                "       current_format, convert_note "
+                "       current_format, convert_note, format_choice, pending_recycle "
                 "  FROM pages WHERE artwork_id=? AND page_num=?",
                 (str(aid), int(page))).fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
             self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
             return None
+
+    def set_pending_recycle(self, aid, page, rel: "str | None") -> None:
+        """记录/清除「转 JPG 后待送回收站的旧 PNG」(失败可重试)。"""
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE pages SET pending_recycle=? "
+                    "WHERE artwork_id=? AND page_num=?",
+                    (rel, str(aid), int(page)))
+        except sqlite3.Error as e:
+            self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
 
     def find_page_by_source_md5(self, md5: str) -> "dict | None":
         """凭「转换前原始指纹」找回同一页 (重复导入同一 JPG 时复用已有登记)。"""
@@ -2891,6 +2909,26 @@ class PixivDatabase:
         except Exception:
             pass
 
+    @staticmethod
+    def _is_old_derived_png(cand, rel: str, md5: "str | None") -> bool:
+        """判断磁盘上的 PNG 是否是「已选择 JPG」后遗留的旧派生文件。
+
+        主动转 JPG 后, 旧 PNG 可能因回收失败/回收站未清空仍在图库目录;
+        对账不能把它当成同页冲突或待确认副本。只认页记录里的格式选择、
+        待回收路径或旧 PNG 的原始指纹。"""
+        try:
+            if str(cand['format_choice'] or "") != "jpg":
+                return False
+            if Path(rel).suffix.lower() != ".png":
+                return False
+            pending = str(cand['pending_recycle'] or "").replace("\\", "/")
+            if pending and pending == rel:
+                return True
+            src_md5 = cand['source_md5']
+            return bool(src_md5 and md5 and str(src_md5) == str(md5))
+        except Exception:
+            return False
+
     def reconcile_output(self, img_root: "Path", *, verify_corrupt: bool = False) -> ReconcileReport:
         """图库 ↔ 磁盘实时对账 (磁盘为路径真源, 双重身份识别)。
 
@@ -2983,7 +3021,8 @@ class PixivDatabase:
                 unreadable.append(str(d))
         # ③ DB pages 快照 + 索引
         rows = self.conn.execute(
-            "SELECT artwork_id, page_num, status, local_path, md5, file_size_bytes "
+            "SELECT artwork_id, page_num, status, local_path, md5, file_size_bytes, "
+            "       current_format, format_choice, pending_recycle, source_md5 "
             "FROM pages WHERE trashed_at IS NULL"
         ).fetchall()
         db_by_rel: "dict[str, sqlite3.Row]" = {}
@@ -3068,6 +3107,9 @@ class PixivDatabase:
                     # 当场回填作者 (不联网); 不覆盖 DB 已知作者
                     self._adopt_author_from_rel(nkey[0], rel)
                 else:
+                    # 用户主动转 JPG 后的旧派生 PNG: 不报同页冲突/待确认副本
+                    if self._is_old_derived_png(cand, rel, h):
+                        continue
                     # 同自然键页面已登记且旧文件仍在磁盘上, 这份是内容不同的冒名副本
                     # (如截图改个名/张冠李戴的导入)。绝不能顶掉已有登记, 仅上报冲突
                     conflicts.append({

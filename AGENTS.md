@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-21（当前前端版本 `20261121h`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-22（当前前端版本 `20261121i`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 162 用例，必须全过，2026-11-21 已 162/162 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 163 用例，必须全过，2026-11-21 已 163/163 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，162 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，163 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 162 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 163 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261121h`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261121i`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1079,6 +1079,38 @@
   `dist\vixiq` 已替换 `vixiq.exe`（前端资源未变，哈希一致，配置哈希未变），备份
   `.backup-commit-atomic-20261121-134921`；安装版已启动（前端 `20261121h`），
   真实库 1603 作品 / 2191 图。GitHub 本地提交，**未推送**。
+
+### 4.41 4B-2 按需转为 JPG 与空间预览（2026-11-22，版本 `20261121i`）
+
+- **页级来源**：大图查看器信息行新增 `.lb-format` 与「🗜️ 转为 JPG」按钮。
+  有记录显示「由 JPG 转为 PNG · 转换时间 · 旧大小 → 新大小」；无记录显示「来源未记录」；
+  当前已是 JPG 时按钮禁用并显示「当前已是 JPG」。
+- **质量预览**：`POST /api/library/convert-to-jpg/preview` 用当前 PNG 按质量 60–100 重新编码到临时文件，
+  返回当前/JPG 大小、尺寸、节省字节与百分比、是否含透明像素、目标路径、图库登记占用与磁盘说明。
+  透明像素固定合成**白色背景**，预览明确提示，用户确认后才切换。
+  已是 JPG 或目标 JPG 已存在返回 409（`already_jpg` / `target_conflict`），不覆盖现有文件。
+- **确认切换**：`POST /api/library/convert-to-jpg` 必须带 `confirm:true`；预检 → 编码 → 校验新 JPG
+  （可打开、尺寸一致）→ 同盘原子发布 → 单事务登记页路径/大小/指纹/来源/`format_choice='jpg'` →
+  旧 PNG 送 Windows 回收站。失败按 `unconfirmed/precheck/encode_failed/replace_failed/register_failed`
+  报告并保留可用文件；回收失败写 `pending_recycle`，`POST .../retry-recycle` 可重试。
+- **同步豁免**：`format_choice='jpg'` 且 `pending_recycle` 未清时，旧 PNG 不再被对账报为同页冲突
+  （`db.store._is_old_derived_png`）；后续同步沿用 JPG，不会把旧 PNG 重新收进来。
+- **迁移 `030_page_format_choice.sql`**：`pages` 新增 `format_choice`、`pending_recycle`。
+- **验收**：T172 覆盖质量预览、确认切换只留一份、重复操作、透明图、目标冲突、回收失败 + 同步豁免 +
+  重试、登记失败、编码失败、未确认与静态接线；全量 **163/163**，`py_compile`、`node --check` 通过。
+  源码 7811 浏览器实测：来源标记、85→60 质量切换、白色背景提示、确认后 toast 与查看器关闭、
+  已 JPG 禁用、来源未记录、目标冲突、回收失败重试均通过。
+  候选包 7813 真实接口实测：上传 JPG 自动转 PNG → 预览 → 确认转回 JPG 只留一份；
+  透明 PNG 输出透明角变白（255,255,255）；目标冲突 409 保留当前 PNG；真实 UI 来源标记与预览通过。
+- **部署（2026-11-22 00:00）**：候选包 `_dev_runtime/packages/vixiq`（`built_at 2026-11-21 23:49:10`）
+  在 7813 + `_dev_runtime/candidate-data` 验收通过。安装版 `D:\Program Files\Vixiq` 与 `dist\vixiq`
+  已替换 `vixiq.exe`、7 个前端资源与 `_internal/db/migrations/030_page_format_choice.sql`，
+  哈希一致，`config/user.json` 未变；旧文件备份
+  `.backup-page-format-choice-20261121-235952` / `.backup-page-format-choice-20261122-000010`。
+  真实库升级前备份 `F:\Vixiq\data\backups\page-format-choice-20261121-235929.db`；
+  安装版已启动（前端 `20261121i`，`built_at 23:49:10`），`schema_migrations` 含 030，
+  `pages.format_choice/pending_recycle` 就绪，真实库 1538 作品 / 2107 张已下载页（总 2192 页）。
+  GitHub 本地提交（见汇报），**未推送**。
 
 ---
 
