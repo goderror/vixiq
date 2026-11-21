@@ -3075,6 +3075,7 @@ def run_suite() -> SuiteResult:
     suite.add("T168", "🔄 同步磁盘索引: 根目录不可用/扫描不完整暂缓缺失/多候选待确认/缺失清理先勾选且索引与回收分离 (隔离数据)", t168_sync_disk_root_scan_pending_clean)
     suite.add("T169", "🖼 入库统一转 PNG: 静态 JPG/WEBP 转换 + 原生 PNG/动图保持 + 转换记录随页 + 重复导入/同页冲突 + 下载端复用/备份 (隔离数据)", t169_png_ingest_normalization)
     suite.add("T170", "🛡 强制重下保留现图: 两条通道先写暂存 + 真实下载函数校验失败/异常/中断不碰旧图 + 同格式替换前备份 (隔离数据)", t170_force_redownload_keeps_old_image)
+    suite.add("T171", "🔒 正式切换与登记一致: 替换失败保旧图 + local_path/来源触发器整体回滚恢复 + 复用现图补齐登记 (隔离数据)", t171_png_ingest_commit_atomicity)
     suite.write_report()
     return suite
 
@@ -15826,18 +15827,18 @@ def t169_png_ingest_normalization() -> None:
             # 登记失败: 文件保留, 返回失败并标明阶段
             stage6 = dl / ".stage-good.jpg"
             Image.new("RGB", (5, 5), (7, 7, 7)).save(stage6, "JPEG")
-            orig_mark = db.mark_page_status
+            orig_store = db.store_page_result
 
             def _boom(*a, **k):
                 raise RuntimeError("synthetic db locked")
-            db.mark_page_status = _boom
+            db.store_page_result = _boom
             try:
                 ok6, conv6 = c._finalize_downloaded_page(
                     "990509", 0, str(stage6), str(dl / "990509_p0.jpg"),
                     old_rel=None, force_overwrite=False)
             finally:
-                db.mark_page_status = orig_mark
-            assert not ok6 and (dl / "990509_p0.png").is_file(), "登记失败要保留文件"
+                db.store_page_result = orig_store
+            assert not ok6 and conv6.get("reason") == "register_failed", conv6
             assert any("登记失败" in w for w in c.reporter.warns), c.reporter.warns
 
             # 转换失败但原格式可读: 登记原格式并标为需要处理
@@ -15867,25 +15868,6 @@ def t169_png_ingest_normalization() -> None:
             r7rec = db.get_page_conversion("990511", 0)
             assert "PNG 保存失败" in (r7rec["convert_note"] or ""), r7rec
             assert any("后续可重试" in w or "需要处理" in w for w in c.reporter.warns)
-
-            # 转换记录写入失败: 文件与页登记保留, 提示具体阶段
-            db.change_work_status("990512", WSt.DONE, title="t4", total_pages=1)
-            stage8 = dl / ".stage-512.jpg"
-            Image.new("RGB", (6, 6), (11, 12, 13)).save(stage8, "JPEG")
-            orig_set = db.set_page_conversion
-
-            def _set_boom(*a, **k):
-                raise RuntimeError("synthetic conversion record failure")
-            db.set_page_conversion = _set_boom
-            try:
-                ok8, conv8 = c._finalize_downloaded_page(
-                    "990512", 0, str(stage8), str(dl / "990512_p0.jpg"),
-                    old_rel=None, force_overwrite=False)
-            finally:
-                db.set_page_conversion = orig_set
-            assert ok8, "文件与登记成功时不应整体失败"
-            assert (dl / "990512_p0.png").is_file()
-            assert any("转换记录写入失败" in w for w in c.reporter.warns), c.reporter.warns
         finally:
             db.close()
 
@@ -16086,7 +16068,8 @@ def t169_png_ingest_normalization() -> None:
     craw = (PROJECT_ROOT / "core" / "crawler.py").read_text(encoding="utf-8")
     for token in ("normalize_to_png", "_staging_path",
                   "_record_page_conversion", "_finalize_downloaded_page",
-                  "same_page_conflict", "is_readable", "cleanup_failed"):
+                  "same_page_conflict", "is_readable", "cleanup_failed",
+                  "store_page_result"):
         assert token in craw, f"缺少下载端接入 {token}"
     assert craw.count("_finalize_downloaded_page") >= 3, \
         "浏览器与 HTTP 两路都必须共用同一收尾流程"
@@ -16217,6 +16200,191 @@ def t170_force_redownload_keeps_old_image() -> None:
     assert craw.count("download_with_retry(") >= 3      # 定义 + 两处调用
     imf = (PROJECT_ROOT / "core" / "image_format.py").read_text(encoding="utf-8")
     assert "_im.load()" in imf, "原生 PNG 必须先完整解码"
+
+
+def t171_png_ingest_commit_atomicity() -> None:
+    """T171: 正式文件与登记一致提交 (4B-1 提交阶段返修)。
+
+    1. 只让「候选 → 正式路径」的原子替换失败: 旧图字节/路径/指纹/来源不变;
+    2. `local_path` / `source_format` 触发器让单事务登记失败: 立即恢复旧图,
+       旧登记与来源保持一致; 去掉触发器后重试, 文件与登记一起更新;
+    3. 复用现图但页登记缺失: 补齐 local_path/md5/状态后才计成功, 只有一份 PNG。
+    """
+    import hashlib
+    import tempfile
+    from core.crawler import PixivDownloader
+    from db.store import PixivDatabase, WSt, PSt
+    from PIL import Image
+
+    class _Rep:
+        def __init__(self):
+            self.logs, self.warns = [], []
+
+        def log(self, m):
+            self.logs.append(str(m))
+
+        def warn(self, m):
+            self.warns.append(str(m))
+
+        def progress(self, *a, **k):
+            pass
+
+        def error(self, m):
+            self.logs.append(str(m))
+
+    with tempfile.TemporaryDirectory(prefix="t171_") as td:
+        tmp = Path(td)
+        dl = tmp / "img"
+        dl.mkdir()
+        c = PixivDownloader.__new__(PixivDownloader)
+        c.reporter = _Rep()
+        c.save_folder = str(dl)
+        db = PixivDatabase(str(tmp / "dl.db"))
+        c.db = db
+        try:
+            # ① 原子替换失败: 旧图与登记/来源保持原样
+            old = dl / "990801_p0.png"
+            Image.new("RGB", (8, 8), (200, 0, 0)).save(old, "PNG")
+            old_bytes = old.read_bytes()
+            db.change_work_status("990801", WSt.DONE, title="t", total_pages=1)
+            db.mark_page_status("990801", 0, PSt.DONE,
+                                local_path="990801_p0.png",
+                                md5="oldmd5", file_size_bytes=len(old_bytes))
+            db.set_page_conversion("990801", 0, source_format="jpg",
+                                   source_file_size=123, source_md5="oldsrc",
+                                   converted_at="2026-01-01 00:00:00",
+                                   current_format="png", replace=True)
+            new_png = tmp / "new.png"
+            Image.new("RGB", (8, 8), (0, 0, 200)).save(new_png, "PNG")
+            new_bytes = new_png.read_bytes()
+            stage1 = dl / ".stage-801.png"
+            stage1.write_bytes(new_bytes)
+            orig_replace = c._replace_file
+            hits = {"n": 0}
+
+            def _flaky(src, dst):
+                if (Path(dst) == old and ".vixiq-new-" in Path(src).name
+                        and hits["n"] == 0):
+                    hits["n"] += 1
+                    raise PermissionError("synthetic replace denied")
+                orig_replace(src, dst)
+
+            c._replace_file = _flaky
+            try:
+                ok1, conv1 = c._finalize_downloaded_page(
+                    "990801", 0, str(stage1), str(old),
+                    old_rel="990801_p0.png", force_overwrite=True)
+            finally:
+                c._replace_file = orig_replace
+            assert not ok1 and conv1.get("reason") == "replace_failed", conv1
+            assert old.read_bytes() == old_bytes, "替换失败必须保住旧图"
+            info1 = db.get_page_info("990801", 0)
+            assert info1.local_path == "990801_p0.png" and info1.md5 == "oldmd5", info1
+            rec1 = db.get_page_conversion("990801", 0)
+            assert rec1["source_md5"] == "oldsrc", rec1
+            assert rec1["converted_at"] == "2026-01-01 00:00:00", rec1
+            assert (dl / "990801_p0.png.bak").is_file()
+            assert not stage1.exists()
+            assert any("替换正式文件失败" in w for w in c.reporter.warns)
+
+            # ② local_path 触发器: 事务整体回滚并恢复旧图
+            db.conn.executescript(
+                "CREATE TRIGGER t171_loc BEFORE UPDATE OF local_path ON pages "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic db write failure'); END;")
+            try:
+                stage2 = dl / ".stage-801b.png"
+                stage2.write_bytes(new_bytes)
+                ok2, conv2 = c._finalize_downloaded_page(
+                    "990801", 0, str(stage2), str(old),
+                    old_rel="990801_p0.png", force_overwrite=True)
+            finally:
+                db.conn.executescript("DROP TRIGGER IF EXISTS t171_loc;")
+            assert not ok2 and conv2.get("reason") == "register_failed", conv2
+            assert old.read_bytes() == old_bytes, "登记事务失败要恢复旧图"
+            info2 = db.get_page_info("990801", 0)
+            assert info2.local_path == "990801_p0.png" and info2.md5 == "oldmd5", info2
+            rec2 = db.get_page_conversion("990801", 0)
+            assert rec2["source_md5"] == "oldsrc", rec2
+            assert not stage2.exists()
+            assert any("登记失败" in w for w in c.reporter.warns)
+
+            # 重试: 文件与登记一起更新
+            stage3 = dl / ".stage-801c.png"
+            stage3.write_bytes(new_bytes)
+            ok3, conv3 = c._finalize_downloaded_page(
+                "990801", 0, str(stage3), str(old),
+                old_rel="990801_p0.png", force_overwrite=True)
+            assert ok3, conv3
+            assert old.read_bytes() == new_bytes
+            info3 = db.get_page_info("990801", 0)
+            assert int(info3.status or 0) == PSt.DONE and info3.md5 \
+                and info3.md5 != "oldmd5", info3
+            rec3 = db.get_page_conversion("990801", 0)
+            assert rec3["current_format"] == "png", rec3
+            assert rec3["source_md5"] is None and rec3["converted_at"] is None, rec3
+
+            # ③ source_format 触发器: 同样整体回滚、恢复旧图、保留旧来源
+            Image.new("RGB", (8, 8), (200, 0, 0)).save(old, "PNG")
+            old_bytes = old.read_bytes()
+            db.mark_page_status("990801", 0, PSt.DONE,
+                                local_path="990801_p0.png",
+                                md5="oldmd5", file_size_bytes=len(old_bytes))
+            db.set_page_conversion("990801", 0, source_format="jpg",
+                                   source_file_size=123, source_md5="oldsrc",
+                                   converted_at="2026-01-01 00:00:00",
+                                   current_format="png", replace=True)
+            db.conn.executescript(
+                "CREATE TRIGGER t171_src BEFORE UPDATE OF source_format ON pages "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic provenance write failure'); END;")
+            try:
+                stage4 = dl / ".stage-801d.png"
+                stage4.write_bytes(new_bytes)
+                ok4, conv4 = c._finalize_downloaded_page(
+                    "990801", 0, str(stage4), str(old),
+                    old_rel="990801_p0.png", force_overwrite=True)
+            finally:
+                db.conn.executescript("DROP TRIGGER IF EXISTS t171_src;")
+            assert not ok4 and conv4.get("reason") == "register_failed", conv4
+            assert old.read_bytes() == old_bytes, "来源写入失败也不得留下新图"
+            info4 = db.get_page_info("990801", 0)
+            assert info4.md5 == "oldmd5", info4
+            rec4 = db.get_page_conversion("990801", 0)
+            assert rec4["source_md5"] == "oldsrc" \
+                and rec4["converted_at"] == "2026-01-01 00:00:00", rec4
+            assert not stage4.exists()
+
+            # ④ 复用现图时补齐缺失登记
+            db.change_work_status("990802", WSt.DONE, title="t2", total_pages=1)
+            db.mark_page_status("990802", 0, PSt.PLACEHOLDER)   # local_path 为空
+            lib_png = dl / "990802_p0.png"
+            Image.new("RGB", (6, 6), (11, 22, 33)).save(lib_png, "PNG")
+            lib_bytes = lib_png.read_bytes()
+            stage5 = dl / ".stage-802.png"
+            stage5.write_bytes(lib_bytes)
+            ok5, conv5 = c._finalize_downloaded_page(
+                "990802", 0, str(stage5), str(lib_png),
+                old_rel=None, force_overwrite=False)
+            assert ok5 and conv5.get("reuse"), conv5
+            info5 = db.get_page_info("990802", 0)
+            assert int(info5.status or 0) == PSt.DONE, info5
+            assert info5.local_path == "990802_p0.png", info5
+            assert info5.md5 and info5.file_size_bytes == len(lib_bytes), info5
+            rec5 = db.get_page_conversion("990802", 0)
+            assert rec5["converted_at"] is None, "历史来源未记录时不得伪造"
+            assert lib_png.read_bytes() == lib_bytes
+            same_page = [p for p in dl.iterdir()
+                         if p.suffix.lower() == ".png" and p.name.startswith("990802")]
+            assert len(same_page) == 1, same_page
+
+            # 静态: 正式路径禁止直接覆写回退
+            craw = (PROJECT_ROOT / "core" / "crawler.py").read_text(encoding="utf-8")
+            assert "shutil.copy2(str(cur_path), str(dest_path))" not in craw, \
+                "替换失败不得直接覆写正式路径"
+            assert "def _replace_file" in craw and "store_page_result" in craw
+            store = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
+            assert "def store_page_result" in store
+        finally:
+            db.close()
 
 
 def main() -> int:

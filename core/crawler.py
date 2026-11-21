@@ -601,6 +601,10 @@ class PixivDownloader:
             except OSError:
                 pass
 
+    def _replace_file(self, src, dst) -> None:
+        """同盘原子替换 (单独成方法, 便于回归注入替换失败)。"""
+        os.replace(str(src), str(dst))
+
     def _old_page_file(self, old_rel: "str | None"):
         if not old_rel:
             return None
@@ -691,7 +695,7 @@ class PixivDownloader:
         if old_file is None and dest_path.is_file():
             old_file = str(dest_path)
 
-        # ③ 同图复用: 不重复写正式文件
+        # ③ 同图复用: 不重复写正式文件; 页登记缺失时补齐现图登记后才算成功
         if (old_file and is_readable(old_file) and single_frame
                 and same_pixels(cur_path, old_file)):
             self._cleanup_staging(staging, cur_path)
@@ -700,6 +704,34 @@ class PixivDownloader:
             conv.update(ok=True, reuse=True, current_path=str(old_file),
                         current_format=("png" if str(old_file).lower().endswith(".png")
                                         else conv.get("current_format")))
+            rel = None
+            try:
+                rel = Path(old_file).relative_to(self.save_folder).as_posix()
+            except Exception:
+                pass
+            need_fill = False
+            if rel:
+                try:
+                    info = self.db.get_page_info(aid, pn)
+                except Exception:
+                    info = None
+                need_fill = (info is None
+                             or int(info.status or 0) != PSt.DONE
+                             or str(info.local_path or "").replace("\\", "/") != rel)
+            if need_fill:
+                try:
+                    from utils.hashutil import md5_of
+                    self.db.store_page_result(
+                        aid, pn, rel, md5_of(old_file),
+                        os.path.getsize(old_file), conversion=None)
+                    self.reporter.log(
+                        f"🔗 已补齐现图登记: {os.path.basename(old_file)}")
+                except Exception as e:
+                    note = "复用现图但补齐登记失败，保留现有登记"
+                    self.reporter.warn(f"⚠ {note}: {str(e).splitlines()[0]}")
+                    return False, dict(conv, ok=False, reuse=False,
+                                       reason="register_failed", note=note,
+                                       current_path=str(old_file))
             return True, conv
 
         # ④ 不同内容: 普通下载/补页保留现图; 只有强制重下才备份后替换
@@ -710,12 +742,17 @@ class PixivDownloader:
             return False, dict(conv, ok=False, conflict=True, keep_existing=True,
                                reason="same_page_conflict", note=note,
                                current_path=str(old_file))
+
+        restore_path = None
+        same_path = bool(old_file and Path(old_file) == dest_path)
         if old_file and force_overwrite:
             bak = old_file + ".bak"
             try:
                 if os.path.exists(bak):
                     os.remove(bak)
                 shutil.copy2(old_file, bak)
+                if not is_readable(bak):
+                    raise OSError("备份文件不可读")
                 self.reporter.log(f"💾 旧版已备份 → {os.path.basename(bak)}")
             except Exception as e:
                 self._cleanup_staging(staging, cur_path)
@@ -724,29 +761,36 @@ class PixivDownloader:
                 return False, dict(conv, ok=False, conflict=True,
                                    keep_existing=True, reason="backup_failed",
                                    note=note, current_path=str(old_file))
+            if same_path:
+                # 先把旧图原子移开, 再让完整候选原子顶替; 之后任何失败都能移回来
+                restore_path = dest_path.parent / f".vixiq-old-{uuid.uuid4().hex}.tmp"
+                try:
+                    self._replace_file(dest_path, restore_path)
+                except Exception as e:
+                    self._cleanup_staging(staging, cur_path)
+                    note = "准备切换时移开旧图失败，保留现有文件"
+                    self.reporter.warn(f"⚠ {note}: {str(e).splitlines()[0]}")
+                    return False, dict(conv, ok=False, reason="replace_failed",
+                                       note=note, current_path=str(old_file))
 
-        # ⑤ 切换到正式路径 (同盘原子替换; 跨盘退回复制)
+        # ⑤ 原子切换: 候选已在目标目录且完整校验, 禁止直接覆写正式路径
         try:
-            os.replace(str(cur_path), str(dest_path))
-        except OSError:
-            try:
-                shutil.copy2(str(cur_path), str(dest_path))
-                self._cleanup_staging(cur_path)
-            except Exception as e:
-                self._cleanup_staging(staging, cur_path)
-                note = "替换正式文件失败，保留现有文件"
-                self.reporter.warn(f"⚠ {note}: {str(e).splitlines()[0]}")
-                return False, dict(conv, ok=False, reason="replace_failed",
-                                   note=note, current_path=str(dest_path))
+            self._replace_file(cur_path, dest_path)
         except Exception as e:
+            if restore_path and Path(restore_path).is_file():
+                try:
+                    self._replace_file(restore_path, dest_path)
+                except Exception as e2:
+                    self.reporter.warn(
+                        f"⚠ 恢复旧图失败，请从 .bak 找回: {str(e2).splitlines()[0]}")
             self._cleanup_staging(staging, cur_path)
-            note = "替换正式文件失败，保留现有文件"
+            note = "替换正式文件失败，旧图已保留"
             self.reporter.warn(f"⚠ {note}: {str(e).splitlines()[0]}")
             return False, dict(conv, ok=False, reason="replace_failed",
-                               note=note, current_path=str(dest_path))
+                               note=note, current_path=str(old_file or dest_path))
         self._cleanup_staging(staging)
 
-        # ⑥ 登记 + 来源记录
+        # ⑥ 文件切换 + 页登记/来源记录必须在一个事务里一起成功
         try:
             rel_path = dest_path.relative_to(self.save_folder).as_posix()
         except Exception as e:
@@ -763,15 +807,32 @@ class PixivDownloader:
             self.reporter.warn(
                 f"⚠ 读取新文件大小/指纹失败: {str(e).splitlines()[0]}")
         try:
-            self.db.mark_page_status(aid, pn, PSt.DONE, rel_path,
-                                     md5=fmd5, file_size_bytes=fsize)
+            self.db.store_page_result(
+                aid, pn, rel_path, fmd5, fsize,
+                conversion=conv, replace_conversion=bool(conv.get("ok")))
         except Exception as e:
-            self.reporter.warn(
-                f"⚠ 登记失败（文件已保留，可重试）: {str(e).splitlines()[0]}")
+            # 事务回滚: 文件必须回到与旧登记一致的状态
+            if restore_path and Path(restore_path).is_file():
+                try:
+                    self._replace_file(restore_path, dest_path)
+                    self.reporter.log("↩ 登记失败，已恢复旧图")
+                except Exception as e2:
+                    self.reporter.warn(
+                        f"⚠ 登记失败后恢复旧图失败，请从 .bak 找回: "
+                        f"{str(e2).splitlines()[0]}")
+            elif not same_path:
+                # 新旧路径不同: 保留原登记和原图, 处理本次生成的候选
+                try:
+                    os.remove(str(dest_path))
+                except Exception:
+                    pass
+            note = "登记失败，文件与登记已保持一致"
+            self.reporter.warn(f"⚠ {note}: {str(e).splitlines()[0]}")
             return False, dict(conv, ok=False, reason="register_failed",
-                               note="登记失败", current_path=str(dest_path))
+                               note=note, current_path=str(old_file or dest_path))
+        if restore_path:
+            self._cleanup_staging(restore_path)
         conv["current_path"] = str(dest_path)
-        self._record_page_conversion(aid, pn, conv)
         if not conv.get("ok"):
             self.reporter.warn(
                 f"⚠ 已保留原格式（{conv.get('note')}），后续可重试转 PNG: "

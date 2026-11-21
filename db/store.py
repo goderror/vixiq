@@ -642,6 +642,54 @@ class PixivDatabase:
               origin, origin),
              (now_stamp(), aid)])
 
+    def store_page_result(self, aid, page, local_path, md5=None, file_size_bytes=None,
+                          *, conversion: "dict | None" = None,
+                          replace_conversion: bool = True) -> None:
+        """在一个事务内提交「页当前文件 + 转换来源」(4B-1 正式切换返修)。
+
+        文件替换与登记必须一起成功: 任何一步失败 (`local_path` 触发器、来源列触发器、
+        锁等) 都让整个事务回滚并抛给调用方, 由调用方立即恢复旧文件。
+        conversion=None 表示只登记当前文件, 不动已有来源记录。
+        replace_conversion=False 表示只补失败原因/当前格式, 保留已有来源证据。
+        """
+        self.init_works(aid)
+        sql = """
+        INSERT INTO pages (artwork_id, page_num, status, local_path, md5, width, height,
+                           file_size_bytes, origin)
+             VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'web')
+        ON CONFLICT(artwork_id, page_num) DO UPDATE SET
+             status=excluded.status,
+             local_path=COALESCE(excluded.local_path, pages.local_path),
+             md5=COALESCE(excluded.md5, pages.md5),
+             file_size_bytes=COALESCE(excluded.file_size_bytes, pages.file_size_bytes)
+        """
+        with self.conn:
+            self.conn.execute(
+                sql, (aid, page, PSt.DONE, local_path, md5, file_size_bytes))
+            self.conn.execute("UPDATE artworks SET updated_at=? WHERE artwork_id=?",
+                              (now_stamp(), aid))
+            if conversion is not None:
+                if replace_conversion:
+                    self.conn.execute(
+                        "UPDATE pages SET source_format=?, source_file_size=?, "
+                        "source_md5=?, converted_at=?, current_format=?, convert_note=? "
+                        "WHERE artwork_id=? AND page_num=?",
+                        (conversion.get("source_format"),
+                         conversion.get("source_file_size"),
+                         conversion.get("source_md5"),
+                         conversion.get("converted_at"),
+                         conversion.get("current_format"),
+                         (conversion.get("note") or None),
+                         str(aid), int(page)))
+                else:
+                    self.conn.execute(
+                        "UPDATE pages SET convert_note=?, "
+                        "current_format=COALESCE(?, current_format) "
+                        "WHERE artwork_id=? AND page_num=?",
+                        ((conversion.get("note") or None),
+                         conversion.get("current_format"),
+                         str(aid), int(page)))
+
     def change_work_status(self, aid, status,
                            total_pages: "object" = 'hold',
                            exist_list: "object" = 'hold',
