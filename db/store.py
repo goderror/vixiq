@@ -646,7 +646,10 @@ class PixivDatabase:
                           *, conversion: "dict | None" = None,
                           replace_conversion: bool = True,
                           format_choice: "str | None" = None,
-                          clear_pending: bool = False) -> None:
+                          clear_pending: bool = False,
+                          pending_recycle: "str | None" = None,
+                          pending_recycle_md5: "str | None" = None,
+                          pending_recycle_size: "int | None" = None) -> None:
         """在一个事务内提交「页当前文件 + 转换来源」(4B-1 正式切换返修)。
 
         文件替换与登记必须一起成功: 任何一步失败 (`local_path` 触发器、来源列触发器、
@@ -691,10 +694,23 @@ class PixivDatabase:
                         ((conversion.get("note") or None),
                          conversion.get("current_format"),
                          str(aid), int(page)))
-            if format_choice is not None or clear_pending:
+            if clear_pending:
                 self.conn.execute(
                     "UPDATE pages SET format_choice=COALESCE(?, format_choice), "
-                    "pending_recycle=NULL WHERE artwork_id=? AND page_num=?",
+                    "pending_recycle=NULL, pending_recycle_md5=NULL, "
+                    "pending_recycle_size=NULL WHERE artwork_id=? AND page_num=?",
+                    (format_choice, str(aid), int(page)))
+            elif pending_recycle is not None:
+                self.conn.execute(
+                    "UPDATE pages SET format_choice=COALESCE(?, format_choice), "
+                    "pending_recycle=?, pending_recycle_md5=?, pending_recycle_size=? "
+                    "WHERE artwork_id=? AND page_num=?",
+                    (format_choice, pending_recycle, pending_recycle_md5,
+                     pending_recycle_size, str(aid), int(page)))
+            elif format_choice is not None:
+                self.conn.execute(
+                    "UPDATE pages SET format_choice=COALESCE(?, format_choice) "
+                    "WHERE artwork_id=? AND page_num=?",
                     (format_choice, str(aid), int(page)))
 
     def change_work_status(self, aid, status,
@@ -1023,7 +1039,8 @@ class PixivDatabase:
             row = self.conn.execute(
                 "SELECT artwork_id, page_num, local_path, md5, file_size_bytes, "
                 "       source_format, source_file_size, source_md5, converted_at, "
-                "       current_format, convert_note, format_choice, pending_recycle "
+                "       current_format, convert_note, format_choice, pending_recycle, "
+                "       pending_recycle_md5, pending_recycle_size "
                 "  FROM pages WHERE artwork_id=? AND page_num=?",
                 (str(aid), int(page))).fetchone()
             return dict(row) if row else None
@@ -1031,14 +1048,19 @@ class PixivDatabase:
             self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
             return None
 
-    def set_pending_recycle(self, aid, page, rel: "str | None") -> None:
-        """记录/清除「转 JPG 后待送回收站的旧 PNG」(失败可重试)。"""
+    def set_pending_recycle(self, aid, page, rel: "str | None",
+                            md5: "str | None" = None,
+                            size: "int | None" = None) -> None:
+        """记录/清除「转 JPG 后待送回收站的旧 PNG」(失败可重试)。
+
+        rel 为空表示清除; 否则连同内容指纹与大小一起保存, 重试只处理这一份。"""
         try:
             with self.conn:
                 self.conn.execute(
-                    "UPDATE pages SET pending_recycle=? "
-                    "WHERE artwork_id=? AND page_num=?",
-                    (rel, str(aid), int(page)))
+                    "UPDATE pages SET pending_recycle=?, pending_recycle_md5=?, "
+                    "pending_recycle_size=? WHERE artwork_id=? AND page_num=?",
+                    (rel, (md5 if rel else None), (size if rel else None),
+                     str(aid), int(page)))
         except sqlite3.Error as e:
             self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
 
@@ -2922,8 +2944,12 @@ class PixivDatabase:
             if Path(rel).suffix.lower() != ".png":
                 return False
             pending = str(cand['pending_recycle'] or "").replace("\\", "/")
-            if pending and pending == rel:
-                return True
+            pending_md5 = (cand['pending_recycle_md5']
+                           if 'pending_recycle_md5' in cand.keys() else None)
+            # 路径相同还不够: 原路径可能已被另一张 PNG 覆盖, 必须内容一致才算旧派生文件。
+            if pending and pending == rel and pending_md5 and md5:
+                if str(pending_md5) == str(md5):
+                    return True
             src_md5 = cand['source_md5']
             return bool(src_md5 and md5 and str(src_md5) == str(md5))
         except Exception:
@@ -3022,7 +3048,8 @@ class PixivDatabase:
         # ③ DB pages 快照 + 索引
         rows = self.conn.execute(
             "SELECT artwork_id, page_num, status, local_path, md5, file_size_bytes, "
-            "       current_format, format_choice, pending_recycle, source_md5 "
+            "       current_format, format_choice, pending_recycle, pending_recycle_md5, "
+            "       pending_recycle_size, source_md5 "
             "FROM pages WHERE trashed_at IS NULL"
         ).fetchall()
         db_by_rel: "dict[str, sqlite3.Row]" = {}
@@ -3059,6 +3086,13 @@ class PixivDatabase:
             h = md5_of(p)
             if h:
                 md5_of_disk[rel] = h
+            nkey = pixiv_natural_key(p.name)
+            # 已选择 JPG 的页: 旧派生 PNG 即使当前 JPG 缺失也不能被重新登记为当前文件,
+            # 否则后续「重试回收」会把当前文件本身送走。内容不一致的 PNG 不算旧派生,
+            # 继续走下面的冲突/待确认流程。
+            cand0 = page_by_key.get(nkey) if nkey else None
+            if cand0 is not None and self._is_old_derived_png(cand0, rel, h):
+                continue
             target_row = None
             if h and h in db_by_md5:
                 # 指纹命中: 只认「旧路径已不在磁盘」的候选 (移动场景);
@@ -3081,7 +3115,6 @@ class PixivDatabase:
                         } for c in cands[:20]],
                     })
                     continue
-            nkey = pixiv_natural_key(p.name)
             if target_row is None and nkey:
                 cand = page_by_key.get(nkey)
                 if cand is not None and nkey not in relinked_keys:
@@ -3118,6 +3151,25 @@ class PixivDatabase:
                         "path": rel,
                     })
             # 无指纹无自然键: 外来散落图, 由自检/反搜处理
+        # ③.5 已选择 JPG 的页: 当前 JPG 不在磁盘时单独列为待确认, 不把旧 PNG 改成当前文件。
+        #     即使同作品其他页还在, 也不能悄悄沿用旧 PNG, 更不能让回收重试误伤当前文件。
+        for r in rows:
+            if str(r['format_choice'] or "").lower() != "jpg":
+                continue
+            key = (str(r['artwork_id']), int(r['page_num']))
+            if key in relinked_keys:
+                continue
+            cur_rel = str(r['local_path'] or "").replace("\\", "/")
+            if not cur_rel or Path(cur_rel).suffix.lower() not in (".jpg", ".jpeg"):
+                continue
+            if cur_rel in disk_rels or _under_unreadable(cur_rel):
+                continue
+            pending.append({
+                "kind": "current_missing",
+                "artwork_id": key[0], "page": key[1],
+                "registered": cur_rel,
+                "pending_recycle": str(r['pending_recycle'] or "").replace("\\", "/"),
+            })
         # ④ 重复检测: 同一 MD5 磁盘上有多份
         md5_groups: "dict[str, list[str]]" = {}
         for rel, h in md5_of_disk.items():

@@ -1067,11 +1067,41 @@ def _cleanup_ingest_tmpdir(tmpdir: Path) -> None:
         pass
 
 
+# 预览令牌: 确认时必须带回, 且绑定当前对话框提交的质量、源路径与文件身份。
+_JPG_PREVIEWS: "dict[str, dict]" = {}
+_JPG_PREVIEWS_LOCK = threading.Lock()
+_JPG_PREVIEW_TTL = 600
+
+
+def _image_actual_info(src: Path) -> dict:
+    """只读实际解码格式与帧数, 不信任扩展名。"""
+    from PIL import Image
+    try:
+        with Image.open(src) as im:
+            fmt = str(im.format or "").upper()
+            frames = int(getattr(im, "n_frames", 1) or 1)
+            animated = bool(getattr(im, "is_animated", False)) or frames > 1
+        return {"actual_format": fmt.lower() if fmt else None,
+                "frames": frames, "animated": animated,
+                "static_png": bool(fmt == "PNG" and not animated),
+                "readable": True}
+    except Exception as e:
+        return {"actual_format": None, "frames": 0, "animated": False,
+                "static_png": False, "readable": False,
+                "image_error": str(e).splitlines()[0]}
+
+
 def _encode_jpg(src: Path, quality: int, out: Path) -> dict:
-    """把当前图片重新编码为 JPG (透明区域填白), 并校验输出可打开、尺寸一致。"""
+    """把静态单帧 PNG 重新编码为 JPG (透明区域填白), 并校验输出可打开、尺寸一致。"""
     from PIL import Image
     with Image.open(src) as im:
         im.load()
+        fmt = str(im.format or "").upper()
+        frames = int(getattr(im, "n_frames", 1) or 1)
+        animated = bool(getattr(im, "is_animated", False)) or frames > 1
+        if fmt != "PNG" or animated:
+            raise ValueError(
+                f"仅支持静态单帧 PNG（实际格式 {fmt or '未知'}，{frames} 帧）")
         has_alpha = (im.mode in ("RGBA", "LA")
                      or (im.mode == "P" and "transparency" in im.info))
         if has_alpha:
@@ -1088,11 +1118,80 @@ def _encode_jpg(src: Path, quality: int, out: Path) -> dict:
         if chk.size != (w, h):
             raise ValueError("输出尺寸与原图不一致")
     return {"width": w, "height": h, "has_alpha": bool(has_alpha),
-            "background": "white" if has_alpha else ""}
+            "background": "white" if has_alpha else "",
+            "actual_format": "png", "frames": 1, "animated": False}
+
+
+def _jpg_source_identity(src: Path) -> dict:
+    """源文件身份: 内容指纹 + 大小 + 纳秒时间戳 (确认时逐项比对)。"""
+    from utils.hashutil import md5_of
+    st = src.stat()
+    return {"source_md5": md5_of(str(src)), "source_size": st.st_size,
+            "source_mtime_ns": str(st.st_mtime_ns)}
+
+
+def _jpg_preview_issue(rec: dict, src: Path, target_rel: str, quality: int,
+                       info: dict, ident: dict) -> str:
+    """登记一次性预览令牌; 确认成功后即失效。"""
+    import uuid
+    token = uuid.uuid4().hex
+    data = {
+        "aid": str(rec.get("artwork_id")),
+        "page": int(rec.get("page_num") or 0),
+        "quality": int(quality),
+        "rel": str(rec.get("local_path") or "").replace("\\", "/"),
+        "target_rel": str(target_rel or "").replace("\\", "/"),
+        "registered_md5": rec.get("md5"),
+        "registered_size": rec.get("file_size_bytes"),
+        "format_choice": str(rec.get("format_choice") or "").lower(),
+        "created_at": time.time(),
+        "source_md5": ident["source_md5"],
+        "source_size": ident["source_size"],
+        "source_mtime_ns": ident["source_mtime_ns"],
+        "actual_format": info.get("actual_format"),
+        "frames": info.get("frames"),
+    }
+    with _JPG_PREVIEWS_LOCK:
+        cutoff = time.time() - _JPG_PREVIEW_TTL
+        for k in [k for k, v in _JPG_PREVIEWS.items()
+                  if float(v.get("created_at") or 0) < cutoff]:
+            _JPG_PREVIEWS.pop(k, None)
+        _JPG_PREVIEWS[token] = data
+    return token
+
+
+def _jpg_preview_take(token: str) -> "dict | None":
+    """取走一次性预览令牌; 不存在/过期返回 None。"""
+    key = str(token or "")
+    if not key:
+        return None
+    with _JPG_PREVIEWS_LOCK:
+        data = _JPG_PREVIEWS.pop(key, None)
+    if not data:
+        return None
+    if time.time() - float(data.get("created_at") or 0) > _JPG_PREVIEW_TTL:
+        return None
+    return data
+
+
+def _remove_if_identity(path: Path, md5: str, size: int) -> bool:
+    """只删除仍能确认是本次任务写入的文件 (内容/大小都没被替换)。"""
+    try:
+        if not path.is_file() or path.stat().st_size != int(size):
+            return False
+        from utils.hashutil import md5_of
+        if md5_of(str(path)) != str(md5):
+            return False
+        path.unlink()
+        return True
+    except Exception:
+        return False
 
 
 def _jpg_convert_targets(aid: str, page: int):
-    """校验页与当前 PNG, 返回 (rec, src_path, target_rel, target_path, err)。"""
+    """校验页与当前文件, 返回 (rec, src_path, target_rel, target_path, err)。
+
+    err 第三项可选附加字段 (unsupported_format / actual_format / frames)。"""
     with _db() as db:
         rec = db.get_page_conversion(aid, page)
     if not rec:
@@ -1108,6 +1207,22 @@ def _jpg_convert_targets(aid: str, page: int):
                   or src.suffix.lstrip(".")).lower()
     if cur_fmt in ("jpg", "jpeg"):
         return rec, src, None, None, ("当前已经是 JPG", 409)
+    actual = _image_actual_info(src)
+    if not actual.get("static_png"):
+        if not actual.get("readable"):
+            msg = ("当前文件无法识别，不能转为 JPG"
+                   + (f"：{actual.get('image_error')}" if actual.get("image_error") else ""))
+        else:
+            fmt = str(actual.get("actual_format") or "未知").upper()
+            frames = int(actual.get("frames") or 0)
+            extra = f"，{frames} 帧" if frames > 1 else ""
+            msg = f"仅支持静态单帧 PNG（当前实际为 {fmt}{extra}），已保留原文件"
+        return rec, src, None, None, (msg, 409, {
+            "unsupported_format": True,
+            "actual_format": actual.get("actual_format"),
+            "frames": actual.get("frames"),
+            "readable": actual.get("readable"),
+        })
     target_rel = str(Path(rel).with_suffix(".jpg")).replace("\\", "/")
     target = img_root / target_rel
     if target.exists():
@@ -7782,6 +7897,15 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error", "error": "页不存在"}), 404
         rec["status"] = "ok"
         rec["converted"] = bool(rec.get("converted_at"))
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        rel = str(rec.get("local_path") or "").replace("\\", "/")
+        src = img_root / rel if rel else None
+        if src is not None and src.is_file():
+            rec.update(_image_actual_info(src))
+        else:
+            rec.update({"actual_format": None, "frames": 0, "animated": False,
+                        "static_png": False, "readable": False,
+                        "image_error": "当前文件不存在"})
         return jsonify(rec)
 
     @app.route("/api/library/convert-to-jpg/preview", methods=["POST"])
@@ -7798,34 +7922,58 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error", "error": "参数无效"}), 400
         rec, src, target_rel, _target, err = _jpg_convert_targets(aid, page)
         if err:
+            extra = err[2] if len(err) > 2 else {}
             return jsonify({
                 "status": "error", "error": err[0], "stage": "precheck",
                 "already_jpg": "已经是 JPG" in err[0],
                 "target_conflict": "目标 JPG 已存在" in err[0],
                 "pending_recycle": (rec or {}).get("pending_recycle"),
+                **extra,
             }), err[1]
+        try:
+            ident1 = _jpg_source_identity(src)
+        except Exception as e:
+            return jsonify({"status": "error",
+                            "error": f"读取当前文件失败：{str(e).splitlines()[0]}",
+                            "stage": "precheck"}), 500
         tmpdir = _new_ingest_tmpdir()
         try:
             out = tmpdir / f"{src.stem}.jpg"
             info = _encode_jpg(src, quality, out)
-            cur_size = src.stat().st_size
+            cur_size = ident1["source_size"]
             new_size = out.stat().st_size
+            ident2 = _jpg_source_identity(src)
+            if ident1 != ident2:
+                return jsonify({
+                    "status": "error",
+                    "error": "源文件在预览过程中发生变化，请重新预览",
+                    "stage": "source_changed", "source_changed": True,
+                }), 409
         except Exception as e:
             return jsonify({"status": "error",
                             "error": f"预览失败：{str(e).splitlines()[0]}",
                             "stage": "preview_failed"}), 500
         finally:
             _cleanup_ingest_tmpdir(tmpdir)
+        token = _jpg_preview_issue(rec, src, target_rel, quality, info, ident2)
         saved = cur_size - new_size
         return jsonify({
             "status": "ok", "quality": quality,
+            "preview_id": token,
+            "source_md5": ident2["source_md5"],
+            "source_size": ident2["source_size"],
+            "source_mtime_ns": ident2["source_mtime_ns"],
+            "registered_md5": rec.get("md5"),
+            "registered_size": rec.get("file_size_bytes"),
             "current_size": cur_size, "jpg_size": new_size,
             "saved_bytes": saved,
             "saved_pct": round(saved * 100.0 / cur_size, 1) if cur_size else 0,
             "width": info["width"], "height": info["height"],
             "has_alpha": info["has_alpha"], "background": info["background"],
+            "actual_format": info.get("actual_format"),
+            "frames": info.get("frames"),
+            "static_png": True,
             "target_rel": target_rel,
-            "registered_size": cur_size,
             "disk_note": "图库切换后只保留一份 JPG；旧 PNG 会送进系统回收站，"
                          "磁盘空间要等回收站清空后才真正释放。",
             "pending_recycle": rec.get("pending_recycle"),
@@ -7851,36 +7999,96 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error", "error": "参数无效"}), 400
         rec, src, target_rel, target, err = _jpg_convert_targets(aid, page)
         if err:
+            extra = err[2] if len(err) > 2 else {}
             return jsonify({
                 "status": "error", "error": err[0], "stage": "precheck",
                 "already_jpg": "已经是 JPG" in err[0],
                 "target_conflict": "目标 JPG 已存在" in err[0],
                 "pending_recycle": (rec or {}).get("pending_recycle"),
+                **extra,
             }), err[1]
-        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        # 确认必须以服务端签发、绑定当前页面/质量/源文件身份的预览为准
+        token = _jpg_preview_take(str(data.get("preview_id") or ""))
+        if not token:
+            return jsonify({"status": "error", "stage": "stale_preview",
+                            "stale_preview": True,
+                            "error": "预览已失效，请重新预览后再确认"}), 409
         old_rel = str(rec.get("local_path") or "").replace("\\", "/")
+        old_choice = str(rec.get("format_choice") or "").lower()
+        if (token.get("aid") != aid or int(token.get("page") or 0) != page
+                or int(token.get("quality") or 0) != quality):
+            return jsonify({"status": "error", "stage": "stale_preview",
+                            "stale_preview": True,
+                            "error": "预览已失效，请重新预览后再确认"}), 409
+        if (token.get("rel") != old_rel
+                or token.get("target_rel") != target_rel
+                or str(token.get("registered_md5") or "") != str(rec.get("md5") or "")
+                or str(token.get("registered_size") or "") != str(rec.get("file_size_bytes") or "")
+                or str(token.get("format_choice") or "") != old_choice):
+            return jsonify({"status": "error", "stage": "registration_changed",
+                            "registration_changed": True,
+                            "error": "页记录在预览后发生变化，请重新预览"}), 409
         try:
-            old_size = src.stat().st_size
-            old_md5 = md5_of(str(src))
+            ident = _jpg_source_identity(src)
         except Exception as e:
             return jsonify({"status": "error",
-                            "error": f"读取当前 PNG 失败：{str(e).splitlines()[0]}",
+                            "error": f"读取当前文件失败：{str(e).splitlines()[0]}",
                             "stage": "precheck"}), 500
+        if (ident["source_md5"] != token.get("source_md5")
+                or ident["source_size"] != token.get("source_size")
+                or ident["source_mtime_ns"] != token.get("source_mtime_ns")):
+            return jsonify({"status": "error", "stage": "source_changed",
+                            "source_changed": True,
+                            "error": "源文件在预览后发生变化，请重新预览"}), 409
+        old_size = int(ident["source_size"])
+        old_md5 = str(ident["source_md5"])
         candidate = target.parent / f".vixiq-jpg-{uuid.uuid4().hex}.tmp"
         try:
-            _encode_jpg(src, quality, candidate)
+            info = _encode_jpg(src, quality, candidate)
             new_md5 = md5_of(str(candidate))
             new_size = candidate.stat().st_size
+            ident_after = _jpg_source_identity(src)
+            if ident_after != ident:
+                raise RuntimeError("源文件在编码过程中发生变化")
         except Exception as e:
             try:
                 candidate.unlink(missing_ok=True)
             except Exception:
                 pass
+            actual = _image_actual_info(src)
+            if not actual.get("static_png"):
+                return jsonify({
+                    "status": "error",
+                    "error": f"仅支持静态单帧 PNG：{str(e).splitlines()[0]}",
+                    "stage": "precheck", "unsupported_format": True,
+                    "actual_format": actual.get("actual_format"),
+                    "frames": actual.get("frames"),
+                }), 409
+            stage = ("source_changed" if "发生变化" in str(e)
+                     else "encode_failed")
             return jsonify({"status": "error",
                             "error": f"JPG 编码/校验失败：{str(e).splitlines()[0]}",
-                            "stage": "encode_failed"}), 500
+                            "stage": stage,
+                            "source_changed": stage == "source_changed"}), 500
+        # 发布本身必须拒绝覆盖: 目标可能在预检后才出现 (含另一同页确认请求)
+        if target.exists():
+            try:
+                candidate.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return jsonify({"status": "error", "stage": "target_conflict",
+                            "target_conflict": True,
+                            "error": "目标 JPG 已存在，本次未覆盖，请重新预览"}), 409
         try:
-            os.replace(str(candidate), str(target))
+            os.rename(str(candidate), str(target))   # Windows 目标存在会抛 FileExistsError
+        except FileExistsError:
+            try:
+                candidate.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return jsonify({"status": "error", "stage": "target_conflict",
+                            "target_conflict": True,
+                            "error": "目标 JPG 已存在，本次未覆盖，请重新预览"}), 409
         except Exception as e:
             try:
                 candidate.unlink(missing_ok=True)
@@ -7900,22 +8108,34 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 db.store_page_result(
                     aid, page, target_rel, new_md5, new_size,
                     conversion=conv, replace_conversion=True,
-                    format_choice="jpg", clear_pending=True)
+                    format_choice="jpg",
+                    pending_recycle=old_rel,
+                    pending_recycle_md5=old_md5,
+                    pending_recycle_size=old_size)
         except Exception as e:
+            # 只回退仍能确认由本次任务写入的目标; 被其他请求替换时保留现场
+            removed = _remove_if_identity(target, new_md5, new_size)
+            kept = bool(target.is_file() and not removed)
+            msg = f"登记失败，当前 PNG 未动：{str(e).splitlines()[0]}"
+            if kept:
+                msg += "；本次 JPG 未能确认身份，已保留在磁盘"
+            return jsonify({"status": "error", "error": msg,
+                            "stage": "register_failed",
+                            "target_kept": kept}), 500
+        # 首次回收也要核对内容身份: 登记后到回收前源路径可能已被另一张 PNG 覆盖
+        try:
+            now_md5 = md5_of(str(src))
+            now_size = src.stat().st_size
+        except Exception:
+            now_md5, now_size = None, None
+        if now_md5 != old_md5 or now_size != old_size:
+            recycled, recycle_bad = 0, [f"{old_rel} 已被替换，未回收"]
+        else:
             try:
-                os.remove(str(target))
-            except Exception:
-                pass
-            return jsonify({"status": "error",
-                            "error": f"登记失败，当前 PNG 未动：{str(e).splitlines()[0]}",
-                            "stage": "register_failed"}), 500
-        recycled, recycle_bad = _recycle_files([str(src)])
+                recycled, recycle_bad = _recycle_files([str(src)])
+            except Exception as e:
+                recycled, recycle_bad = 0, [str(e)]
         if recycle_bad:
-            try:
-                with _db() as db:
-                    db.set_pending_recycle(aid, page, old_rel)
-            except Exception:
-                pass
             audit_log.record("edit", "转为 JPG",
                              f"#{aid} p{page} 已换为 JPG（{old_size} → {new_size} 字节），"
                              f"旧 PNG 回收失败：{len(recycle_bad)} 个", 1, ids=[aid])
@@ -7924,9 +8144,15 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 "current_size": old_size, "new_size": new_size,
                 "saved_bytes": old_size - new_size, "quality": quality,
                 "recycled": recycled, "recycle_failed": recycle_bad,
-                "retry_recycle": True,
-                "disk_note": "新 JPG 已生效；旧 PNG 仍在磁盘，请在页详情重试回收。",
+                "retry_recycle": True, "pending_recycle": old_rel,
+                "pending_recycle_md5": old_md5,
+                "disk_note": "新 JPG 已生效；旧 PNG 仍在磁盘，可在页详情重试回收。",
             })
+        try:
+            with _db() as db:
+                db.set_pending_recycle(aid, page, None)
+        except Exception:
+            pass
         audit_log.record("edit", "转为 JPG",
                          f"#{aid} p{page} 已换为 JPG（{old_size} → {new_size} 字节），"
                          f"旧 PNG 已送回收站", 1, ids=[aid])
@@ -7951,24 +8177,77 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             page = 0
         if not aid:
             return jsonify({"status": "error", "error": "缺少作品 ID"}), 400
+        from utils.hashutil import md5_of
         with _db() as db:
             rec = db.get_page_conversion(aid, page)
-        pending = str((rec or {}).get("pending_recycle") or "")
+        if not rec:
+            return jsonify({"status": "error", "error": "页不存在"}), 404
+        pending = str(rec.get("pending_recycle") or "").replace("\\", "/")
         if not pending:
             return jsonify({"status": "ok", "retried": 0, "pending": False})
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        cur_rel = str(rec.get("local_path") or "").replace("\\", "/")
+
+        def _clear_pending():
+            try:
+                with _db() as db2:
+                    db2.set_pending_recycle(aid, page, None)
+            except Exception:
+                pass
+
+        # 同页当前文件任何情况下都不能进入回收重试
+        if pending == cur_rel:
+            _clear_pending()
+            return jsonify({"status": "error", "stage": "current_is_pending",
+                            "error": "旧 PNG 路径与当前文件相同，已取消回收",
+                            "pending": False}), 409
+        # 只处理仍是「用户已选择 JPG」的页; 当前 JPG 必须仍在
+        fmt_choice = str(rec.get("format_choice") or "").lower()
+        cur_fmt = str(rec.get("current_format")
+                      or Path(cur_rel).suffix.lstrip(".")).lower()
+        if fmt_choice != "jpg" or cur_fmt not in ("jpg", "jpeg") \
+                or Path(cur_rel).suffix.lower() not in (".jpg", ".jpeg"):
+            return jsonify({"status": "error", "stage": "page_state_changed",
+                            "error": "页已不是 JPG 选择，未回收旧 PNG",
+                            "pending": True}), 409
+        cur = img_root / cur_rel
+        if not cur.is_file():
+            return jsonify({"status": "error", "stage": "current_missing",
+                            "error": "当前 JPG 缺失，先恢复或重新同步后再回收旧 PNG",
+                            "pending": True}), 409
         src = img_root / pending
         if not src.is_file():
-            with _db() as db:
-                db.set_pending_recycle(aid, page, None)
+            _clear_pending()
             return jsonify({"status": "ok", "retried": 0, "pending": False})
-        recycled, recycle_bad = _recycle_files([str(src)])
+        expected_md5 = str(rec.get("pending_recycle_md5")
+                           or rec.get("source_md5") or "")
+        expected_size = rec.get("pending_recycle_size")
+        if expected_size is None:
+            expected_size = rec.get("source_file_size")
+        if not expected_md5:
+            _clear_pending()
+            return jsonify({"status": "error", "stage": "pending_unknown",
+                            "error": "缺少旧 PNG 指纹，已取消自动回收",
+                            "pending": False}), 409
+        actual_size = src.stat().st_size
+        if md5_of(str(src)) != expected_md5 \
+                or (expected_size is not None and actual_size != int(expected_size)):
+            # 原路径被另一张 PNG 覆盖: 保留新文件并报告, 本次绝不回收
+            _clear_pending()
+            return jsonify({"status": "error", "stage": "content_changed",
+                            "content_changed": True, "path": pending,
+                            "error": "旧 PNG 已被替换，本次未回收，文件已保留",
+                            "pending": False}), 409
+        try:
+            recycled, recycle_bad = _recycle_files([str(src)])
+        except Exception as e:
+            recycled, recycle_bad = 0, [str(e)]
         if recycle_bad:
             return jsonify({"status": "error", "stage": "recycle_failed",
                             "error": "旧 PNG 回收失败",
-                            "recycle_failed": recycle_bad}), 500
-        with _db() as db:
-            db.set_pending_recycle(aid, page, None)
+                            "recycle_failed": recycle_bad,
+                            "pending": True}), 500
+        _clear_pending()
         audit_log.record("edit", "重试回收旧 PNG",
                          f"#{aid} p{page} 旧 PNG 已送回收站", 1, ids=[aid])
         return jsonify({"status": "ok", "retried": recycled, "pending": False})

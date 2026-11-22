@@ -829,13 +829,13 @@ main.cards-collapsed #tab-wallpapers .wf-card .wf-meta { padding: 8px 10px; }
 .lb-reorder-btn:hover { background: rgba(20,80,74,.7); border-color: #8fd8d0; }
 /* 页级来源标记与「转为 JPG」 (2026-11-21 4B-2) */
 .lightbox-info .lb-format { color: #9fd8c8; white-space: nowrap; font-size: 12px; }
-.lb-jpg-btn {
+.lb-jpg-btn, .lb-recycle-btn {
   border: 1px solid rgba(143,216,208,.5); background: rgba(20,60,56,.35);
   color: #bdeee7; border-radius: 7px; padding: 2px 10px; font-size: 12px;
   cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s;
 }
-.lb-jpg-btn:hover { background: rgba(20,80,74,.7); border-color: #8fd8d0; }
-.lb-jpg-btn:disabled { opacity: .55; cursor: default; }
+.lb-jpg-btn:hover, .lb-recycle-btn:hover { background: rgba(20,80,74,.7); border-color: #8fd8d0; }
+.lb-jpg-btn:disabled, .lb-recycle-btn:disabled { opacity: .55; cursor: default; }
 /* 大图左下角「设为壁纸」: 与 ‹ › 完全同一套圆形浮按钮 (同尺寸/同底色/同悬停),
    不再挤在信息行里跟文字和「调整页序」抢位置。hidden = 当前卡片没有作品 ID。 */
 .lightbox-wall {
