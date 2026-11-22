@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-22（当前前端版本 `20261121j`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-23（当前前端版本 `20261123a`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 164 用例，必须全过，2026-11-22 已 164/164 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 165 用例，必须全过，2026-11-23 已 165/165 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，164 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，165 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 164 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 165 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -104,7 +104,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261121j`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261123a`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1142,6 +1142,38 @@
   真实库升级前备份 `F:\Vixiq\data\backups\page-recycle-identity-20261122-144422.db`；
   安装版已启动（前端 `20261121j`，`built_at 14:40:06`），`schema_migrations` 含 031，
   真实库 1538 作品 / 2107 张已下载页（总 2192 页）。GitHub 本地提交（见汇报），**未推送**。
+
+### 4.43 4B-3 同步发现待转 PNG（2026-11-23，版本 `20261123a`）
+
+- **同步只报告**：`reconcile_output` 新增 `normalize_pending`。手动放入图库的静态
+  JPG/JPEG/WEBP/BMP/TIF（以 PIL 实际解码格式为准，动图 GIF/多帧 WEBP/APNG 跳过）
+  在同步结果与健康条显示「待转为 PNG」，自动扫描/周期轮询都不会自动转换。
+  已主动选用 JPG 的页（`format_choice='jpg'`）继续沿用 JPG，不进入待转列表。
+- **同页冲突**：已有 PNG 的页再出现同名 JPG 时，同步结果列出「图库当前使用」和
+  「磁盘另有一份」；目标 PNG 已存在也列为冲突。预览只报告，不签发确认令牌，
+  不覆盖任何现有文件。
+- **预览与确认**：`POST /api/library/normalize-pending/preview` 对可转项实际生成临时 PNG，
+  返回计划、同页冲突、逐项与总大小变化，并签发一次性 `preview_id`（绑定路径/MD5/大小/mtime）。
+  `POST /api/library/normalize-pending/apply` 必须带回 `preview_id`，重新核对源文件、
+  目标路径和页状态后转换；`recycle_old` 决定是否把旧 JPG 送系统回收站。
+- **失败保护**：源文件改写、目标 PNG 竞态出现、同页登记变化、转换失败/文件占用、
+  外部盘不可用都保留原 JPG 并报告阶段；登记失败时 PNG 与旧 JPG 都保留。
+  其他来源（无 pixiv 自然键）文件转换后登记为 PNG 当前页。
+- **验收**：新增 T174（同步只报告、已选 JPG/动图不报、同页冲突、目标冲突、预览不落文件、
+  确认转 PNG、旧文件回收/保留、源文件改写、目标竞态、转换失败、外部盘 503、前端接线）；
+  全量 **165/165**，`py_compile`、`node --check` 通过。源码 7811 浏览器实测：
+  健康条「待转为 PNG」、同步结果入口、预览计划/冲突/预计空间、确认后 toast 与同步刷新通过；
+  候选包 7813 真实接口实测：手动放 JPG → 同步报告 → 预览 → 确认后只留 PNG。
+- **部署（2026-11-23 01:44）**：候选包 `_dev_runtime/packages/vixiq`
+  （`built_at 2026-11-23 01:40:00`）在 7813 验收；安装版与 `dist\vixiq` 已替换
+  `vixiq.exe` 与 7 个前端资源（无新迁移，031 已在），哈希一致、配置未变；
+  备份 `.backup-normalize-pending-20261123-014347` /
+  `.backup-normalize-pending-20261123-014417`；真实库部署前备份
+  `F:\Vixiq\data\backups\normalize-pending-20261123-014315.db`。
+  安装版已启动（前端 `20261123a`，`built_at 01:40:00`），真实库 1538 作品 /
+  2107 张已下载页（总 2192 页）。真实库现有 1 张手动 JPG
+  `蒂卡Tika_local_38e4770d1891/#bilibili#/其他来源_001.jpg`，下次同步会显示「待转为 PNG」，
+  不会自动转换。GitHub 本地提交（见汇报），**未推送**。
 
 ---
 

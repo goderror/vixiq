@@ -40,6 +40,21 @@ def is_animated(path: "str | Path") -> bool:
         return False
 
 
+def actual_format_info(path: "str | Path") -> dict:
+    """只读实际解码格式/帧数 (不信任扩展名), 供 4B-3 判断是否待转 PNG。"""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            fmt = str(im.format or "").lower()
+            frames = int(getattr(im, "n_frames", 1) or 1)
+            animated = bool(getattr(im, "is_animated", False)) or frames > 1
+        return {"actual_format": fmt, "frames": frames, "animated": animated,
+                "readable": True}
+    except Exception as e:
+        return {"actual_format": None, "frames": 0, "animated": False,
+                "readable": False, "error": str(e).splitlines()[0]}
+
+
 def pixel_digest(path: "str | Path") -> "str | None":
     """解码后的像素指纹: 用于「同口径」确认两张图内容是否一致。
 

@@ -899,6 +899,7 @@ def _reconcile_to_json(rep) -> dict:
         "scan_incomplete": bool(getattr(rep, "scan_incomplete", False)),
         "unreadable_dirs": getattr(rep, "unreadable_dirs", []) or [],
         "pending": getattr(rep, "pending", []) or [],
+        "normalize_pending": getattr(rep, "normalize_pending", []) or [],
     }
 
 
@@ -1170,6 +1171,53 @@ def _jpg_preview_take(token: str) -> "dict | None":
     if not data:
         return None
     if time.time() - float(data.get("created_at") or 0) > _JPG_PREVIEW_TTL:
+        return None
+    return data
+
+
+_NORMALIZE_PREVIEWS: "dict[str, dict]" = {}
+_NORMALIZE_PREVIEWS_LOCK = threading.Lock()
+_NORMALIZE_PREVIEW_TTL = 600
+
+
+def _normalize_preview_issue(item: dict, ident: dict, png_size: int) -> str:
+    """4B-3: 登记一次性「待转 PNG」预览令牌, 绑定源文件身份。"""
+    import uuid
+    token = uuid.uuid4().hex
+    data = {
+        "path": str(item.get("path") or "").replace("\\", "/"),
+        "target_rel": str(item.get("target_rel") or "").replace("\\", "/"),
+        "artwork_id": (None if item.get("artwork_id") in (None, "")
+                       else str(item.get("artwork_id"))),
+        "page": (None if item.get("page") is None else int(item.get("page") or 0)),
+        "foreign": bool(item.get("foreign")),
+        "registered": str(item.get("registered") or "").replace("\\", "/"),
+        "registered_exists": bool(item.get("registered_exists")),
+        "format": str(item.get("format") or ""),
+        "created_at": time.time(),
+        "png_size": int(png_size or 0),
+        "source_md5": ident["source_md5"],
+        "source_size": ident["source_size"],
+        "source_mtime_ns": ident["source_mtime_ns"],
+    }
+    with _NORMALIZE_PREVIEWS_LOCK:
+        cutoff = time.time() - _NORMALIZE_PREVIEW_TTL
+        for k in [k for k, v in _NORMALIZE_PREVIEWS.items()
+                  if float(v.get("created_at") or 0) < cutoff]:
+            _NORMALIZE_PREVIEWS.pop(k, None)
+        _NORMALIZE_PREVIEWS[token] = data
+    return token
+
+
+def _normalize_preview_take(token: str) -> "dict | None":
+    key = str(token or "")
+    if not key:
+        return None
+    with _NORMALIZE_PREVIEWS_LOCK:
+        data = _NORMALIZE_PREVIEWS.pop(key, None)
+    if not data:
+        return None
+    if time.time() - float(data.get("created_at") or 0) > _NORMALIZE_PREVIEW_TTL:
         return None
     return data
 
@@ -6910,6 +6958,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 "missing_ids": [], "empty_dirs": [], "corrupt_files": [],
                 "scanned_images": 0, "new_pages_linked": 0, "pages_relinked": 0,
                 "duplicates": [], "conflicts": [], "pending": [],
+                "normalize_pending": [],
                 "scan_incomplete": False, "unreadable_dirs": [],
             }), 503
         resp = _reconcile_to_json(rep)
@@ -6939,7 +6988,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         # periodic 轮询不做 (省 IO), 手动同步/导入/对账发现新文件时登记。
         if not periodic:
             try:
-                IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+                IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif",
+                           ".bmp", ".tif", ".tiff"}
                 disk_rels = [p.relative_to(img_root).as_posix()
                              for p in img_root.rglob("*")
                              if p.is_file() and p.suffix.lower() in IMG_EXT]
@@ -8251,6 +8301,354 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         audit_log.record("edit", "重试回收旧 PNG",
                          f"#{aid} p{page} 旧 PNG 已送回收站", 1, ids=[aid])
         return jsonify({"status": "ok", "retried": recycled, "pending": False})
+
+    @app.route("/api/library/normalize-pending/preview", methods=["POST"])
+    def api_library_normalize_pending_preview():
+        """4B-3: 预览手动放入的静态 JPG/WEBP/BMP/TIF 转为 PNG 的计划。
+
+        只读: 转换结果写在应用临时目录, 用后即删; 不碰图库文件。
+        同页已有 PNG 或目标 PNG 已存在时只报告冲突, 不签发确认令牌。"""
+        from core.image_format import actual_format_info, normalize_to_png
+        rep = _cached_reconcile(force=True)
+        if not getattr(rep, "root_available", True):
+            return jsonify({
+                "status": "error",
+                "error": "图库不可用：磁盘未连接或图库目录无法访问",
+                "root_available": False, "items": [],
+            }), 503
+        try:
+            img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": f"图库不可用：{str(e).splitlines()[0]}",
+                "root_available": False, "items": [],
+            }), 503
+        items: "list[dict]" = []
+        tmpdir = _new_ingest_tmpdir()
+        try:
+            for idx, raw in enumerate(getattr(rep, "normalize_pending", []) or []):
+                item = dict(raw)
+                item["status"] = "pending"
+                item["preview_id"] = None
+                item["png_size"] = None
+                item["saved_bytes"] = None
+                item["saved_pct"] = None
+                item["error"] = item.get("error") or ""
+                src = img_root / str(item.get("path") or "")
+                if not src.is_file():
+                    item["status"] = "error"
+                    item["error"] = "文件已不存在，请重新同步"
+                    items.append(item)
+                    continue
+                item["size"] = src.stat().st_size
+                # 以当前页记录为准复核冲突/选择
+                with _db() as db:
+                    pref = db.find_page_by_local_path(item["path"])
+                    page = None
+                    if pref:
+                        page = db.get_page_conversion(pref["artwork_id"], pref["page_num"])
+                    elif item.get("artwork_id") not in (None, ""):
+                        page = db.get_page_conversion(str(item["artwork_id"]),
+                                                       int(item.get("page") or 0))
+                if page:
+                    item["artwork_id"] = str(page.get("artwork_id"))
+                    item["page"] = int(page.get("page_num") or 0)
+                    item["foreign"] = False
+                    item["registered"] = str(page.get("local_path") or "").replace("\\", "/")
+                    item["registered_exists"] = bool(
+                        item["registered"] and (img_root / item["registered"]).is_file())
+                    item["registered_format"] = str(page.get("current_format") or "")
+                    if str(page.get("format_choice") or "").lower() == "jpg":
+                        item["status"] = "chosen"
+                        item["error"] = "该页已主动选用 JPG，继续沿用所选格式"
+                        items.append(item)
+                        continue
+                    if item["registered"] and item["registered"] != item["path"] \
+                            and item["registered_exists"]:
+                        item["conflict"] = True
+                else:
+                    item["registered"] = ""
+                    item["registered_exists"] = False
+                target_rel = str(item.get("target_rel") or "").replace("\\", "/")
+                target = img_root / target_rel
+                item["target_exists"] = bool(target_rel and target.is_file())
+                if item.get("target_exists"):
+                    item["status"] = "conflict"
+                    item["error"] = "目标 PNG 已存在，请先处理冲突"
+                    items.append(item)
+                    continue
+                if item.get("conflict"):
+                    item["status"] = "conflict"
+                    item["error"] = "同页已有图库当前使用的 PNG，未自动替换"
+                    items.append(item)
+                    continue
+                info = actual_format_info(src)
+                fmt = str(info.get("actual_format") or "")
+                if not info.get("readable"):
+                    item["status"] = "error"
+                    item["error"] = "当前文件无法打开：" + str(info.get("error") or "未知")
+                    items.append(item)
+                    continue
+                if fmt == "png" or fmt == "gif" or info.get("animated") \
+                        or fmt not in ("jpeg", "webp", "bmp", "tiff"):
+                    item["status"] = "error"
+                    item["error"] = "该格式不需要或不能转为 PNG"
+                    items.append(item)
+                    continue
+                out = tmpdir / f"n{idx}_{src.stem}.png"
+                r = normalize_to_png(src, out_path=out, delete_source=False,
+                                     overwrite=False)
+                if not r.get("ok"):
+                    item["status"] = "error"
+                    item["error"] = r.get("note") or "转换预览失败"
+                    items.append(item)
+                    continue
+                if not r.get("converted"):
+                    item["status"] = "error"
+                    item["error"] = "该文件不需要转换"
+                    items.append(item)
+                    continue
+                try:
+                    ident = _jpg_source_identity(src)
+                except Exception as e:
+                    item["status"] = "error"
+                    item["error"] = f"读取源文件失败：{str(e).splitlines()[0]}"
+                    items.append(item)
+                    continue
+                item["status"] = "ready"
+                item["png_size"] = int(r["current_size"])
+                item["saved_bytes"] = int(item["size"]) - int(r["current_size"])
+                item["saved_pct"] = (round(item["saved_bytes"] * 100.0 / item["size"], 1)
+                                     if item["size"] else 0)
+                item["preview_id"] = _normalize_preview_issue(item, ident,
+                                                              r["current_size"])
+                items.append(item)
+        finally:
+            _cleanup_ingest_tmpdir(tmpdir)
+        ready = [x for x in items if x.get("preview_id")]
+        conflicts = [x for x in items if x.get("status") == "conflict"]
+        errors = [x for x in items if x.get("status") == "error"]
+        chosen = [x for x in items if x.get("status") == "chosen"]
+        total_size = sum(int(x.get("size") or 0) for x in ready)
+        total_png = sum(int(x.get("png_size") or 0) for x in ready)
+        return jsonify({
+            "status": "ok", "root_available": True,
+            "scan_incomplete": bool(getattr(rep, "scan_incomplete", False)),
+            "unreadable_dirs": getattr(rep, "unreadable_dirs", []) or [],
+            "items": items,
+            "ready_count": len(ready), "conflict_count": len(conflicts),
+            "error_count": len(errors), "chosen_count": len(chosen),
+            "total_size": total_size, "total_png_size": total_png,
+            "saved_bytes": total_size - total_png,
+        })
+
+    @app.route("/api/library/normalize-pending/apply", methods=["POST"])
+    def api_library_normalize_pending_apply():
+        """4B-3: 用户确认后把选中的静态图片转换为 PNG, 更新页登记并回收旧文件。"""
+        from core.image_format import actual_format_info, normalize_to_png
+        from utils.hashutil import md5_of
+        data = request.get_json(silent=True) or {}
+        req_items = data.get("items") or []
+        recycle_old = bool(data.get("recycle_old", True))
+        if not isinstance(req_items, list) or not req_items:
+            return jsonify({"status": "error", "error": "没有要处理的文件"}), 400
+        rep = _cached_reconcile(force=True)
+        if not getattr(rep, "root_available", True):
+            return jsonify({
+                "status": "error",
+                "error": "图库不可用：磁盘未连接或图库目录无法访问",
+                "root_available": False,
+            }), 503
+        try:
+            img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "error": f"图库不可用：{str(e).splitlines()[0]}",
+                "root_available": False,
+            }), 503
+        results: "list[dict]" = []
+        converted = failed = recycled_total = 0
+
+        def _err(item, stage, msg, **extra):
+            out = {"status": "error", "path": item.get("path", ""),
+                   "stage": stage, "error": msg}
+            out.update(extra)
+            results.append(out)
+            return out
+
+        for req in req_items:
+            token = _normalize_preview_take((req or {}).get("preview_id"))
+            if not token:
+                _err({"path": (req or {}).get("path", "")}, "stale_preview",
+                     "预览已失效，请重新预览")
+                failed += 1
+                continue
+            path = str(token.get("path") or "").replace("\\", "/")
+            if (req or {}).get("path") and str(req.get("path")).replace("\\", "/") != path:
+                _err({"path": path}, "stale_preview", "确认文件与预览不一致")
+                failed += 1
+                continue
+            src = img_root / path
+            target_rel = str(token.get("target_rel") or "").replace("\\", "/")
+            target = img_root / target_rel
+            if not src.is_file():
+                _err({"path": path}, "source_missing", "源文件已不存在")
+                failed += 1
+                continue
+            try:
+                ident = _jpg_source_identity(src)
+            except Exception as e:
+                _err({"path": path}, "source_changed",
+                     f"读取源文件失败：{str(e).splitlines()[0]}")
+                failed += 1
+                continue
+            if (ident["source_md5"] != token.get("source_md5")
+                    or ident["source_size"] != token.get("source_size")
+                    or ident["source_mtime_ns"] != token.get("source_mtime_ns")):
+                _err({"path": path}, "source_changed",
+                     "源文件在预览后发生变化，请重新预览")
+                failed += 1
+                continue
+            # 复核当前页状态: 已主动选 JPG 的页不动, 同页已有别的 PNG 也不覆盖
+            with _db() as db:
+                pref = db.find_page_by_local_path(path)
+                page = None
+                if pref:
+                    page = db.get_page_conversion(pref["artwork_id"], pref["page_num"])
+                elif token.get("artwork_id") not in (None, ""):
+                    page = db.get_page_conversion(str(token["artwork_id"]),
+                                                   int(token.get("page") or 0))
+            if page and str(page.get("format_choice") or "").lower() == "jpg":
+                _err({"path": path}, "chosen_jpg",
+                     "该页已主动选用 JPG，继续沿用所选格式")
+                failed += 1
+                continue
+            if page:
+                cur_rel = str(page.get("local_path") or "").replace("\\", "/")
+                if cur_rel and cur_rel != path:
+                    if cur_rel == target_rel and (img_root / cur_rel).is_file():
+                        _err({"path": path}, "target_conflict",
+                             "目标 PNG 已被同页使用，未覆盖")
+                        failed += 1
+                        continue
+                    if (img_root / cur_rel).is_file():
+                        _err({"path": path}, "registration_changed",
+                             "页记录在预览后发生变化，请重新预览")
+                        failed += 1
+                        continue
+            if target.exists():
+                _err({"path": path}, "target_conflict",
+                     "目标 PNG 已存在，未覆盖", target_rel=target_rel)
+                failed += 1
+                continue
+            info = actual_format_info(src)
+            fmt = str(info.get("actual_format") or "")
+            if not info.get("readable") or fmt == "png" or fmt == "gif" \
+                    or info.get("animated") \
+                    or fmt not in ("jpeg", "webp", "bmp", "tiff"):
+                _err({"path": path}, "unsupported_format",
+                     info.get("error") or "该文件不是可转换的静态图片")
+                failed += 1
+                continue
+            r = normalize_to_png(src, out_path=target, delete_source=False,
+                                 overwrite=False)
+            if not r.get("ok"):
+                stage = "target_conflict" if r.get("reason") == "exists" else "convert_failed"
+                _err({"path": path}, stage, r.get("note") or "转换失败")
+                failed += 1
+                continue
+            if not r.get("converted"):
+                _err({"path": path}, "not_converted", "该文件不需要转换")
+                failed += 1
+                continue
+            try:
+                new_md5 = md5_of(str(target))
+                new_size = target.stat().st_size
+            except Exception as e:
+                _err({"path": path}, "convert_failed",
+                     f"新 PNG 校验失败：{str(e).splitlines()[0]}",
+                     png_rel=target_rel)
+                failed += 1
+                continue
+            aid = str(page["artwork_id"]) if page else (
+                str(token["artwork_id"]) if token.get("artwork_id") not in (None, "") else None)
+            pg = int(page["page_num"]) if page else (
+                int(token.get("page") or 0) if token.get("artwork_id") not in (None, "") else 0)
+            conv = {
+                "source_format": ("jpg" if fmt == "jpeg" else fmt),
+                "source_file_size": int(token["source_size"]),
+                "source_md5": token["source_md5"],
+                "converted_at": r.get("converted_at"),
+                "current_format": "png", "note": None,
+            }
+            try:
+                with _db() as db:
+                    if not aid:
+                        db.register_foreign_file(target_rel)
+                        pref2 = db.find_page_by_local_path(target_rel)
+                        if not pref2:
+                            raise RuntimeError("无法登记转换后的 PNG")
+                        aid = str(pref2["artwork_id"])
+                        pg = int(pref2["page_num"])
+                    db.store_page_result(aid, pg, target_rel, new_md5, new_size,
+                                         conversion=conv, replace_conversion=True)
+                    if not token.get("foreign"):
+                        try:
+                            db._adopt_author_from_rel(aid, target_rel)
+                        except Exception:
+                            pass
+            except Exception as e:
+                _err({"path": path}, "register_failed",
+                     f"登记失败，PNG 与旧文件都保留：{str(e).splitlines()[0]}",
+                     png_rel=target_rel)
+                failed += 1
+                continue
+            item_out = {
+                "status": "ok", "path": path, "png_rel": target_rel,
+                "artwork_id": aid, "page": pg,
+                "old_size": int(token["source_size"]), "new_size": new_size,
+                "saved_bytes": int(token["source_size"]) - new_size,
+                "recycled": 0, "recycle_failed": [],
+            }
+            if recycle_old:
+                try:
+                    now_md5 = md5_of(str(src))
+                    now_size = src.stat().st_size
+                except Exception:
+                    now_md5, now_size = None, None
+                if now_md5 != token.get("source_md5") \
+                        or now_size != token.get("source_size"):
+                    item_out["recycle_failed"] = [f"{path} 已被替换，未回收"]
+                else:
+                    try:
+                        rec_n, rec_bad = _recycle_files([str(src)])
+                    except Exception as e:
+                        rec_n, rec_bad = 0, [str(e)]
+                    item_out["recycled"] = rec_n
+                    item_out["recycle_failed"] = rec_bad
+            else:
+                item_out["recycle_skipped"] = True
+            results.append(item_out)
+            converted += 1
+            recycled_total += int(item_out.get("recycled") or 0)
+        # 让下一次同步立即看到新状态
+        _reconcile_state["rep"] = None
+        _reconcile_state["ts"] = 0.0
+        if converted:
+            _kick_metadata_fill()
+        try:
+            audit_log.record("edit", "转为 PNG",
+                             f"手动放入的图片转 PNG：成功 {converted}，失败 {failed}，"
+                             f"旧文件回收 {recycled_total}", 1)
+        except Exception:
+            pass
+        return jsonify({
+            "status": "ok", "items": results,
+            "converted": converted, "failed": failed,
+            "recycled": recycled_total,
+        })
 
     @app.route("/api/library/missing-items")
     def api_library_missing_items():

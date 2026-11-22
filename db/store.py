@@ -98,10 +98,13 @@ class ReconcileReport:
     scan_incomplete: bool = False   # 有子目录/文件读不了 → 本次扫描不完整, 相应范围暂缓缺失判定
     unreadable_dirs: list = field(default_factory=list)  # 读不了的目录/文件绝对路径
     pending: list = field(default_factory=list)          # 待确认: 多候选移动等无法唯一确定的条目
+    # 2026-11-22 4B-3: 手动放入的静态 JPG/WEBP/BMP/TIF 等待确认转 PNG
+    normalize_pending: list = field(default_factory=list)
 
     def total_issues(self) -> int:
         return (len(self.missing_ids) + len(self.empty_dirs)
-                + len(self.corrupt_files) + len(self.duplicates))
+                + len(self.corrupt_files) + len(self.duplicates)
+                + len(self.normalize_pending))
 
 
 def _walk_tree(root, onerror):
@@ -2974,7 +2977,7 @@ class PixivDatabase:
         """
         from utils.hashutil import md5_of
         img_root = Path(img_root)
-        IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+        IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff'}
         db_count = self.conn.execute(
             "SELECT COUNT(*) FROM artworks WHERE trashed_at IS NULL").fetchone()[0] or 0
         # ⓪ 根目录不可访问 (外接盘未接上/目录被删且无法补建) → 直接返回不可用报告。
@@ -3170,6 +3173,70 @@ class PixivDatabase:
                 "registered": cur_rel,
                 "pending_recycle": str(r['pending_recycle'] or "").replace("\\", "/"),
             })
+        # ③.6 4B-3: 手动放入的静态 JPG/WEBP/BMP/TIF → 只报告「待转为 PNG」。
+        #     已主动选用 JPG 的页 (format_choice='jpg') 继续沿用, 不再报告。
+        normalize_pending: "list[dict]" = []
+        try:
+            from core.image_format import actual_format_info
+            NORMALIZE_EXT = {".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+            for (p, rel, sz) in scan_files:
+                ext = p.suffix.lower()
+                if ext not in NORMALIZE_EXT:
+                    continue
+                info = actual_format_info(p)
+                fmt = str(info.get("actual_format") or "")
+                if info.get("readable"):
+                    if fmt == "png" or fmt == "gif" or info.get("animated"):
+                        continue
+                    if fmt not in ("jpeg", "webp", "bmp", "tiff"):
+                        continue
+                page = self.conn.execute(
+                    "SELECT artwork_id, page_num, local_path, md5, file_size_bytes, "
+                    "       current_format, format_choice, pending_recycle, "
+                    "       source_md5, source_file_size "
+                    "  FROM pages WHERE local_path=? AND trashed_at IS NULL",
+                    (rel,)).fetchone()
+                nkey = pixiv_natural_key(p.name)
+                if page is None and nkey:
+                    page = self.conn.execute(
+                        "SELECT artwork_id, page_num, local_path, md5, file_size_bytes, "
+                        "       current_format, format_choice, pending_recycle, "
+                        "       source_md5, source_file_size "
+                        "  FROM pages WHERE artwork_id=? AND page_num=? AND trashed_at IS NULL",
+                        nkey).fetchone()
+                if page is not None and str(page['format_choice'] or "").lower() == "jpg":
+                    continue
+                registered = (str(page['local_path'] or "").replace("\\", "/")
+                              if page is not None else "")
+                registered_exists = bool(registered and (img_root / registered).is_file())
+                target_rel = Path(rel).with_suffix(".png").as_posix()
+                target_exists = target_rel != rel and (img_root / target_rel).is_file()
+                normalize_pending.append({
+                    "kind": "normalize_png",
+                    "path": rel,
+                    "name": Path(rel).name,
+                    "format": fmt or ext.lstrip("."),
+                    "size": sz,
+                    "mtime_ns": str(p.stat().st_mtime_ns),
+                    "readable": bool(info.get("readable", True)),
+                    "error": info.get("error") or "",
+                    "artwork_id": (str(page['artwork_id']) if page is not None
+                                   else (nkey[0] if nkey else None)),
+                    "page": (int(page['page_num']) if page is not None
+                             else (nkey[1] if nkey else None)),
+                    "foreign": not bool(nkey),
+                    "target_rel": target_rel,
+                    "target_exists": bool(target_exists),
+                    "current": bool(page is not None and registered == rel),
+                    "conflict": bool(page is not None and registered
+                                     and registered != rel and registered_exists),
+                    "registered": registered,
+                    "registered_exists": registered_exists,
+                    "registered_format": (str(page['current_format'] or "")
+                                          if page is not None else ""),
+                })
+        except Exception:
+            normalize_pending = []
         # ④ 重复检测: 同一 MD5 磁盘上有多份
         md5_groups: "dict[str, list[str]]" = {}
         for rel, h in md5_of_disk.items():
@@ -3261,6 +3328,7 @@ class PixivDatabase:
             scan_incomplete=bool(unreadable),
             unreadable_dirs=sorted(set(unreadable)),
             pending=pending,
+            normalize_pending=normalize_pending,
         )
 
     def delete_artworks(self, artwork_ids: "list[str]") -> int:

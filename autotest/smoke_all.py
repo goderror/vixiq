@@ -3078,6 +3078,7 @@ def run_suite() -> SuiteResult:
     suite.add("T171", "🔒 正式切换与登记一致: 替换失败保原路径 + 单事务回滚恢复 + 复用补登记 + 扩展名切换保护既有目标 (隔离数据)", t171_png_ingest_commit_atomicity)
     suite.add("T172", "🗜 4B-2 转 JPG: 质量/透明/大小预览 + 确认切换只留一份 + 回收失败重试与同步豁免 + 登记/编码失败保旧图 (隔离数据)", t172_page_jpg_convert_preview_and_switch)
     suite.add("T173", "🧷 4B-2 返修: 预览身份绑定 + 发布防覆盖 + 回收身份核对 + 仅静态单帧 PNG (隔离数据)", t173_page_jpg_convert_safety)
+    suite.add("T174", "🖼 4B-3 同步发现待转 PNG: 只报告 + 预览确认 + 冲突保护 + 旧文件回收/保留 (隔离数据)", t174_normalize_pending_preview_and_apply)
     suite.write_report()
     return suite
 
@@ -10415,7 +10416,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261121j" and _mss.group(1) == "20261121j", \
+    assert _mjs and _mss and _mjs.group(1) == "20261123a" and _mss.group(1) == "20261123a", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10510,7 +10511,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261121j', html) and _re.search(r'app\.js\?v=20261121j', html), \
+    assert _re.search(r'style\.css\?v=20261123a', html) and _re.search(r'app\.js\?v=20261123a', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10918,7 +10919,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261121j" in html and "app.js?v=20261121j" in html, \
+        assert "style.css?v=20261123a" in html and "app.js?v=20261123a" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13301,7 +13302,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261121j" in _h and "style.css?v=20261121j" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261123a" in _h and "style.css?v=20261123a" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14670,7 +14671,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261121j" in html and "app.js?v=20261121j" in html
+            assert "style.css?v=20261123a" in html and "app.js?v=20261123a" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14779,7 +14780,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261121j" in html and "app.js?v=20261121j" in html
+            assert "style.css?v=20261123a" in html and "app.js?v=20261123a" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14890,7 +14891,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261121j" in html and "app.js?v=20261121j" in html
+    assert "style.css?v=20261123a" in html and "app.js?v=20261123a" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14930,7 +14931,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261121j" in html
+    assert "20261123a" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15641,7 +15642,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261121j" in html
+    assert "同步磁盘索引" in html and "20261123a" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16055,7 +16056,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261121j" in html
+    assert "20261123a" in html
     for token in ("转为 PNG", "重复导入已复用", "张待确认", "转 PNG 失败",
                   "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -16789,7 +16790,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261121j" in html
+    assert "20261123a" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -17174,6 +17175,324 @@ def t173_page_jpg_convert_safety() -> None:
         assert token in store, f"缺少对账/回收返修接线 {token}"
     mig = PROJECT_ROOT / "db" / "migrations" / "031_page_pending_recycle_identity.sql"
     assert mig.is_file() and "pending_recycle_md5" in mig.read_text(encoding="utf-8")
+
+
+def t174_normalize_pending_preview_and_apply() -> None:
+    """T174: 4B-3 同步发现手动静态图片 → 预览确认转 PNG。
+
+    - 同步只报告 normalize_pending, 已主动选用 JPG 的页和动图不报告;
+    - 同页已有 PNG / 目标 PNG 已存在只列冲突, 不覆盖;
+    - 确认后转 PNG、更新页登记与来源记录, 旧 JPG 按确认动作回收;
+    - 源文件改写、目标竞态、转换失败、外部盘不可用都保住原文件。
+    """
+    import hashlib
+    import tempfile
+    import utils.paths as upaths
+    import web.server as ws
+    from core.image_format import normalize_to_png as real_normalize
+    from db.store import PixivDatabase, WSt, PSt, ReconcileReport
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory(prefix="t174norm_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir()
+        orig_ud = upaths.user_data
+        orig_subdir = ws._config["paths"]["img_subdir"]
+        orig_recycle = ws._recycle_files
+        orig_fill = ws._kick_metadata_fill
+        recycle_calls = []
+        recycle_fail = {"on": False}
+
+        def _fake_recycle(paths):
+            recycle_calls.append(list(paths))
+            if recycle_fail["on"]:
+                return 0, list(paths)
+            n = 0
+            for x in list(paths):
+                try:
+                    Path(x).unlink()
+                    n += 1
+                except OSError:
+                    pass
+            return n, []
+
+        upaths.user_data = lambda rel: tmp / str(rel)
+        ws._config["paths"]["img_subdir"] = "img"
+        ws._recycle_files = _fake_recycle
+        ws._kick_metadata_fill = lambda *a, **k: None
+        ws._reconcile_state["rep"] = None
+        ws._reconcile_state["ts"] = 0.0
+        try:
+            app = ws.create_app()
+            client = app.test_client()
+
+            def _db():
+                return PixivDatabase(str(tmp / "pixiv.db"))
+
+            def _jpg(rel: str, color=(80, 120, 160), size=(40, 30)):
+                p = img / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", size, color).save(p, "JPEG", quality=90)
+                return p
+
+            def _png(rel: str, color=(10, 200, 10), size=(40, 30)):
+                p = img / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", size, color).save(p, "PNG")
+                return p
+
+            def _page(aid: str, rel: str, *, choice=None, current_format=None,
+                      converted=False):
+                p = img / rel
+                md5 = hashlib.md5(p.read_bytes()).hexdigest()
+                with _db() as db:
+                    db.change_work_status(aid, WSt.DONE, title=aid,
+                                          total_pages=1, author_id="1")
+                    db.mark_page_status(aid, 0, PSt.DONE, local_path=rel,
+                                        md5=md5, file_size_bytes=p.stat().st_size)
+                    if converted:
+                        db.set_page_conversion(
+                            aid, 0, source_format="jpg",
+                            source_file_size=p.stat().st_size,
+                            source_md5="src" + aid,
+                            converted_at="2026-01-01 00:00:00",
+                            current_format=current_format or "png", replace=True)
+                    vals = []
+                    if choice is not None:
+                        vals.append("format_choice=?")
+                    if current_format is not None:
+                        vals.append("current_format=?")
+                    if vals:
+                        params = []
+                        if choice is not None:
+                            params.append(choice)
+                        if current_format is not None:
+                            params.append(current_format)
+                        params.append(aid)
+                        db.conn.execute(
+                            "UPDATE pages SET " + ", ".join(vals) +
+                            " WHERE artwork_id=? AND page_num=0", params)
+                        db.conn.commit()
+
+            # ① 构造各类文件
+            _jpg("991101_p0.jpg")
+            _png("991102_p0.png")
+            _jpg("991102_p0.jpg", (200, 30, 30))          # 同页另一份 JPG
+            _page("991102", "991102_p0.png", current_format="png")
+            _jpg("991103_p0.jpg", (30, 30, 200))          # 已主动选用 JPG
+            _page("991103", "991103_p0.jpg", choice="jpg", current_format="jpg")
+            gif = img / "991104_p0.gif"
+            a = Image.new("RGBA", (20, 15), (255, 0, 0, 255))
+            b = Image.new("RGBA", (20, 15), (0, 255, 0, 255))
+            a.save(gif, "GIF", save_all=True, append_images=[b])
+            webp = img / "991105_p0.webp"
+            Image.new("RGB", (32, 22), (120, 60, 20)).save(webp, "WEBP")
+            webp_anim = img / "991106_p0.webp"
+            a.save(webp_anim, "WEBP", save_all=True, append_images=[b])
+            bmp = img / "991107_p0.bmp"
+            Image.new("RGB", (24, 18), (20, 60, 120)).save(bmp, "BMP")
+            tif = img / "991108_p0.tif"
+            Image.new("RGB", (28, 20), (60, 120, 20)).save(tif, "TIFF")
+            _jpg("991109_p0.jpg", (90, 90, 20))
+            _png("991109_p0.png", (20, 90, 90))          # 未登记的目标 PNG
+            foreign = img / "作者_1" / "外来源.jpg"
+            foreign.parent.mkdir()
+            Image.new("RGB", (26, 18), (90, 30, 90)).save(foreign, "JPEG")
+
+            rec = client.post("/api/library/sync").get_json()
+            norm_items = rec.get("normalize_pending") or []
+            by_path = {x.get("path"): x for x in norm_items}
+            assert "991101_p0.jpg" in by_path, by_path.keys()
+            assert by_path["991101_p0.jpg"]["current"] is True, by_path["991101_p0.jpg"]
+            assert "991102_p0.jpg" in by_path, by_path.keys()
+            assert by_path["991102_p0.jpg"]["conflict"] is True, by_path["991102_p0.jpg"]
+            assert by_path["991102_p0.jpg"]["registered"] == "991102_p0.png"
+            assert "991103_p0.jpg" not in by_path, "已主动选用 JPG 不应报待转"
+            assert "991104_p0.gif" not in by_path, "动图不应报待转"
+            assert "991105_p0.webp" in by_path and "991106_p0.webp" not in by_path
+            assert "991107_p0.bmp" in by_path and "991108_p0.tif" in by_path
+            assert by_path["991109_p0.jpg"]["target_exists"] is True
+            assert by_path["作者_1/外来源.jpg"]["foreign"] is True
+            assert rec.get("normalize_pending")
+            # 新 JPG 已被对账登记为当前页, 但格式尚未转换
+            pi = None
+            with _db() as db:
+                pi = db.get_page_info("991101", 0)
+            assert pi and pi.local_path == "991101_p0.jpg", pi
+            # 冲突页的当前 PNG 没有被换成 JPG
+            with _db() as db:
+                assert db.get_page_conversion("991102", 0)["local_path"] == "991102_p0.png"
+            # 周期轮询同样只报告
+            rp = client.post("/api/library/sync?periodic=1").get_json()
+            assert rp.get("normalize_pending"), rp
+
+            # ② 预览: 可转项签令牌, 冲突/目标冲突不签; 不改文件
+            first = client.post("/api/library/normalize-pending/preview").get_json()
+            assert first.get("status") == "ok", first
+            pv = {x.get("path"): x for x in (first.get("items") or [])}
+            assert "991103_p0.jpg" not in pv
+            assert pv["991101_p0.jpg"].get("preview_id"), pv["991101_p0.jpg"]
+            assert pv["991101_p0.jpg"].get("png_size"), pv["991101_p0.jpg"]
+            assert not (img / "991101_p0.png").exists(), "预览不得落正式 PNG"
+            assert pv["991102_p0.jpg"].get("status") == "conflict"
+            assert not pv["991102_p0.jpg"].get("preview_id")
+            assert pv["991109_p0.jpg"].get("status") == "conflict"
+            assert not pv["991109_p0.jpg"].get("preview_id")
+            assert pv["作者_1/外来源.jpg"].get("preview_id"), pv["作者_1/外来源.jpg"]
+            assert first.get("ready_count", 0) >= 5, first.get("ready_count")
+
+            # ③ 确认转换: 只留 PNG、页登记与来源记录更新, 旧文件回收
+            ready = [x for x in (first.get("items") or []) if x.get("preview_id")
+                     and x.get("path") in ("991101_p0.jpg", "991105_p0.webp",
+                                           "991107_p0.bmp", "991108_p0.tif")]
+            assert len(ready) == 4, ready
+            applied = client.post("/api/library/normalize-pending/apply",
+                                  json={"items": [{"preview_id": x["preview_id"],
+                                                   "path": x["path"]} for x in ready],
+                                        "recycle_old": True}).get_json()
+            assert applied.get("status") == "ok" and applied.get("converted") == 4, applied
+            for old_rel, new_rel in (
+                    ("991101_p0.jpg", "991101_p0.png"),
+                    ("991105_p0.webp", "991105_p0.png"),
+                    ("991107_p0.bmp", "991107_p0.png"),
+                    ("991108_p0.tif", "991108_p0.png")):
+                assert (img / new_rel).is_file(), new_rel
+                assert not (img / old_rel).exists(), old_rel
+            with _db() as db:
+                r101 = db.get_page_conversion("991101", 0)
+                assert r101["local_path"] == "991101_p0.png", r101
+                assert r101["current_format"] == "png", r101
+                assert r101["source_format"] == "jpg" and r101["source_md5"], r101
+            after = client.post("/api/library/sync").get_json()
+            after_paths = {x.get("path") for x in (after.get("normalize_pending") or [])}
+            for old_rel in ("991101_p0.jpg", "991105_p0.webp",
+                            "991107_p0.bmp", "991108_p0.tif"):
+                assert old_rel not in after_paths, after_paths
+            # 同页冲突原样保留
+            assert (img / "991102_p0.png").is_file() and (img / "991102_p0.jpg").is_file()
+            assert not any(c.get("path") == "991101_p0.jpg"
+                           for c in (after.get("conflicts") or []))
+
+            # ④ 其他来源文件: 预览/确认后更新原占位页, 旧 JPG 回收
+            pv2 = client.post("/api/library/normalize-pending/preview").get_json()
+            fitem = next(x for x in (pv2.get("items") or [])
+                         if x.get("path") == "作者_1/外来源.jpg")
+            assert fitem.get("preview_id"), fitem
+            fapp = client.post("/api/library/normalize-pending/apply",
+                               json={"items": [{"preview_id": fitem["preview_id"],
+                                                "path": fitem["path"]}],
+                                     "recycle_old": True}).get_json()
+            assert fapp.get("converted") == 1, fapp
+            assert (img / "作者_1/外来源.png").is_file()
+            assert not (img / "作者_1/外来源.jpg").exists()
+            after_f = client.post("/api/library/sync").get_json()
+            assert not any(x.get("path") == "作者_1/外来源.jpg"
+                           for x in (after_f.get("normalize_pending") or []))
+
+            # ⑤ 保留旧文件: recycle_old=false → 旧 JPG 仍在, 再同步列冲突
+            _jpg("991110_p0.jpg", (40, 160, 40))
+            client.post("/api/library/sync")
+            pv3 = client.post("/api/library/normalize-pending/preview").get_json()
+            it110 = next(x for x in (pv3.get("items") or [])
+                         if x.get("path") == "991110_p0.jpg")
+            client.post("/api/library/normalize-pending/apply",
+                        json={"items": [{"preview_id": it110["preview_id"],
+                                          "path": it110["path"]}],
+                              "recycle_old": False})
+            assert (img / "991110_p0.jpg").is_file() and (img / "991110_p0.png").is_file()
+            after_keep = client.post("/api/library/sync").get_json()
+            keep_item = next(x for x in (after_keep.get("normalize_pending") or [])
+                             if x.get("path") == "991110_p0.jpg")
+            assert keep_item.get("conflict") is True, keep_item
+            (img / "991110_p0.jpg").unlink()
+
+            # ⑥ 源文件在预览后被改写 → 拒绝转换, 原 JPG 保留
+            _jpg("991111_p0.jpg", (70, 70, 70))
+            client.post("/api/library/sync")
+            pv4 = client.post("/api/library/normalize-pending/preview").get_json()
+            it111 = next(x for x in (pv4.get("items") or [])
+                         if x.get("path") == "991111_p0.jpg")
+            Image.new("RGB", (40, 30), (200, 200, 0)).save(img / "991111_p0.jpg", "JPEG")
+            bad = client.post("/api/library/normalize-pending/apply",
+                              json={"items": [{"preview_id": it111["preview_id"],
+                                               "path": it111["path"]}],
+                                    "recycle_old": True}).get_json()
+            assert bad.get("items")[0].get("stage") == "source_changed", bad
+            assert (img / "991111_p0.jpg").is_file()
+            assert not (img / "991111_p0.png").exists()
+
+            # ⑦ 目标 PNG 在预览后出现 → 目标冲突, 两份都保留
+            _jpg("991112_p0.jpg", (30, 120, 120))
+            client.post("/api/library/sync")
+            pv5 = client.post("/api/library/normalize-pending/preview").get_json()
+            it112 = next(x for x in (pv5.get("items") or [])
+                         if x.get("path") == "991112_p0.jpg")
+            _png("991112_p0.png", (9, 9, 9))
+            bad2 = client.post("/api/library/normalize-pending/apply",
+                               json={"items": [{"preview_id": it112["preview_id"],
+                                                "path": it112["path"]}],
+                                     "recycle_old": True}).get_json()
+            assert bad2.get("items")[0].get("stage") == "target_conflict", bad2
+            assert (img / "991112_p0.jpg").is_file() and (img / "991112_p0.png").is_file()
+
+            # ⑧ 文件被占用/转换失败 → 保留原 JPG, 不产生半成品
+            _jpg("991113_p0.jpg", (120, 30, 120))
+            client.post("/api/library/sync")
+            pv6 = client.post("/api/library/normalize-pending/preview").get_json()
+            it113 = next(x for x in (pv6.get("items") or [])
+                         if x.get("path") == "991113_p0.jpg")
+
+            def _norm_boom(*a, **k):
+                return {"ok": False, "reason": "convert_failed",
+                        "note": "文件被占用，PNG 转换失败"}
+            import core.image_format as cif
+            cif.normalize_to_png = _norm_boom
+            try:
+                bad3 = client.post("/api/library/normalize-pending/apply",
+                                   json={"items": [{"preview_id": it113["preview_id"],
+                                                    "path": it113["path"]}],
+                                         "recycle_old": True}).get_json()
+            finally:
+                cif.normalize_to_png = real_normalize
+            assert bad3.get("items")[0].get("stage") == "convert_failed", bad3
+            assert (img / "991113_p0.jpg").is_file()
+            assert not (img / "991113_p0.png").exists()
+
+            # ⑨ 外部盘不可用: 预览/确认都 503, 不改任何文件
+            orig_cached = ws._cached_reconcile
+            ws._cached_reconcile = lambda force=False: ReconcileReport(
+                missing_ids=[], empty_dirs=[], corrupt_files=[],
+                scanned_images=0, new_pages_linked=0, db_artwork_count=0,
+                root_available=False)
+            try:
+                assert client.post("/api/library/normalize-pending/preview").status_code == 503
+                assert client.post("/api/library/normalize-pending/apply",
+                                   json={"items": [{"preview_id": "x", "path": "y"}]}
+                                   ).status_code == 503
+            finally:
+                ws._cached_reconcile = orig_cached
+        finally:
+            ws._recycle_files = orig_recycle
+            ws._config["paths"]["img_subdir"] = orig_subdir
+            upaths.user_data = orig_ud
+            ws._kick_metadata_fill = orig_fill
+            ws._reconcile_state["rep"] = None
+            ws._reconcile_state["ts"] = 0.0
+
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for token in ("normalize_pending", "openNormalizePreview", "applyNormalizePending",
+                  "norm-recycle-old", "待转为 PNG", "同页冲突", "预览并转为 PNG"):
+        assert token in js, f"缺少前端 4B-3 接线 {token}"
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    for token in ("normalize-pending/preview", "normalize-pending/apply",
+                  "_NORMALIZE_PREVIEWS", "normalize_to_png", "recycle_old"):
+        assert token in srv, f"缺少服务端 4B-3 接线 {token}"
+    store = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
+    for token in ("normalize_pending", "actual_format_info"):
+        assert token in store, f"缺少对账 4B-3 接线 {token}"
+    fmt = (PROJECT_ROOT / "core" / "image_format.py").read_text(encoding="utf-8")
+    assert "def actual_format_info" in fmt
 
 
 def main() -> int:

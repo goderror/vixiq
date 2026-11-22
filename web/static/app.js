@@ -4051,8 +4051,10 @@ async function libSync(showToast = false, periodic = false) {
     window._syncResult = h;
     window._libHealth = h;
     paintLibHealth(!periodic);
+    const normN = (h && h.normalize_pending) ? h.normalize_pending.length : 0;
     if (h && h.new_pages_linked > 0) {
-      toast(`📥 发现 ${h.new_pages_linked} 张新图片，已登记入库，正在联网补全标题/标签…`, 'ok');
+      toast(`📥 发现 ${h.new_pages_linked} 张新图片，已登记入库，正在联网补全标题/标签…`
+        + (normN ? ` · 另有 ${normN} 张待转为 PNG` : ''), 'ok');
       loadLibrary(); loadStats(); loadLibFacets();
       // 元数据后台补全后再刷一次, 标题/作者即时出现
       setTimeout(() => { loadLibrary(); loadStats(); loadLibFacets(); }, 15000);
@@ -4062,7 +4064,13 @@ async function libSync(showToast = false, periodic = false) {
       if (showToast) {
         loadLibrary(); loadStats(); loadLibFacets();
         const miss = h && (h.missing_ids || []).length;
-        toast(miss ? `已与磁盘同步 ✓ · ${miss} 个文件缺失（本页已刷新标红）` : '已与磁盘同步 ✓', miss ? 'err' : 'ok');
+        const norm = (h && h.normalize_pending) ? h.normalize_pending.length : 0;
+        toast(miss
+          ? `已与磁盘同步 ✓ · ${miss} 个文件缺失（本页已刷新标红）`
+            + (norm ? ` · ${norm} 张待转为 PNG` : '')
+          : (norm
+            ? `已与磁盘同步 ✓ · ${norm} 张待转为 PNG（点同步结果预览确认）`
+            : '已与磁盘同步 ✓'), (miss || norm) ? 'err' : 'ok');
       }
     }
     return h;
@@ -4192,6 +4200,8 @@ function paintLibHealth(flash = false) {
   const bad = (!unavailable && h && h.corrupt_files) ? h.corrupt_files.length : 0;
   const pend = (!unavailable && h)
     ? ((h.pending || []).length + (h.conflicts || []).length) : 0;
+  const norm = (!unavailable && h && h.normalize_pending)
+    ? h.normalize_pending.length : 0;
   const incomplete = !!(!unavailable && h && h.scan_incomplete);
   // 体检报告: 由本函数统一渲染, 每次同步/轮询重画都不会丢 —— 用户随时能点进去看明细
   const rc = lastCheckReport;
@@ -4204,7 +4214,7 @@ function paintLibHealth(flash = false) {
   const showReport = !!rc && liveN > 0 && !rc.bar_dismissed;
   // 正常态只亮一小会儿: 同步磁盘/刷新/整理文件夹等主动操作后 flash 一下, 8 秒后自动收起;
   // 周期轮询不重新点亮。有异常/体检报告/体检中则一直显示, 直到问题解决。
-  const issue = !!(unavailable || miss || empty || bad || pend || incomplete
+  const issue = !!(unavailable || miss || empty || bad || pend || norm || incomplete
                    || showReport || checkRunning);
   const tabActive = $('#tab-library').classList.contains('active');
   let visible;
@@ -4223,7 +4233,7 @@ function paintLibHealth(flash = false) {
   }
   bar.style.display = visible ? '' : 'none';
   if (!visible) { bar.innerHTML = ''; return; }
-  const clean = !!(h && !unavailable && !miss && !empty && !bad && !pend
+  const clean = !!(h && !unavailable && !miss && !empty && !bad && !pend && !norm
                    && !incomplete && !showReport && !checkRunning);
   if (unavailable) {
     bar.innerHTML = `<span class="lib-sync-line">⚠ ${esc(window._libUnavailableReason || '图库不可用：磁盘未连接或图库目录无法访问')}</span>`
@@ -4236,6 +4246,7 @@ function paintLibHealth(flash = false) {
     (incomplete ? `<span class="lib-sync-line" title="这些目录/文件本次读不了，其中的作品暂不判缺失">⚠ 扫描不完整：${(h.unreadable_dirs || []).length} 项不可读 · 缺失判定已暂缓</span>` : '') +
     (miss ? `<button type="button" class="health-badge miss" title="点击查看具体是哪些作品" onclick="showLibHealthDetail('missing')">⚠ 文件缺失 ${miss}</button>` : '') +
     (pend ? `<button type="button" class="health-badge miss" title="点击查看多候选移动 / 同名不同内容" onclick="showLibHealthDetail('pending')">❓️ 待确认 ${pend}</button>` : '') +
+    (norm ? `<button type="button" class="health-badge miss" title="点击预览并确认转为 PNG" onclick="openNormalizePreview()">🖼️ 待转为 PNG ${norm}</button>` : '') +
     (empty ? `<button type="button" class="health-badge empty" title="点击查看具体是哪些空文件夹" onclick="showLibHealthDetail('empty')">📁 空目录 ${empty}</button>` : '') +
     (bad ? `<button type="button" class="health-badge bad" title="点击查看具体是哪些损坏文件" onclick="showLibHealthDetail('corrupt')">💥 损坏 ${bad}</button>` : '') +
     (showReport ? `<span class="lib-sync-line lib-sync-clickable" title="点击查看上次体检的完整明细" onclick="showSelfCheckReport()">🩺 上次体检：待处理 ${liveN}（系统异常 ${susN} · 缺信息 ${todoN}）</span>` : '') +
@@ -4420,6 +4431,7 @@ window.showSyncResult = function () {
   const r = window._syncResult || {};
   const miss = (r.missing_ids || []).length;
   const pend = (r.pending || []).length + (r.conflicts || []).length;
+  const norm = (r.normalize_pending || []).length;
   const unread = (r.unreadable_dirs || []).length;
   const writeSkip = r.write_skipped || '';
   const cell = (n, label) => `<div><b style="font-size:18px">${n}</b><div class="hint">${label}</div></div>`;
@@ -4437,15 +4449,127 @@ window.showSyncResult = function () {
       ${cell(r.new_pages_linked || 0, '新增')}
       ${cell(r.pages_relinked || 0, '重新关联')}
       ${cell(miss, '缺失')}
+      ${cell(norm, '待转 PNG')}
       ${cell(pend, '待确认')}
       ${cell(writeSkip ? 1 : 0, '写库失败')}
     </div>
     ${writeSkip ? `<div class="hint">⚠ 写库被跳过：${esc(writeSkip)}（本次只完成了读取与对账）</div>` : ''}
     ${unread ? `<div class="hint">不可读 ${unread} 项：<code>${esc((r.unreadable_dirs || []).slice(0, 8).join('、'))}</code></div>` : ''}
+    ${norm ? `<div class="hint" style="margin-top:10px">待转为 PNG（同步只识别并报告，确认后才转换）：</div><ul>${(r.normalize_pending || []).map(x => `<li><b>${x.conflict ? '同页已有 PNG' : '待转为 PNG'}</b> <code>${esc(x.path || '')}</code><div class="hint">${x.conflict ? '图库当前使用：' + esc(x.registered || '（无）') + ' · 磁盘另有一份' : '当前格式 ' + esc(String(x.format || '').toUpperCase())}</div></li>`).join('')}</ul>
+      <div class="btn-row"><button class="btn accent" onclick="closeLibModal();openNormalizePreview()">预览并转为 PNG（${norm}）</button></div>` : ''}
     ${pend ? `<div class="hint" style="margin-top:10px">待确认（自动对账不会改动这些条目）：</div><ul>${pendRows}</ul>` : ''}
     ${miss ? `<div class="btn-row"><button class="btn danger" onclick="closeLibModal();openMissingCleanup()">预览并清理缺失（${miss}）</button></div>` : ''}
     <div class="hint" style="margin-top:10px">扫描 ${r.scanned_images || 0} 张图片 · 库内作品 ${r.db_artwork_count || 0} 个</div>
   `, { lg: true });
+};
+
+// 4B-3: 同步发现的手动 JPG/WEBP/BMP/TIF → 预览确认后转 PNG
+window.openNormalizePreview = async function () {
+  let r = null;
+  try {
+    r = await api('/api/library/normalize-pending/preview', { method: 'POST' });
+  } catch (e) {
+    toast('预览失败：' + e.message, 'err');
+    return;
+  }
+  if (!r || r.status !== 'ok') {
+    toast('预览失败：' + ((r && r.error) || '未知错误'), 'err');
+    return;
+  }
+  const items = r.items || [];
+  const ready = items.filter(x => x.preview_id);
+  const conflicts = items.filter(x => x.status === 'conflict' || x.target_exists);
+  const errors = items.filter(x => x.status === 'error');
+  const chosen = items.filter(x => x.status === 'chosen');
+  window._normalizePreview = { ready };
+  const fmt = (x, k) => fmtSize(Number(x[k]) || 0);
+  const readyRows = ready.map(x => {
+    const saved = Number(x.saved_bytes) || 0;
+    return `<li><b>${esc(x.name || x.path)}</b>` +
+      `<div class="hint">${esc(String(x.format || '').toUpperCase())} ${fmt(x, 'size')}` +
+      ` → PNG ${fmt(x, 'png_size')} · ${saved >= 0 ? '预计节省' : '预计变大'} ` +
+      `${fmtSize(Math.abs(saved))}${x.saved_pct != null ? '（' + Math.abs(x.saved_pct) + '%）' : ''}` +
+      `${x.artwork_id ? ' · #' + esc(String(x.artwork_id)) + ' p' + (Number(x.page) + 1) : ''}</div></li>`;
+  }).join('');
+  const conflictRows = conflicts.map(x =>
+    `<li><b>${esc(x.name || x.path)}</b><div class="hint">` +
+    `图库当前使用：${esc(x.registered || '（无）')}（${esc(String(x.registered_format || 'PNG').toUpperCase())}）<br>` +
+    `磁盘另有一份：${esc(x.path)}（${esc(String(x.format || '').toUpperCase())}）</div></li>`
+  ).join('');
+  const errorRows = errors.map(x =>
+    `<li><b>${esc(x.name || x.path)}</b><div class="hint">${esc(x.error || '无法转换')}</div></li>`
+  ).join('');
+  const chosenRows = chosen.map(x =>
+    `<li><b>${esc(x.name || x.path)}</b><div class="hint">${esc(x.error || '该页已主动选用 JPG，继续沿用')}</div></li>`
+  ).join('');
+  const totalBefore = Number(r.total_size) || 0;
+  const totalAfter = Number(r.total_png_size) || 0;
+  const totalSaved = Number(r.saved_bytes) || 0;
+  openLibModal('🖼️ 转为 PNG', `
+    <div class="hint">同步只识别并报告，下面这些手动放入的静态图片要确认后才会转换；同页已有 PNG 的条目不会自动替换。</div>
+    ${ready.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin:12px 0;text-align:center">
+      <div><b style="font-size:18px">${ready.length}</b><div class="hint">待转 PNG</div></div>
+      <div><b style="font-size:18px">${fmtSize(totalBefore)}</b><div class="hint">当前大小</div></div>
+      <div><b style="font-size:18px">${fmtSize(totalAfter)}</b><div class="hint">PNG 预计</div></div>
+      <div><b style="font-size:18px">${totalSaved >= 0 ? '节省 ' : '变大 '}${fmtSize(Math.abs(totalSaved))}</b><div class="hint">预计空间变化</div></div>
+    </div>
+    <div class="hint">转换计划：</div><ul>${readyRows}</ul>` : '<div class="hint">当前没有可转换的待处理项。</div>'}
+    ${conflictRows ? `<div class="hint" style="margin-top:10px">同页冲突（图库当前使用 / 磁盘另有一份，需先手动处理）：</div><ul>${conflictRows}</ul>` : ''}
+    ${errorRows ? `<div class="hint" style="margin-top:10px">无法转换：</div><ul>${errorRows}</ul>` : ''}
+    ${chosenRows ? `<div class="hint" style="margin-top:10px">沿用 JPG（不再转换）：</div><ul>${chosenRows}</ul>` : ''}
+    ${ready.length ? `<label class="hint" style="display:flex;align-items:center;gap:8px;margin-top:12px">
+      <input type="checkbox" id="norm-recycle-old" checked> 转换后把旧文件送进系统回收站（可在系统回收站还原）
+    </label>` : ''}
+    <div class="btn-row" style="margin-top:12px">
+      <button class="btn accent" id="norm-apply-btn" ${ready.length ? '' : 'disabled'} onclick="applyNormalizePending()">确认转为 PNG${ready.length ? '（' + ready.length + '）' : ''}</button>
+      <button class="btn ghost" onclick="closeLibModal()">取消</button>
+    </div>
+  `, { lg: true });
+};
+
+window.applyNormalizePending = async function () {
+  const st = window._normalizePreview;
+  if (!st || !st.ready.length) return;
+  const btn = document.getElementById('norm-apply-btn');
+  if (btn) btn.disabled = true;
+  const recycleEl = document.getElementById('norm-recycle-old');
+  const recycle = !recycleEl || recycleEl.checked;
+  let r = null;
+  try {
+    r = await api('/api/library/normalize-pending/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        items: st.ready.map(x => ({ preview_id: x.preview_id, path: x.path })),
+        recycle_old: recycle,
+      }),
+    });
+  } catch (e) {
+    toast('转换失败：' + e.message, 'err');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  if (!r || r.status !== 'ok') {
+    toast('转换失败：' + ((r && r.error) || '未知错误'), 'err');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const fails = (r.items || []).filter(x => x.status !== 'ok');
+  await libSync(false, false);
+  loadLibrary(); loadStats(); loadLibFacets();
+  if (fails.length) {
+    const rows = fails.map(x =>
+      `<li><code>${esc(x.path || '')}</code><div class="hint">${esc(x.error || x.stage || '失败')}</div></li>`
+    ).join('');
+    openLibModal('🖼️ 转换结果', `
+      <div class="hint">成功 ${r.converted || 0} 张，失败 ${fails.length} 张。失败项保留原文件，可重新预览后再试。</div>
+      <ul>${rows}</ul>
+      <div class="btn-row"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>
+    `, { lg: true });
+    return;
+  }
+  closeLibModal();
+  toast(`已转为 PNG · 成功 ${r.converted || 0} 张`
+    + (r.recycled ? ` · 旧文件回收 ${r.recycled} 个` : ''), 'ok');
 };
 
 // 手动入口: 复用智能刷新的后台进度条与失败重试; 结果保留「查看同步结果」
@@ -11569,6 +11693,7 @@ async function runRefreshJob(key, act, forceActive = false) {
       const issueSync = (!act || !act.scope || act.scope === 'library') && result
         && (((result.missing_ids || []).length)
             || ((result.pending || []).length) || ((result.conflicts || []).length)
+            || ((result.normalize_pending || []).length)
             || result.scan_incomplete);
       job.done = true;
       clearTimeout(job._showTimer);
