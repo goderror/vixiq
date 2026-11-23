@@ -1260,7 +1260,7 @@
   `app.js` / `index.html` 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123e`、`built_at 23:11:49`；
   真实库 1605 作品 / 2193 图、`schema_migrations` 至 031，备份列表能读取
-  `pixiv_backup_2026-11-20_19-26-11.zip`（valid）。GitHub 未推送。
+  `pixiv_backup_2026-11-20_19-26-11.zip`（valid）。GitHub 已提交并推送 `0dcfbcb`。
 
 ### 4.44 第 5 项 体检：检查与修复分开（2026-11-23，前端 `20261123d`，已发布到安装版）
 
