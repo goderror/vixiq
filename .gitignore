@@ -45,3 +45,6 @@ logs/
 # IDE
 .idea/
 .vscode/
+
+# 打包用 Cloudflare 隧道二进制（本地下载，不入库）
+tools/cloudflared.exe

@@ -2472,7 +2472,8 @@ def t36_author_stats_page() -> None:
         upaths.data_root = lambda: tmp2 / "d"
         try:
             from db.store import PixivDatabase as PD
-            PD(tmp2 / "d" / "pixiv.db")  # 初始化迁移
+            with PD(tmp2 / "d" / "pixiv.db"):  # 初始化迁移 (用完立即释放读锁)
+                pass
             app = wsrv.create_app()
             with app.test_client() as c:
                 r = c.get("/api/library/authors?limit=5")
@@ -3082,6 +3083,7 @@ def run_suite() -> SuiteResult:
     suite.add("T175", "🧷 4B-3 返修: 发布防覆盖 + 源/页身份绑定 + 登记失败可重试 + 回收失败提示 (隔离数据)", t175_normalize_pending_safety)
     suite.add("T176", "🩺 第5项 体检: 检查全部只读 + 缺失/损坏/待补资料/待整理四组报告 + 修复入口 + 旧入口兼容 (隔离数据)", t176_check_readonly_and_grouped_report)
     suite.add("T177", "🧷 第5项返修: 首次失败显示未完成 + 扫描不完整标注 + 全部扫描 + 503 待补资料完整计数/末尾可查 (隔离数据)", t177_check_status_and_scope_safety)
+    suite.add("T178", "💾 第6项 备份与恢复: 数据库备份/对比/恢复/快照/另存 + 原图旧版本切换/切回 + 损坏与中断保护 (隔离数据)", t178_backup_restore_center)
     suite.write_report()
     return suite
 
@@ -10425,7 +10427,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261123d" and _mss.group(1) == "20261123d", \
+    assert _mjs and _mss and _mjs.group(1) == "20261123e" and _mss.group(1) == "20261123e", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10520,7 +10522,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261123d', html) and _re.search(r'app\.js\?v=20261123d', html), \
+    assert _re.search(r'style\.css\?v=20261123e', html) and _re.search(r'app\.js\?v=20261123e', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10928,7 +10930,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261123d" in html and "app.js?v=20261123d" in html, \
+        assert "style.css?v=20261123e" in html and "app.js?v=20261123e" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13311,7 +13313,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261123d" in _h and "style.css?v=20261123d" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261123e" in _h and "style.css?v=20261123e" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14680,7 +14682,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261123d" in html and "app.js?v=20261123d" in html
+            assert "style.css?v=20261123e" in html and "app.js?v=20261123e" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14789,7 +14791,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261123d" in html and "app.js?v=20261123d" in html
+            assert "style.css?v=20261123e" in html and "app.js?v=20261123e" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14900,7 +14902,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261123d" in html and "app.js?v=20261123d" in html
+    assert "style.css?v=20261123e" in html and "app.js?v=20261123e" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14940,7 +14942,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261123d" in html
+    assert "20261123e" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15651,7 +15653,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261123d" in html
+    assert "同步磁盘索引" in html and "20261123e" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16065,7 +16067,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261123d" in html
+    assert "20261123e" in html
     for token in ("转为 PNG", "重复导入已复用", "张待确认", "转 PNG 失败",
                   "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -16799,7 +16801,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261123d" in html
+    assert "20261123e" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -18416,6 +18418,764 @@ def t177_check_status_and_scope_safety() -> None:
         assert token in srv, f"缺少第 5 项返修服务端接线 {token}"
     st_src = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
     assert "def count_works_missing_metadata" in st_src
+
+
+def t178_backup_restore_center() -> None:
+    """T178: 第 6 节「备份与恢复」复验返修验收。
+
+    ① 数据库备份: 覆盖范围以库内实数为准、另存;
+    ② 同 ID 差异预览 + 确认令牌绑定 (新增作品/改记录/替换同名 ZIP 均失效);
+    ③ 清单结构校验 (数组/缺字段/类型错误) 与合法历史清单兼容;
+    ④ 唯一备份: 同一秒连续/并发创建路径不同, 各自保留对应时点且可恢复;
+    ⑤ 恢复期间写入互斥 (快照与替换之间第二连接被推迟)、两条恢复并发、迁移失败回滚;
+    ⑥ 原图旧版本: 同格式切换/切回、写失败保留当前与快照、跨格式/无登记拒绝;
+    ⑦ 恢复只使用已校验的私有暂存内容: 确认前/恢复中替换或删除 ZIP 都不会换成别的库;
+    ⑧ 独立进程 SQLite 连接的写入在快照与切换之间被推迟或明确拒绝, 已提交数据可回退。
+    """
+    import tempfile
+    import json as _json
+    import sqlite3 as _sqlite3
+    import subprocess as _subprocess
+    import zipfile as _zf
+    import db.store as store
+    import utils.paths as upaths
+    import web.server as ws
+    from db.store import PixivDatabase, WSt, PSt
+
+    def _rewrite_manifest(src: Path, dst: Path, manifest) -> None:
+        with _zf.ZipFile(src) as zin, _zf.ZipFile(dst, "w", _zf.ZIP_DEFLATED) as zout:
+            for it in zin.infolist():
+                data = zin.read(it.filename)
+                if it.filename == "backup_manifest.json":
+                    data = _json.dumps(manifest, ensure_ascii=False).encode("utf-8")
+                zout.writestr(it, data)
+
+    with tempfile.TemporaryDirectory(prefix="t178bak_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir()
+        (img / "作者甲_1").mkdir()
+        for name, data in {
+            "960001_p0.png": b"P0",
+            "960001_p1.png": b"P1",
+            "960001_p2.png": b"P2",
+            "960010_p0.png": b"CURRENT-10",
+            "960010_p0.png.bak": b"OLD-10",
+            "960020_p0.png": b"CURRENT-20",
+            "960020_p0.jpg.bak": b"OLD-JPG-20",
+            "960099_p0.png.bak": b"NO-REG",
+            "乱七八糟.png.bak": b"NO-KEY",
+        }.items():
+            (img / "作者甲_1" / name).write_bytes(data)
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            db.upsert_author("1", "作者甲")
+            for aid in ("960001", "960010", "960020"):
+                db.change_work_status(aid, WSt.DONE, title=f"作品{aid}",
+                                      total_pages=1, author_id="1")
+            db.mark_page_status("960001", 0, PSt.DONE,
+                                local_path="作者甲_1/960001_p0.png")
+            db.mark_page_status("960001", 1, PSt.DONE,
+                                local_path="作者甲_1/960001_p1.png")
+            db.mark_page_status("960010", 0, PSt.DONE,
+                                local_path="作者甲_1/960010_p0.png")
+            db.mark_page_status("960020", 0, PSt.DONE,
+                                local_path="作者甲_1/960020_p0.png")
+            db.set_artwork_tags("960001", ["标签甲", "标签乙"])
+
+        orig_ud, orig_dr = upaths.user_data, upaths.data_root
+        orig_hook, orig_dt = store.RESTORE_STAGE_HOOK, store.datetime
+        upaths.user_data = lambda rel: tmp / str(rel)
+        upaths.data_root = lambda: tmp
+        try:
+            app = ws.create_app()
+            client = app.test_client()
+
+            # ① 备份 + 清单/覆盖范围 + 另存
+            r = client.post("/api/library/backup")
+            assert r.status_code == 200 and r.get_json()["status"] == "ok", r.data
+            backup = Path(r.get_json()["path"])
+            backup_name = backup.name
+            backup_bytes = backup.read_bytes()
+            lst = client.get("/api/library/db-backups").get_json()
+            item = next(x for x in lst["items"] if x["name"] == backup_name)
+            assert item["valid"] is True and item["manifest"], item
+            assert item["counts"] == {"artworks": 3, "pages_done": 4,
+                                      "authors": 1}, item
+            assert item["manifest_matches"] is True, item
+            export = tmp / "export"
+            export.mkdir()
+            r = client.post("/api/library/db-backup/save-as",
+                            json={"name": backup_name, "dest_dir": str(export)})
+            assert r.status_code == 200 and Path(r.get_json()["path"]).is_file(), r.data
+            assert Path(r.get_json()["path"]).read_bytes() == backup_bytes
+
+            # ② 同 ID 数据变化也要出现在预览里
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                db.mark_page_status("960001", 2, PSt.DONE,
+                                    local_path="作者甲_1/960001_p2.png")
+                db.change_work_status("960001", WSt.DONE, title="改过的标题",
+                                      total_pages=3, author_id="1")
+                db.set_artwork_tags("960001", ["标签甲", "新标签"])
+                db.change_work_status("960003", WSt.DONE, title="预览后新增",
+                                      total_pages=0, author_id="1")
+            cmp1 = client.post("/api/library/db-backup/compare",
+                               json={"name": backup_name}).get_json()
+            assert cmp1["status"] == "ok", cmp1
+            d1 = cmp1["diff"]
+            assert "960001_p2" in d1["pages_removed_by_restore"], d1
+            assert "960001" in d1["artworks_changed"], d1
+            assert d1["tags_removed_by_restore"] >= 1, d1
+            assert "960003" in d1["current_only_artworks"], d1
+            assert cmp1["will_overwrite_current"] is True, cmp1
+            assert cmp1["will_lose_current"] is True, cmp1
+            token0 = cmp1["preview_token"]
+
+            # 预览后新增作品 → 旧确认失效, 库不动
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                db.change_work_status("960004", WSt.DONE, title="预览后入库",
+                                      total_pages=0, author_id="1")
+            r = client.post("/api/library/db-backup/restore",
+                            json={"name": backup_name, "confirm_accept_loss": True,
+                                  "preview_token": token0})
+            assert r.status_code == 409 and r.get_json()["stage"] == "确认已失效", r.data
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert db.conn.execute(
+                    "SELECT 1 FROM artworks WHERE artwork_id='960004'").fetchone(), \
+                    "旧确认被拒绝时当前库不能动"
+
+            # 预览后改已有记录 → 旧确认失效
+            cmp2 = client.post("/api/library/db-backup/compare",
+                               json={"name": backup_name}).get_json()
+            token1 = cmp2["preview_token"]
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                db.change_work_status("960001", WSt.DONE, title="再次改名",
+                                      total_pages=3, author_id="1")
+            r = client.post("/api/library/db-backup/restore",
+                            json={"name": backup_name, "confirm_accept_loss": True,
+                                  "preview_token": token1})
+            assert r.status_code == 409 and r.get_json()["stage"] == "确认已失效", r.data
+
+            # 预览后替换同名 ZIP → 旧确认失效; 原库与备份都保持
+            cmp3 = client.post("/api/library/db-backup/compare",
+                               json={"name": backup_name}).get_json()
+            token2 = cmp3["preview_token"]
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                other = db.backup_to_zip(tmp / "another_backup.zip")
+            backup.write_bytes(other.read_bytes())
+            try:
+                r = client.post("/api/library/db-backup/restore",
+                                json={"name": backup_name,
+                                      "confirm_accept_loss": True,
+                                      "preview_token": token2})
+            finally:
+                backup.write_bytes(backup_bytes)
+            assert r.status_code == 409 and r.get_json()["stage"] == "确认已失效", r.data
+            assert backup.read_bytes() == backup_bytes
+
+            # 重新预览: 不勾选接受覆盖 → 拒绝; 勾选 → 恢复
+            cmp4 = client.post("/api/library/db-backup/compare",
+                               json={"name": backup_name}).get_json()
+            token3 = cmp4["preview_token"]
+            r = client.post("/api/library/db-backup/restore",
+                            json={"name": backup_name, "preview_token": token3})
+            assert r.status_code == 409 and r.get_json()["stage"] == "对比差异", r.data
+            r = client.post("/api/library/db-backup/restore",
+                            json={"name": backup_name, "confirm_accept_loss": True,
+                                  "preview_token": token3})
+            assert r.status_code == 200 and r.get_json()["status"] == "ok", r.data
+            snap0 = r.get_json()["snapshot"]
+            assert snap0.startswith("pixiv_backup_pre-restore_"), snap0
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                row = db.conn.execute(
+                    "SELECT title FROM artworks WHERE artwork_id='960001'").fetchone()
+                assert row and row[0] == "作品960001", row
+                assert not db.conn.execute(
+                    "SELECT 1 FROM pages WHERE artwork_id='960001' AND page_num=2"
+                ).fetchone(), "恢复后同 ID 新增页应回到备份状态"
+                assert not db.conn.execute(
+                    "SELECT 1 FROM artworks WHERE artwork_id IN ('960003','960004')"
+                ).fetchone(), "恢复后预览之外新增的作品应被撤掉"
+                assert db.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                snap_info = db.inspect_backup_zip(Path(db.backup_dir) / snap0)
+                assert "960004" in snap_info["artworks"], "恢复前快照要含当时的库"
+            assert backup.read_bytes() == backup_bytes, "恢复不能改备份文件"
+
+            # ③ 清单结构校验: 数组/缺字段/类型错误拒绝; 合法历史清单兼容
+            bdir = Path(lst["dir"])
+            base_manifest = item["manifest"]
+            tampered = {
+                "pixiv_backup_bad_array.zip": [],
+                "pixiv_backup_bad_missing.zip": {
+                    k: v for k, v in base_manifest.items() if k != "pages_done"},
+                "pixiv_backup_bad_type.zip": dict(base_manifest, artworks="3"),
+                "pixiv_backup_bad_bool.zip": dict(base_manifest, pages_done=True),
+            }
+            for name, mf in tampered.items():
+                _rewrite_manifest(backup, bdir / name, mf)
+                bad = client.post("/api/library/db-backup/compare",
+                                  json={"name": name}).get_json()
+                assert bad["status"] == "error" and bad["stage"] == "校验备份", bad
+                rr = client.post("/api/library/db-backup/restore",
+                                 json={"name": name, "confirm_accept_loss": True,
+                                       "preview_token": "x"})
+                assert rr.status_code == 409, rr.data
+                assert rr.get_json()["stage"] == "校验备份", rr.get_json()
+                assert rr.get_json()["snapshot"] is None, rr.get_json()
+            # 清单计数与备份库内实数不一致: 结构仍合法, 显示以库内实数为准
+            _rewrite_manifest(backup, bdir / "pixiv_backup_mismatch.zip",
+                              dict(base_manifest, artworks=999))
+            item2 = next(x for x in client.get("/api/library/db-backups")
+                         .get_json()["items"] if x["name"] == "pixiv_backup_mismatch.zip")
+            assert item2["valid"] is True and item2["manifest_matches"] is False, item2
+            assert item2["counts"]["artworks"] == 3, item2
+            # 合法历史清单 (多出字段、缺 db_path) 不拒绝
+            _rewrite_manifest(backup, bdir / "pixiv_backup_legacy.zip",
+                              {"created_at": "2026-01-01 00:00:00", "artworks": 3,
+                               "pages_done": 4, "authors": 1, "legacy_note": "旧版"})
+            item3 = next(x for x in client.get("/api/library/db-backups")
+                         .get_json()["items"] if x["name"] == "pixiv_backup_legacy.zip")
+            assert item3["valid"] is True and item3["manifest_matches"] is True, item3
+
+            # 损坏 ZIP / 缺清单 / SQLite 损坏: 恢复前拦下, 不改库
+            broken = bdir / "pixiv_backup_broken.zip"
+            broken.write_bytes(b"not a zip")
+            before_bytes = (tmp / "pixiv.db").read_bytes()
+            bad = client.post("/api/library/db-backup/compare",
+                              json={"name": broken.name}).get_json()
+            assert bad["status"] == "error" and bad["stage"] == "校验备份", bad
+            bad2 = client.post("/api/library/db-backup/restore",
+                               json={"name": broken.name, "confirm_accept_loss": True,
+                                     "preview_token": "x"}).get_json()
+            assert bad2["status"] == "error" and bad2["stage"] == "校验备份", bad2
+            with _zf.ZipFile(bdir / "pixiv_backup_nomanifest.zip", "w") as z:
+                z.writestr("pixiv.db", b"x")
+            with _zf.ZipFile(bdir / "pixiv_backup_badsqlite.zip", "w") as z:
+                z.writestr("pixiv.db", b"not sqlite")
+                z.writestr("backup_manifest.json", "{}")
+            for nm in ("pixiv_backup_nomanifest.zip", "pixiv_backup_badsqlite.zip"):
+                rr = client.post("/api/library/db-backup/restore",
+                                 json={"name": nm, "confirm_accept_loss": True,
+                                       "preview_token": "x"})
+                assert rr.status_code == 409 and rr.get_json()["stage"] == "校验备份", rr.data
+                assert rr.get_json()["snapshot"] is None, rr.get_json()
+            assert (tmp / "pixiv.db").read_bytes() == before_bytes, "损坏 ZIP 不得改库"
+
+            # 备份写入失败: 清理占位与半成品, 不留下可被列表识别的坏 zip
+            real_zf_cls = store.zipfile.ZipFile
+
+            class _BoomZip:
+                def __init__(self, *a, **kw):
+                    raise OSError("模拟备份写入失败")
+
+            fail_path = bdir / "pixiv_backup_failtest.zip"
+            store.zipfile.ZipFile = _BoomZip
+            try:
+                with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                    try:
+                        db.backup_to_zip(fail_path)
+                        assert False, "备份写入失败必须抛错"
+                    except OSError:
+                        pass
+            finally:
+                store.zipfile.ZipFile = real_zf_cls
+            assert not fail_path.exists(), "失败后要清掉占位文件"
+            assert not list(bdir.glob("pixiv_backup_failtest.zip*")), "失败后不能留半成品"
+            assert not list(bdir.glob(".tmp_backup_*")), "失败后不能留临时数据库"
+
+            # ④ 唯一备份: 同一秒连续创建路径不同, 各自保留对应时点且可恢复
+            fixed = orig_dt.datetime(2026, 11, 23, 12, 0, 0)
+
+            class _FrozenDateTime:
+                @staticmethod
+                def now(tz=None):
+                    return fixed
+
+            class _FrozenModule:
+                datetime = _FrozenDateTime
+                timezone = orig_dt.timezone
+
+            store.datetime = _FrozenModule
+            try:
+                with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                    p_a = db.backup_to_zip()
+                    db.change_work_status("960030", WSt.DONE, title="第二时点",
+                                          total_pages=0, author_id="1")
+                    p_b = db.backup_to_zip()
+                    info_a = db.inspect_backup_zip(p_a)
+                    info_b = db.inspect_backup_zip(p_b)
+            finally:
+                store.datetime = orig_dt
+            assert p_a != p_b and p_a.is_file() and p_b.is_file()
+            assert p_a.name == "pixiv_backup_2026-11-23_12-00-00.zip", p_a.name
+            assert p_b.name == "pixiv_backup_2026-11-23_12-00-00_2.zip", p_b.name
+            assert "960030" not in info_a["artworks"], "第一份保留创建时点数据"
+            assert "960030" in info_b["artworks"], "第二份保留创建时点数据"
+            for nm, expect in ((p_a.name, False), (p_b.name, True)):
+                cmp8 = client.post("/api/library/db-backup/compare",
+                                   json={"name": nm}).get_json()
+                assert cmp8["status"] == "ok", (nm, cmp8)
+                rr = client.post("/api/library/db-backup/restore",
+                                 json={"name": nm, "confirm_accept_loss": True,
+                                       "preview_token": cmp8["preview_token"]})
+                assert rr.status_code == 200, (nm, rr.data)
+                with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                    got = db.conn.execute(
+                        "SELECT 1 FROM artworks WHERE artwork_id='960030'").fetchone()
+                    assert bool(got) is expect, (nm, expect)
+
+            # 两条请求同一秒并发创建备份: 路径不同, 都是有效备份
+            fixed2 = orig_dt.datetime(2026, 11, 23, 13, 0, 0)
+
+            class _FrozenDateTime2:
+                @staticmethod
+                def now(tz=None):
+                    return fixed2
+
+            class _FrozenModule2:
+                datetime = _FrozenDateTime2
+                timezone = orig_dt.timezone
+
+            concurrent_bk = {}
+
+            def _mk_backup(idx):
+                try:
+                    with app.test_client() as c3:
+                        rr = c3.post("/api/library/backup")
+                    concurrent_bk[idx] = (rr.status_code, rr.get_json())
+                except Exception as e:      # noqa: BLE001
+                    concurrent_bk[idx] = ("EXC", f"{type(e).__name__}: {e}")
+
+            store.datetime = _FrozenModule2
+            try:
+                t1 = threading.Thread(target=_mk_backup, args=(1,), daemon=True)
+                t2 = threading.Thread(target=_mk_backup, args=(2,), daemon=True)
+                t1.start()
+                t2.start()
+                t1.join(30)
+                t2.join(30)
+            finally:
+                store.datetime = orig_dt
+            assert all(concurrent_bk.get(i, (None,))[0] == 200
+                       for i in (1, 2)), concurrent_bk
+            names = {concurrent_bk[i][1]["path"] for i in (1, 2)}
+            assert len(names) == 2, concurrent_bk
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                for path in names:
+                    assert Path(path).is_file()
+                    assert db.inspect_backup_zip(Path(path))["counts"]["artworks"] >= 1
+            assert all("pixiv_backup_2026-11-23_13-00-00" in Path(n).name
+                       for n in names), names
+
+            # ⑤ 恢复期间写入互斥: 快照与替换之间第二连接被推迟
+            cmp5 = client.post("/api/library/db-backup/compare",
+                               json={"name": backup_name}).get_json()
+            token4 = cmp5["preview_token"]
+            writer_state = {"attempt": threading.Event(), "done": threading.Event(),
+                            "blocked": None, "error": None}
+            hook_state = {"started": False}
+
+            def _writer_after_snapshot():
+                writer_state["attempt"].set()
+                try:
+                    with PixivDatabase(str(tmp / "pixiv.db")) as db2:
+                        db2.change_work_status("960005", WSt.DONE,
+                                               title="快照后写入",
+                                               total_pages=0, author_id="1")
+                except Exception as e:      # noqa: BLE001
+                    writer_state["error"] = f"{type(e).__name__}: {e}"
+                finally:
+                    writer_state["done"].set()
+
+            def _hook(stage, _db_obj):
+                if stage != "保存恢复前快照" or hook_state["started"]:
+                    return
+                hook_state["started"] = True
+                threading.Thread(target=_writer_after_snapshot, daemon=True).start()
+                writer_state["attempt"].wait(3)
+                time.sleep(0.5)
+                writer_state["blocked"] = not writer_state["done"].is_set()
+
+            store.RESTORE_STAGE_HOOK = _hook
+            try:
+                r = client.post("/api/library/db-backup/restore",
+                                json={"name": backup_name, "confirm_accept_loss": True,
+                                      "preview_token": token4})
+            finally:
+                store.RESTORE_STAGE_HOOK = orig_hook
+            assert r.status_code == 200 and r.get_json()["status"] == "ok", r.data
+            snap_write = r.get_json()["snapshot"]
+            assert writer_state["done"].wait(15), "恢复结束后被推迟的写入应能完成"
+            assert writer_state["error"] is None, writer_state["error"]
+            assert writer_state["blocked"] is True, \
+                "快照与替换之间第二连接不能提交写入"
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert db.conn.execute(
+                    "SELECT 1 FROM artworks WHERE artwork_id='960005'").fetchone(), \
+                    "互斥期间被推迟的写入, 恢复结束后必须能在当前库取回"
+                info_write = db.inspect_backup_zip(Path(db.backup_dir) / snap_write)
+                assert "960005" not in info_write["artworks"], \
+                    "恢复前快照记录的是写入之前的状态"
+
+            # 两条恢复同时启动: 一条成功, 另一条明确拒绝; 快照都可读
+            cmp6 = client.post("/api/library/db-backup/compare",
+                               json={"name": backup_name}).get_json()
+            token5 = cmp6["preview_token"]
+            first_entered = threading.Event()
+            release_first = threading.Event()
+            hook_calls = {"n": 0}
+
+            def _hook_concurrent(stage, _db_obj):
+                if stage != "保存恢复前快照":
+                    return
+                hook_calls["n"] += 1
+                if hook_calls["n"] == 1:
+                    first_entered.set()
+                    release_first.wait(10)
+
+            store.RESTORE_STAGE_HOOK = _hook_concurrent
+            results = {}
+
+            def _restore(idx):
+                try:
+                    with app.test_client() as c2:
+                        rr = c2.post("/api/library/db-backup/restore",
+                                     json={"name": backup_name,
+                                           "confirm_accept_loss": True,
+                                           "preview_token": token5})
+                    results[idx] = (rr.status_code, rr.get_json())
+                except Exception as e:      # noqa: BLE001
+                    results[idx] = ("EXC", f"{type(e).__name__}: {e}")
+
+            try:
+                rt1 = threading.Thread(target=_restore, args=(1,), daemon=True)
+                rt1.start()
+                assert first_entered.wait(10), "第一条恢复应进入保存快照阶段"
+                rt2 = threading.Thread(target=_restore, args=(2,), daemon=True)
+                rt2.start()
+                time.sleep(0.4)
+                release_first.set()
+                rt1.join(30)
+                rt2.join(30)
+            finally:
+                store.RESTORE_STAGE_HOOK = orig_hook
+            assert 1 in results and 2 in results, results
+            assert sorted([results[1][0], results[2][0]]) == [200, 409], results
+            failed = results[1][1] if results[1][0] == 409 else results[2][1]
+            assert failed["stage"] in ("确认已失效", "等待图库写入结束"), failed
+            snaps = [v[1].get("snapshot") for v in results.values() if v[0] == 200]
+            assert snaps and all(Path(bdir, s).is_file() for s in snaps), results
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert db.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+            # 恢复后迁移失败: 自动回滚, 原库可读且快照保留
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                db.change_work_status("960006", WSt.DONE, title="迁移前",
+                                      total_pages=0, author_id="1")
+            cmp7 = client.post("/api/library/db-backup/compare",
+                               json={"name": backup_name}).get_json()
+            token6 = cmp7["preview_token"]
+            migration_state = {"armed": False, "raised": False}
+
+            class _BoomOnce:
+                def __init__(self, _path):
+                    pass
+
+                def ensure_migrations_applied(self, conn=None):
+                    # 构造/重连阶段正常; 只让恢复取得独占锁后的那次迁移失败
+                    if migration_state["armed"] and not migration_state["raised"]:
+                        migration_state["raised"] = True
+                        raise RuntimeError("模拟迁移中断")
+                    return []
+
+            def _arm_migration_boom(stage, _db_obj):
+                if stage == "保存恢复前快照":
+                    migration_state["armed"] = True
+
+            orig_mm = store.MigrationManager
+            store.MigrationManager = _BoomOnce
+            store.RESTORE_STAGE_HOOK = _arm_migration_boom
+            try:
+                r = client.post("/api/library/db-backup/restore",
+                                json={"name": backup_name,
+                                      "confirm_accept_loss": True,
+                                      "preview_token": token6})
+            finally:
+                store.MigrationManager = orig_mm
+                store.RESTORE_STAGE_HOOK = orig_hook
+            assert r.status_code == 409, r.data
+            err = r.get_json()
+            assert err["stage"] == "重新连接并迁移" and err["snapshot"], err
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert db.conn.execute(
+                    "SELECT 1 FROM artworks WHERE artwork_id='960006'").fetchone(), \
+                    "迁移失败后必须自动回滚到恢复前状态"
+                assert db.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                rollback_snap = Path(db.backup_dir) / err["snapshot"]
+                assert rollback_snap.is_file()
+                info_rb = db.inspect_backup_zip(rollback_snap)
+                assert "960006" in info_rb["artworks"], "回滚快照要保留迁移前的库"
+
+            # ⑥ 原图旧版本: 同格式切换/切回
+            items = client.get("/api/library/backups").get_json()["items"]
+            legacy = next(x for x in items
+                          if x["orig_rel"] == "作者甲_1/960010_p0.png"
+                          and x["kind"] == "legacy")
+            assert legacy["rel"].endswith(".bak"), legacy
+            r = client.post("/api/library/backup/restore",
+                            json={"rel": legacy["rel"]})
+            assert r.status_code == 200 and r.get_json()["status"] == "ok", r.data
+            ver_rel = r.get_json()["snapshot"]
+            assert ver_rel and ".bak-" in ver_rel, r.data
+            orig = img / "作者甲_1" / "960010_p0.png"
+            assert orig.read_bytes() == b"OLD-10", "应切到所选旧版本"
+            assert (img / "作者甲_1" / "960010_p0.png.bak").is_file(), \
+                "所选旧版本本身要保留"
+            assert (img / ver_rel).read_bytes() == b"CURRENT-10", "当前版本要先存好"
+            items = client.get("/api/library/backups").get_json()["items"]
+            assert any(x["rel"] == ver_rel and x["kind"] == "version" for x in items), items
+            r = client.post("/api/library/backup/restore", json={"rel": ver_rel})
+            assert r.status_code == 200 and r.get_json()["status"] == "ok", r.data
+            assert orig.read_bytes() == b"CURRENT-10", "应能切回当前版"
+
+            # 切换写失败: 当前图字节不变, 已建快照在旧版本区可找
+            bak_path = img / "作者甲_1" / "960010_p0.png.bak"
+            real_copy2 = ws.shutil.copy2
+            version_before = len([x for x in client.get("/api/library/backups")
+                                  .get_json()["items"] if x["kind"] == "version"
+                                  and x["orig_rel"] == "作者甲_1/960010_p0.png"])
+
+            def _copy2_fail_restore(src, dst, *a, **kw):
+                # 临时目录可能带 8.3 短名, 路径对象直接比较会不相等; 按文件名识别所选旧版本
+                if Path(src).name == bak_path.name:
+                    raise OSError("模拟旧版本写入失败")
+                return real_copy2(src, dst, *a, **kw)
+
+            ws.shutil.copy2 = _copy2_fail_restore
+            try:
+                r = client.post("/api/library/backup/restore",
+                                json={"rel": legacy["rel"]})
+            finally:
+                ws.shutil.copy2 = real_copy2
+            assert r.status_code == 500, r.data
+            body = r.get_json()
+            assert body["stage"] == "切换所选旧版本" and body["snapshot"], body
+            assert orig.read_bytes() == b"CURRENT-10", "切换写失败时当前图字节不能变"
+            snap_path = img / body["snapshot"]
+            assert snap_path.is_file() and snap_path.read_bytes() == b"CURRENT-10"
+            items = client.get("/api/library/backups").get_json()["items"]
+            assert len([x for x in items if x["kind"] == "version"
+                        and x["orig_rel"] == "作者甲_1/960010_p0.png"]) == version_before + 1
+
+            # 跨格式: 明确拒绝, 不生成同页普通文件, 磁盘与登记原样
+            r = client.post("/api/library/backup/restore",
+                            json={"rel": "作者甲_1/960020_p0.jpg.bak"})
+            assert r.status_code == 409 and r.get_json()["stage"] == "核对登记", r.data
+            assert not (img / "作者甲_1" / "960020_p0.jpg").exists(), \
+                "跨格式不能生成同页 JPG"
+            assert (img / "作者甲_1" / "960020_p0.png").read_bytes() == b"CURRENT-20"
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                row = db.conn.execute(
+                    "SELECT local_path FROM pages WHERE artwork_id='960020' "
+                    "AND page_num=0").fetchone()
+                assert row and row[0] == "作者甲_1/960020_p0.png", row
+
+            # 无唯一登记 / 文件名认不出作品页号: 同样拒绝, 不生成普通文件
+            r = client.post("/api/library/backup/restore",
+                            json={"rel": "作者甲_1/960099_p0.png.bak"})
+            assert r.status_code == 409 and r.get_json()["stage"] == "核对登记", r.data
+            assert not (img / "作者甲_1" / "960099_p0.png").exists()
+            r = client.post("/api/library/backup/restore",
+                            json={"rel": "作者甲_1/乱七八糟.png.bak"})
+            assert r.status_code == 409 and r.get_json()["stage"] == "核对登记", r.data
+
+            # ⑦ 恢复只使用已校验的私有暂存内容
+            backup.write_bytes(backup_bytes)
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                db.change_work_status("960099", WSt.DONE, title="备份B作品",
+                                      total_pages=0, author_id="1")
+                zip_b = db.backup_to_zip(tmp / "backup_b.zip")
+            b_bytes = zip_b.read_bytes()
+
+            # 确认前替换同名 ZIP → 旧确认失效, 当前库不动
+            cmp_a = client.post("/api/library/db-backup/compare",
+                                json={"name": backup_name}).get_json()
+            token_a = cmp_a["preview_token"]
+            backup.write_bytes(b_bytes)
+            r = client.post("/api/library/db-backup/restore",
+                            json={"name": backup_name, "confirm_accept_loss": True,
+                                  "preview_token": token_a})
+            assert r.status_code == 409 and r.get_json()["stage"] == "确认已失效", r.data
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert db.conn.execute(
+                    "SELECT 1 FROM artworks WHERE artwork_id='960099'").fetchone(), \
+                    "确认失效时当前库不能被 B 内容替换"
+            backup.write_bytes(backup_bytes)
+
+            # 恢复中替换 ZIP → 已完成校验的 A 仍正常落地, 响应与库一致
+            cmp_a2 = client.post("/api/library/db-backup/compare",
+                                 json={"name": backup_name}).get_json()
+            token_a2 = cmp_a2["preview_token"]
+            swap_state = {"n": 0}
+
+            def _swap_zip_hook(stage, _db_obj):
+                if stage != "保存恢复前快照" or swap_state["n"]:
+                    return
+                swap_state["n"] += 1
+                tmp_b = bdir / ".swap_b.zip"
+                tmp_b.write_bytes(b_bytes)
+                os.replace(tmp_b, backup)
+
+            store.RESTORE_STAGE_HOOK = _swap_zip_hook
+            try:
+                r = client.post("/api/library/db-backup/restore",
+                                json={"name": backup_name,
+                                      "confirm_accept_loss": True,
+                                      "preview_token": token_a2})
+            finally:
+                store.RESTORE_STAGE_HOOK = orig_hook
+                backup.write_bytes(backup_bytes)
+            assert r.status_code == 200 and r.get_json()["status"] == "ok", r.data
+            swapped_body = r.get_json()
+            assert swapped_body["counts"]["artworks"] == 3, swapped_body
+            assert "960099" in swapped_body["diff"]["current_only_artworks"], swapped_body
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert not db.conn.execute(
+                    "SELECT 1 FROM artworks WHERE artwork_id='960099'").fetchone(), \
+                    "恢复落地必须是已验证的 A, 不能变成 B"
+                assert db.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+            # 恢复中删除 ZIP → 同样完整恢复已验证的 A
+            cmp_a3 = client.post("/api/library/db-backup/compare",
+                                 json={"name": backup_name}).get_json()
+            token_a3 = cmp_a3["preview_token"]
+            del_state = {"n": 0}
+
+            def _delete_zip_hook(stage, _db_obj):
+                if stage != "保存恢复前快照" or del_state["n"]:
+                    return
+                del_state["n"] += 1
+                backup.unlink(missing_ok=True)
+
+            store.RESTORE_STAGE_HOOK = _delete_zip_hook
+            try:
+                r = client.post("/api/library/db-backup/restore",
+                                json={"name": backup_name,
+                                      "preview_token": token_a3})
+            finally:
+                store.RESTORE_STAGE_HOOK = orig_hook
+                backup.write_bytes(backup_bytes)
+            assert r.status_code == 200 and r.get_json()["status"] == "ok", r.data
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert not db.conn.execute(
+                    "SELECT 1 FROM artworks WHERE artwork_id='960099'").fetchone()
+                assert db.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            assert not list(bdir.glob(".restore_*")), "恢复临时目录必须清理"
+            assert not list(bdir.glob(".preview_*")), "预览临时目录必须清理"
+
+            # ⑧ 独立 SQLite 连接: 写入被推迟或明确拒绝, 已提交数据可回退
+            backup.write_bytes(backup_bytes)
+            cmp_ext = client.post("/api/library/db-backup/compare",
+                                  json={"name": backup_name}).get_json()
+            token_ext = cmp_ext["preview_token"]
+            ext_state = {"reject_error": None, "blocked": None, "proc": None,
+                         "early": None}
+            ext_script = tmp / "external_writer.py"
+            ext_script.write_text(
+                "import sqlite3, sys\n"
+                "con = sqlite3.connect(sys.argv[1], timeout=10.0)\n"
+                "try:\n"
+                "    con.execute(\"UPDATE artworks SET title='External process' \"\n"
+                "                \"WHERE artwork_id='960001'\")\n"
+                "    con.commit()\n"
+                "    print('ok')\n"
+                "finally:\n"
+                "    con.close()\n",
+                encoding="utf-8")
+
+            def _external_write_hook(stage, _db_obj):
+                if stage != "保存恢复前快照":
+                    return
+                con = _sqlite3.connect(str(tmp / "pixiv.db"), timeout=0.05)
+                try:
+                    try:
+                        con.execute("UPDATE artworks SET title='External reject' "
+                                    "WHERE artwork_id='960001'")
+                        con.commit()
+                        ext_state["reject_error"] = "unexpected-success"
+                    except _sqlite3.OperationalError as e:
+                        ext_state["reject_error"] = str(e)
+                finally:
+                    con.close()
+                proc = _subprocess.Popen(
+                    [sys.executable, str(ext_script), str(tmp / "pixiv.db")],
+                    stdout=_subprocess.PIPE, stderr=_subprocess.PIPE, text=True)
+                ext_state["proc"] = proc
+                time.sleep(0.8)
+                if proc.poll() is not None:
+                    out, err = proc.communicate()
+                    ext_state["early"] = (proc.returncode, out, err)
+                ext_state["blocked"] = proc.poll() is None
+
+            store.RESTORE_STAGE_HOOK = _external_write_hook
+            try:
+                r = client.post("/api/library/db-backup/restore",
+                                json={"name": backup_name,
+                                      "confirm_accept_loss": True,
+                                      "preview_token": token_ext})
+            finally:
+                store.RESTORE_STAGE_HOOK = orig_hook
+            assert r.status_code == 200 and r.get_json()["status"] == "ok", r.data
+            snap_ext = r.get_json()["snapshot"]
+            proc = ext_state["proc"]
+            assert proc is not None
+            out, err = proc.communicate(timeout=20)
+            assert proc.returncode == 0, (proc.returncode, out, err)
+            assert "ok" in (out or ""), (out, err)
+            assert ext_state["blocked"] is True, \
+                f"独立进程写入不能穿过独占窗口: {ext_state['early']}"
+            assert ext_state["reject_error"] and \
+                "lock" in ext_state["reject_error"].lower(), ext_state["reject_error"]
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                title = db.conn.execute(
+                    "SELECT title FROM artworks WHERE artwork_id='960001'").fetchone()[0]
+                assert title == "External process", \
+                    "恢复结束后被推迟的独立进程提交必须落在恢复后库中"
+                assert db.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            # 恢复前快照保留的是外部写入之前的状态
+            with tempfile.TemporaryDirectory(prefix="t178snap_") as tdx:
+                with _zf.ZipFile(Path(bdir, snap_ext)) as zf:
+                    zf.extract("pixiv.db", tdx)
+                scon = _sqlite3.connect(str(Path(tdx) / "pixiv.db"))
+                try:
+                    stitle = scon.execute(
+                        "SELECT title FROM artworks WHERE artwork_id='960001'"
+                    ).fetchone()[0]
+                finally:
+                    scon.close()
+            assert stitle == "作品960001", stitle
+        finally:
+            store.RESTORE_STAGE_HOOK = orig_hook
+            store.datetime = orig_dt
+            upaths.user_data, upaths.data_root = orig_ud, orig_dr
+
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for token in ("💾 备份与恢复", "原图旧版本", "compareDbBackup", "restoreDbBackup",
+                  "saveAsDbBackup", "恢复前快照", "fmtBakVersion", "切换前版本",
+                  "preview_token", "确认已失效", "重新对比预览",
+                  "will_overwrite_current", "pages_changed", "manifest_matches",
+                  "it.counts"):
+        assert token in js, f"缺少第 6 项前端接线 {token}"
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    for token in ("inspect_backup_zip", "BackupRestoreError", "db-backup/compare",
+                  "db-backup/restore", "db-backup/save-as", "preview_token",
+                  "preview_backup", "manifest_matches"):
+        assert token in srv, f"缺少第 6 项服务端接线 {token}"
+    store_src = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
+    for token in ("def inspect_backup_zip", "class BackupRestoreError",
+                  "_unique_backup_path", "自动回滚", "validate_backup_manifest",
+                  "_DB_RW_LOCK", "downgrade_write_to_read", "RESTORE_STAGE_HOOK",
+                  "_BACKUP_CREATE_LOCK"):
+        assert token in store_src, f"缺少第 6 项存储层接线 {token}"
 
 
 def main() -> int:

@@ -21,9 +21,11 @@ import json
 import os
 import queue
 import re
+import shutil
 import sqlite3
 import threading
 import time
+import zipfile
 from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request
@@ -68,7 +70,7 @@ from core.wallpaper_index import (
     upsert_wall_file as _wall_upsert_file,
 )
 from db.store import PixivDatabase, WSt, PSt, pixiv_natural_key, parse_foreign_account, \
-    folder_author_name_usable, ReconcileReport
+    folder_author_name_usable, ReconcileReport, BackupRestoreError
 from utils import paths
 from utils import proc
 from utils import audit_log
@@ -5949,10 +5951,29 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         '<text x="240" y="320" font-family="sans-serif" font-size="34"'
         ' fill="#d9a441" text-anchor="middle">安全模式已打码</text></svg>')
 
+    _BAK_SUFFIX_RE = re.compile(r"\.bak(?:-(\d{8}-\d{6}(?:-\d+)?))?$", re.I)
+
+    def _parse_bak_rel(rel: str) -> "tuple[str | None, str]":
+        """解析旧版本文件名: `x.jpg.bak` 或 `x.jpg.bak-20261123-141500`。
+
+        返回 (原文件相对路径, 版本标记); 不是备份文件返回 (None, "")。"""
+        rel_norm = str(rel or "").replace("\\", "/").strip("/")
+        m = _BAK_SUFFIX_RE.search(rel_norm)
+        if not m:
+            return None, ""
+        orig = rel_norm[:m.start()]
+        if not orig:
+            return None, ""
+        return orig, (m.group(1) or "")
+
     def _local_bak_rel(rel: str) -> "Path | None":
-        """把前端传的 .bak 相对路径解析成 img_root 内绝对路径; 跨出根目录返回 None。"""
+        """把前端传的旧版本相对路径解析成 img_root 内绝对路径; 跨出根目录返回 None。"""
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
-        p = (img_root / rel.replace("\\", "/")).resolve()
+        rel_norm = str(rel or "").replace("\\", "/").strip("/")
+        orig, _ver = _parse_bak_rel(rel_norm)
+        if not orig:
+            return None
+        p = (img_root / rel_norm).resolve()
         if p != img_root and img_root not in p.parents:
             return None
         return p
@@ -5993,10 +6014,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         items = []
         if img_root.is_dir():
             for p in img_root.rglob("*"):
-                if not p.is_file() or p.suffix.lower() != ".bak":
+                if not p.is_file():
                     continue
                 rel = str(p.relative_to(img_root)).replace("\\", "/")
-                orig_name = p.name[:-4]
+                orig_rel, ver = _parse_bak_rel(rel)
+                if not orig_rel:
+                    continue
+                orig_name = Path(orig_rel).name
                 nat = pixiv_natural_key(orig_name)
                 try:
                     sz = p.stat().st_size
@@ -6007,8 +6031,10 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     "artwork_id": nat[0] if nat else None,
                     "page_num": nat[1] if nat else None,
                     "rel": rel,
-                    "orig_rel": rel[:-4],          # 去掉 .bak 后的原文件相对路径
+                    "orig_rel": orig_rel,          # 去掉 .bak[-版本] 后的原文件相对路径
                     "orig_name": orig_name,
+                    "version": ver or None,        # 空 = 旧 .bak; 非空 = 切换前留下的版本
+                    "kind": "version" if ver else "legacy",
                     "backup_exists": p.exists(),
                     "size": sz,
                     "mtime": mt,
@@ -6047,16 +6073,16 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         if not rel:
             return jsonify({"error": "missing rel"}), 400
         p = _local_bak_rel(rel)
-        if p is None or not p.is_file() or p.suffix.lower() != ".bak":
+        orig_rel, _ver = _parse_bak_rel(rel)
+        if p is None or not orig_rel or not p.is_file():
             return jsonify({"error": "not found"}), 404
         # 安全模式兜底: 前端已按分级决定是否发请求, 这里再校验一次 ——
         # 只有「可靠归属 + 明确全年龄」才返回真实字节; R18 / 分级未知 / 归属不明 → 占位。
         if _safemode_on():
-            _known, _rating = _backup_rating(rel[:-4])
+            _known, _rating = _backup_rating(orig_rel)
             if not (_known and _rating == 0):
                 return Response(_SAFE_MASK_SVG, mimetype="image/svg+xml")
-        stem = p.name[:-4]
-        ext = Path(stem).suffix.lower()
+        ext = Path(orig_rel).suffix.lower()
         mime = _BACKUP_MIME.get(ext, "application/octet-stream")
         try:
             return send_file(str(p), mimetype=mime,
@@ -6066,20 +6092,82 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
     @app.route("/api/library/backup/restore", methods=["POST"])
     def api_library_backup_restore():
-        """恢复备份: 把 .bak 复制回原名覆盖当前文件, 然后删除 .bak。"""
+        """切换原图旧版本: 先把当前文件保存为唯一版本, 再把所选旧版本换上去。
+
+        旧 `.bak` / 切换前留下的 `.bak-<时间>` 都留在列表里, 因此可以再切回当前版。
+        """
         data = request.get_json(silent=True) or {}
         rel = data.get("rel") or ""
         p = _local_bak_rel(rel)
-        if p is None or not p.is_file() or p.suffix.lower() != ".bak":
+        orig_rel, _ver = _parse_bak_rel(rel)
+        if p is None or not orig_rel or not p.is_file():
             return jsonify({"status": "error", "error": "备份不存在"}), 404
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
+        # 第 6 项返修 ④: 以图库登记的作品/页号找当前文件, 而不是只看文件名。
+        nat = pixiv_natural_key(Path(orig_rel).name)
+        if not nat:
+            return jsonify({"status": "error", "stage": "核对登记",
+                            "error": "旧版本文件名无法识别作品/页号，不能切换"}), 409
+        with _db() as db:
+            rows = db.conn.execute(
+                "SELECT local_path FROM pages WHERE artwork_id=? AND page_num=? "
+                "AND trashed_at IS NULL",
+                (nat[0], nat[1])).fetchall()
+        registered = [str(r["local_path"] or "").replace("\\", "/")
+                      for r in rows if str(r["local_path"] or "").strip()]
+        if len(registered) != 1:
+            return jsonify({"status": "error", "stage": "核对登记",
+                            "error": f"作品 {nat[0]} 第 {nat[1]} 页没有唯一登记文件，"
+                                     f"不能切换旧版本"}), 409
+        registered_rel = registered[0]
+        cur_fmt = Path(registered_rel).suffix.lower()
+        old_fmt = Path(orig_rel).suffix.lower()
+        if cur_fmt != old_fmt:
+            return jsonify({"status": "error", "stage": "核对登记",
+                            "error": f"旧版本格式 {old_fmt or '未知'} 与当前登记 "
+                                     f"{cur_fmt or '未知'} 不一致；请用页级格式转换处理，"
+                                     f"不在这里生成同页普通文件"}), 409
+        target = (img_root / registered_rel).resolve()
+        if target != img_root and img_root not in target.parents:
+            return jsonify({"status": "error", "error": "目标路径越界"}), 400
+        snapshot_rel = None
+        stage = "检查当前版本"
+        tmp_snap = tmp_restore = None
         try:
-            import shutil as _sh
-            _sh.copy2(str(p), str(p)[:-4])          # .bak → 原名 (覆盖当前新版)
-            p.unlink()                               # 恢复后清理备份, 避免空间堆积
-            return jsonify({"status": "ok"})
+            if target.is_file():
+                stage = "保存当前版本"
+                ts = time.strftime("%Y%m%d-%H%M%S")
+                snap = target.with_name(target.name + f".bak-{ts}")
+                n = 2
+                while snap.exists():
+                    snap = target.with_name(target.name + f".bak-{ts}-{n}")
+                    n += 1
+                tmp_snap = snap.with_name(snap.name + f".tmp-{os.getpid()}")
+                shutil.copy2(target, tmp_snap)
+                if tmp_snap.stat().st_size != target.stat().st_size:
+                    raise RuntimeError("当前版本快照大小校验失败")
+                os.replace(tmp_snap, snap)
+                snapshot_rel = str(snap.relative_to(img_root)).replace("\\", "/")
+            stage = "切换所选旧版本"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp_restore = target.with_name(target.name + f".restore-{os.getpid()}.tmp")
+            shutil.copy2(p, tmp_restore)
+            if tmp_restore.stat().st_size != p.stat().st_size:
+                raise RuntimeError("旧版本复制大小校验失败")
+            os.replace(tmp_restore, target)
         except Exception as e:
-            return jsonify({"status": "error",
-                            "error": f"恢复失败: {str(e).splitlines()[0]}"}), 500
+            for tmp in (tmp_snap, tmp_restore):
+                if tmp is not None:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            return jsonify({"status": "error", "stage": stage,
+                            "error": f"{stage}失败: {str(e).splitlines()[0]}",
+                            "snapshot": snapshot_rel}), 500
+        audit_log.record("update", "切换原图旧版本", registered_rel, 1)
+        return jsonify({"status": "ok", "restored": registered_rel,
+                        "snapshot": snapshot_rel})
 
     @app.route("/api/library/backup/delete", methods=["POST"])
     def api_library_backup_delete():
@@ -6087,7 +6175,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         data = request.get_json(silent=True) or {}
         rel = data.get("rel") or ""
         p = _local_bak_rel(rel)
-        if p is None or not p.is_file() or p.suffix.lower() != ".bak":
+        orig_rel, _ver = _parse_bak_rel(rel)
+        if p is None or not orig_rel or not p.is_file():
             return jsonify({"status": "error", "error": "备份不存在"}), 404
         try:
             p.unlink()
@@ -6096,38 +6185,189 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error",
                             "error": f"删除失败: {str(e).splitlines()[0]}"}), 500
 
+    def _db_backup_path(name: str) -> "Path | None":
+        """把备份文件名解析成 backup 目录内的 zip; 拒绝子目录/路径穿越/其他文件。"""
+        raw = str(name or "").strip()
+        if not raw or "/" in raw or "\\" in raw:
+            return None
+        with _db() as db:
+            bdir = Path(db.backup_dir).resolve()
+        p = (bdir / raw).resolve()
+        if p.parent != bdir or not p.is_file() or p.suffix.lower() != ".zip":
+            return None
+        if not (p.name.startswith("pixiv_backup_") or p.name.startswith("pre_restore_")):
+            return None
+        return p
+
     @app.route("/api/library/db-backups")
     def api_library_db_backups():
-        """数据库备份清单 (data/backup/pixiv_backup_*.zip): 供「💾 备份」中心展示/清理。
-
-        以前「一键备份」只生成 zip 却不显示任何列表, 用户只能自己去文件夹里翻。"""
+        """数据库备份清单: 时间/大小/保存位置/覆盖范围, 预检 zip/清单/SQLite。"""
         with _db() as db:
             bdir = Path(db.backup_dir)
         items = []
         try:
-            for p in sorted(bdir.glob("pixiv_backup_*.zip"),
-                            key=lambda x: x.stat().st_mtime, reverse=True):
+            files = list(bdir.glob("pixiv_backup_*.zip")) + list(bdir.glob("pre_restore_*.zip"))
+            seen = set()
+            for p in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
+                if p.name in seen:
+                    continue
+                seen.add(p.name)
                 st = p.stat()
-                items.append({"name": p.name, "size": st.st_size,
-                              "mtime": int(st.st_mtime)})
+                valid = True
+                error = ""
+                info = None
+                try:
+                    with _db() as db:
+                        info = db.inspect_backup_zip(p)
+                except Exception as e:
+                    valid = False
+                    error = str(e).splitlines()[0]
+                kind = "pre_restore" if ("pre-restore" in p.name
+                                        or p.name.startswith("pre_restore")) else "manual"
+                items.append({
+                    "name": p.name, "size": st.st_size,
+                    "mtime": int(st.st_mtime), "kind": kind,
+                    "valid": valid, "error": error,
+                    "manifest": (info or {}).get("manifest"),
+                    "counts": (info or {}).get("counts"),
+                    "manifest_matches": (info or {}).get("manifest_matches"),
+                    "dir": str(bdir),
+                })
         except Exception:
             pass
         return jsonify({"status": "ok", "dir": str(bdir), "items": items})
+
+    @app.route("/api/library/db-backup/compare", methods=["POST"])
+    def api_library_db_backup_compare():
+        """恢复前预检: 验证 zip/清单/SQLite, 展示当前库与备份的**同 ID**差异,
+        并返回绑定当前库状态与备份文件的预览令牌。"""
+        data = request.get_json(silent=True) or {}
+        p = _db_backup_path(data.get("name"))
+        if p is None:
+            return jsonify({"status": "error", "stage": "校验备份",
+                            "error": "备份不存在"}), 404
+        try:
+            with _db() as db:
+                preview = db.preview_backup(p)
+                info, diff = preview["info"], preview["diff"]
+                current = {
+                    "artworks": db.conn.execute(
+                        "SELECT COUNT(*) FROM artworks").fetchone()[0],
+                    "pages_done": db.conn.execute(
+                        "SELECT COUNT(*) FROM pages WHERE status=?",
+                        (PSt.DONE,)).fetchone()[0],
+                    "authors": db.conn.execute(
+                        "SELECT COUNT(*) FROM authors").fetchone()[0],
+                }
+        except Exception as e:
+            return jsonify({"status": "error", "stage": "校验备份",
+                            "error": str(e).splitlines()[0]}), 400
+        return jsonify({
+            "status": "ok", "name": p.name,
+            "manifest": info["manifest"], "counts": info["counts"],
+            "manifest_matches": info.get("manifest_matches"),
+            "current_counts": current,
+            "diff": {
+                "backup_only_authors": diff.backup_only_authors,
+                "backup_only_artworks": diff.backup_only_artworks,
+                "current_only_authors": diff.current_only_authors,
+                "current_only_artworks": diff.current_only_artworks,
+                "pages_added_in_backup": diff.pages_added_in_backup,
+                "pages_removed_by_restore": diff.pages_removed_by_restore,
+                "pages_changed": diff.pages_changed,
+                "artworks_changed": diff.artworks_changed,
+                "authors_changed": diff.authors_changed,
+                "tags_added_in_backup": diff.tags_added_in_backup,
+                "tags_removed_by_restore": diff.tags_removed_by_restore,
+                "other_tables": diff.other_tables,
+            },
+            "will_overwrite_current": diff.will_overwrite_current(),
+            "will_lose_current": diff.will_lose_current(),
+            "preview_token": preview["token"],
+        })
+
+    @app.route("/api/library/db-backup/restore", methods=["POST"])
+    def api_library_db_backup_restore():
+        """确认后恢复数据库: 预览令牌必须仍然有效, 先存唯一快照, 再互斥恢复。"""
+        data = request.get_json(silent=True) or {}
+        p = _db_backup_path(data.get("name"))
+        if p is None:
+            return jsonify({"status": "error", "stage": "校验备份",
+                            "error": "备份不存在"}), 404
+        token = str(data.get("preview_token") or "")
+        if not token:
+            return jsonify({"status": "error", "stage": "确认预览",
+                            "error": "请先对比预览，确认后再恢复"}), 400
+        try:
+            with _db() as db:
+                res = db.restore_from_zip(
+                    p, confirm_accept_loss=bool(data.get("confirm_accept_loss")),
+                    preview_token=token)
+        except BackupRestoreError as e:
+            return jsonify({"status": "error", "stage": e.stage,
+                            "error": str(e), "snapshot": e.snapshot}), 409
+        except Exception as e:
+            return jsonify({"status": "error", "stage": "恢复",
+                            "error": str(e).splitlines()[0]}), 500
+        diff = res["diff"]
+        audit_log.record("update", "从数据库备份恢复", p.name, 1)
+        return jsonify({
+            "status": "ok", "snapshot": res["snapshot"],
+            "counts": res["counts"], "manifest": res["manifest"],
+            "diff": {
+                "backup_only_authors": diff.backup_only_authors,
+                "backup_only_artworks": diff.backup_only_artworks,
+                "current_only_authors": diff.current_only_authors,
+                "current_only_artworks": diff.current_only_artworks,
+                "pages_added_in_backup": diff.pages_added_in_backup,
+                "pages_removed_by_restore": diff.pages_removed_by_restore,
+                "pages_changed": diff.pages_changed,
+                "artworks_changed": diff.artworks_changed,
+                "authors_changed": diff.authors_changed,
+                "tags_added_in_backup": diff.tags_added_in_backup,
+                "tags_removed_by_restore": diff.tags_removed_by_restore,
+                "other_tables": diff.other_tables,
+            },
+        })
+
+    @app.route("/api/library/db-backup/save-as", methods=["POST"])
+    def api_library_db_backup_save_as():
+        """把备份另存到用户指定文件夹 (支持其他磁盘); 不覆盖同名文件。"""
+        data = request.get_json(silent=True) or {}
+        p = _db_backup_path(data.get("name"))
+        if p is None:
+            return jsonify({"status": "error", "error": "备份不存在"}), 404
+        raw = str(data.get("dest_dir") or "").strip()
+        if not raw:
+            return jsonify({"status": "error", "error": "目标文件夹不能为空"}), 400
+        dest = Path(raw).expanduser()
+        if not dest.is_absolute():
+            return jsonify({"status": "error", "error": "请填绝对路径"}), 400
+        if not dest.is_dir():
+            return jsonify({"status": "error", "error": "目标文件夹不存在"}), 400
+        target = dest / p.name
+        n = 2
+        while target.exists():
+            target = dest / f"{p.stem} ({n}){p.suffix}"
+            n += 1
+        try:
+            shutil.copy2(p, target)
+            if target.stat().st_size != p.stat().st_size:
+                target.unlink(missing_ok=True)
+                raise RuntimeError("复制后大小校验失败")
+        except Exception as e:
+            return jsonify({"status": "error",
+                            "error": f"另存失败: {str(e).splitlines()[0]}"}), 500
+        audit_log.record("create", "数据库备份另存", str(target), 1)
+        return jsonify({"status": "ok", "path": str(target), "name": target.name})
 
     @app.route("/api/library/db-backup/delete", methods=["POST"])
     def api_library_db_backup_delete():
         """删除一个数据库备份 zip (只删 backup 目录下的 pixiv_backup_*.zip, 防路径穿越)。"""
         data = request.get_json(silent=True) or {}
         name = str(data.get("name") or "").strip()
-        with _db() as db:
-            bdir = Path(db.backup_dir).resolve()
-        p = (bdir / name)
-        try:
-            ok = (p.is_file() and p.parent.resolve() == bdir
-                  and p.name.startswith("pixiv_backup_") and p.suffix.lower() == ".zip")
-        except OSError:
-            ok = False
-        if not ok:
+        p = _db_backup_path(name)
+        if p is None:
             return jsonify({"status": "error", "error": "备份不存在"}), 404
         try:
             p.unlink()

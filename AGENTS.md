@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-23（当前前端版本 `20261123d`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-23（当前前端版本 `20261123e`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 165 用例，必须全过，2026-11-23 已 165/165 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 169 用例，必须全过，2026-11-23 已 169/169 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，165 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，169 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 165 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 169 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261123d`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261123e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,61 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.45 第 6 节 备份与恢复（2026-11-23，前端 `20261123e`，已发布到安装版）
+
+- **一个入口**：`💾 备份与恢复`，上半「图库数据库备份」、下半「原图旧版本」。
+- **数据库备份**：列表显示时间/大小/保存位置/覆盖范围；覆盖范围一律用备份库内**实际计数**，
+  清单 `backup_manifest.json` 只作历史记录（`manifest_matches=false` 时提示以库内实数为准）；
+  `/api/library/db-backup/save-as` 可另存到任意绝对路径文件夹（不覆盖同名文件）。
+- **清单结构校验**：`validate_backup_manifest` 要求对象、`created_at` 非空字符串、
+  `artworks/pages_done/authors` 为非负整数；数组、缺字段、字符串/布尔计数一律拒绝，
+  合法历史清单（多字段、缺 `db_path`）继续兼容。
+- **唯一备份**：`backup_to_zip` 用 `_BACKUP_CREATE_LOCK` + `touch(exist_ok=False)` 先占唯一
+  文件名（同秒追加 `_2/_3`），写同目录独立临时 zip，完整校验后 `os.replace` 发布；
+  失败清理占位与半成品。恢复前快照同样走这条路径。
+- **差异预览与确认令牌**：`compare_backup` 除作者/作品增减外，还返回
+  `pages_added_in_backup / pages_removed_by_restore / pages_changed / artworks_changed /
+  authors_changed / tags_*` 与 `other_tables`；`will_overwrite_current()` 覆盖同 ID 变更。
+  `preview_backup` 签发 `preview_token = sha256(备份文件SHA256 + 当前库逐表指纹)`；
+  `/restore` 必须带令牌，恢复前重新计算，预览后新增作品、改记录、替换同名 ZIP 都会
+  `409 确认已失效`，原库与备份不动。
+- **私有暂存与确认绑定**：`preview_backup`/`restore_from_zip` 都先把所选 ZIP 复制到
+  `data/backup/.preview_*` / `.restore_*` 私有临时目录，`_inspect_backup_file` 在解出的
+  `pixiv.db` 上做清单/完整性检查；令牌、差异计算与最终切换全部使用这份副本，
+  **不再按原路径重开 ZIP**。确认前替换同名 ZIP → `409 确认已失效`；恢复进行中替换或删除
+  ZIP 不影响已校验内容，最终库/响应/审计都是同一份备份；临时目录成功失败均清理。
+- **恢复互斥（应用内 + 外部 SQLite）**：`PixivDatabase` 连接生命周期读写锁 `_DB_RW_LOCK`
+  阻拦本进程其他实例；恢复还会关闭自身连接，用 `_open_exclusive_guard()`
+  （`PRAGMA locking_mode=EXCLUSIVE` + `BEGIN IMMEDIATE/ROLLBACK`）取得 SQLite 文件级独占锁，
+  覆盖「快照 → 用 `Connection.backup()` 把暂存库写入当前库 → 迁移 → 回滚」全程。
+  外部普通 `sqlite3.connect()` 的写入会被 busy 等待或在超时后明确拒绝，已提交的数据不会
+  落在被覆盖的旧库之外；拿不到独占锁返回「获取独占写入」并中止，当前库不变。
+  失败回滚同样用快照库经 backup API 写回，并做 `integrity_check`。
+  后台下载/导入/同步/另一条恢复仍走 `_DB_RW_LOCK`；**只关 `db.conn` 不会释放读锁，
+  必须调 `db.close()`**（`core/crawler.py` 已改）。
+- **原图旧版本**：以图库 `pages` 的作品/页号找**当前登记文件**（排除回收站），
+  只有「唯一登记 + 同格式」才先把当前文件存成 `.bak-<时间>` 再换入所选旧版本；
+  跨格式、无登记、文件名认不出作品页号一律 409 并保持磁盘/登记原样，不额外生成同页文件；
+  格式更换仍走既有 PNG/JPG 转换入口。切换写失败时当前图字节不变，已建快照可在旧版本区找到。
+- **验收**：T178（独立临时库）覆盖：同 ID 页/作品/标签差异；令牌三种失效（新增作品、
+  改记录、替换同名 ZIP）；清单数组/缺字段/类型错误/计数不一致/合法历史清单；
+  同秒连续与并发备份唯一且各自可恢复；备份写入失败清理；快照到切换之间应用内第二连接
+  写入被推迟、恢复后可见；两条恢复并发一成一拒；迁移失败自动回滚；`.bak` 同格式切换/切回、
+  写失败保图与快照、跨格式/无登记拒绝；确认前/恢复中替换或删除 ZIP 仍用已校验 A 并保持
+  响应一致；独立 Python 进程 `sqlite3.connect()` 的 50ms 写入被明确拒绝、10s 写入被推迟到
+  恢复结束后成功且快照保留旧标题。全量 **169/169**（103.80s），日志
+  `_dev_runtime/diagnostics/trae-item6-backup-restore-smoke-20261123.log`。
+- **部署（2026-11-23 23:14）**：候选包 `_dev_runtime/packages/vixiq`
+  （`built_at 23:11:49`，前端 `20261123e`）在 7813 隔离数据验收：备份/对比/令牌失效/
+  确认恢复/快照校验通过、页面版本与入口正确。回滚清单
+  `_dev_runtime/backups/publish-20261123e-20261123-231409.json`（4 个旧文件按 SHA-256
+  去重，新增备份 14,951,264 字节；单目标净增 29,333 字节）。
+  `dist/vixiq` 与 `D:\Program Files\Vixiq` 的 `vixiq.exe` / `base_library.zip` /
+  `app.js` / `index.html` 哈希一致，两处 `config/user.json` 哈希未变；
+  安装版 7810 健康、`/api/version` 前端 `20261123e`、`built_at 23:11:49`；
+  真实库 1605 作品 / 2193 图、`schema_migrations` 至 031，备份列表能读取
+  `pixiv_backup_2026-11-20_19-26-11.zip`（valid）。GitHub 未推送。
 
 ### 4.44 第 5 项 体检：检查与修复分开（2026-11-23，前端 `20261123d`，已发布到安装版）
 

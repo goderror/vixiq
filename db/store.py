@@ -26,7 +26,11 @@ import os
 import re
 import shutil
 import sqlite3
+import tempfile
+import threading
+import time
 import traceback
+import uuid
 import unicodedata
 import zipfile
 from collections import namedtuple
@@ -124,14 +128,41 @@ _WORKS_MISSING_METADATA_WHERE = """
 
 @dataclass
 class RestoreDiff:
-    """备份 vs 当前的差异对比。返回给 GUI, 恢复前由使用者确认, 避免盲目覆盖丢失数据。"""
+    """备份 vs 当前的差异对比。返回给 GUI, 恢复前由使用者确认, 避免盲目覆盖丢失数据。
+
+    只比 ID 集合不够: 整库恢复会覆盖同 ID 的页/作品信息/标签关联, 这些也要计入
+    "当前数据会被覆盖", 否则确认页会漏报。"""
     backup_only_authors: list[str]     # 备份有、当前没有的作者ID
     backup_only_artworks: list[str]    # 备份有、当前没有的作品ID
     current_only_authors: list[str]    # 当前有、备份没有的作者ID (恢复后会丢)
     current_only_artworks: list[str]   # 当前有、备份没有的作品ID (恢复后会丢)
+    pages_added_in_backup: list[str] = field(default_factory=list)   # 备份独有页 "aid_pN"
+    pages_removed_by_restore: list[str] = field(default_factory=list)  # 当前独有页
+    pages_changed: list[str] = field(default_factory=list)           # 同页内容/状态不同
+    artworks_changed: list[str] = field(default_factory=list)        # 同 ID 作品信息不同
+    authors_changed: list[str] = field(default_factory=list)         # 同 ID 作者信息不同
+    tags_added_in_backup: int = 0
+    tags_removed_by_restore: int = 0
+    other_tables: dict = field(default_factory=dict)                 # 其他用户表计数
+
+    def will_overwrite_current(self) -> bool:
+        """恢复是否会覆盖当前已有数据 (不只是"整条作品消失")。"""
+        return bool(self.current_only_authors or self.current_only_artworks
+                    or self.pages_removed_by_restore or self.pages_changed
+                    or self.artworks_changed or self.authors_changed
+                    or self.tags_removed_by_restore)
 
     def will_lose_current(self) -> bool:
-        return bool(self.current_only_authors or self.current_only_artworks)
+        return self.will_overwrite_current()
+
+
+class BackupRestoreError(RuntimeError):
+    """数据库恢复失败: 带上失败阶段与恢复前快照名, 供界面如实展示。"""
+
+    def __init__(self, stage: str, message: str, snapshot: "str | None" = None):
+        self.stage = stage
+        self.snapshot = snapshot
+        super().__init__(message)
 
 
 # =============================================================
@@ -480,6 +511,204 @@ def foreign_title_fallback(source: str, source_author: str, rel: str = "") -> st
     return ""
 
 
+# -------------------------------------------------------------
+# 图库写互斥: 恢复数据库期间, 所有通过 PixivDatabase 的写入都要让路。
+# 连接生命周期读写锁:
+#   - 每个 PixivDatabase 实例在构造时拿共享锁、close 时释放;
+#   - 恢复数据库时拿独占锁, 期间新老连接都无法打开/持有图库文件,
+#     因此快照之后不会再有其他连接提交, Windows 上也不会因别人开着文件而替换失败。
+# 读和写都走同一把锁 (整库级维护), 简单且不会漏掉后台下载/导入/同步等入口。
+# -------------------------------------------------------------
+class _RWLock:
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._readers = 0
+        self._writer = False
+        self._waiting_writers = 0
+
+    def acquire_read(self, timeout: "float | None" = None) -> bool:
+        end = time.time() + timeout if timeout is not None else None
+        with self._cond:
+            while self._writer or self._waiting_writers:
+                remaining = None if end is None else end - time.time()
+                if remaining is not None and remaining <= 0:
+                    return False
+                self._cond.wait(remaining)
+            self._readers += 1
+            return True
+
+    def release_read(self) -> None:
+        with self._cond:
+            if self._readers > 0:
+                self._readers -= 1
+            self._cond.notify_all()
+
+    def acquire_write(self, timeout: "float | None" = None) -> bool:
+        end = time.time() + timeout if timeout is not None else None
+        with self._cond:
+            self._waiting_writers += 1
+            try:
+                while self._writer or self._readers:
+                    remaining = None if end is None else end - time.time()
+                    if remaining is not None and remaining <= 0:
+                        return False
+                    self._cond.wait(remaining)
+                self._writer = True
+                return True
+            finally:
+                self._waiting_writers -= 1
+
+    def release_write(self) -> None:
+        with self._cond:
+            self._writer = False
+            self._cond.notify_all()
+
+    def downgrade_write_to_read(self) -> None:
+        """写锁直接降级成共享锁: 不经过「释放写锁」的空档, 避免等待中的写者
+        抢先拿到锁, 让刚恢复完的请求还要额外等一整轮恢复。"""
+        with self._cond:
+            self._writer = False
+            self._readers += 1
+            self._cond.notify_all()
+
+
+_DB_RW_LOCK = _RWLock()
+_BACKUP_CREATE_LOCK = threading.Lock()   # 同一秒并发备份也不许互相覆盖
+RESTORE_STAGE_HOOK = None                # 测试钩子: (stage, db) → None; 生产为 None
+
+
+def _table_row_hashes(con: sqlite3.Connection, table: str,
+                      keys: "tuple[str, ...]") -> dict:
+    """整表逐行哈希, 用于发现同 ID 记录的内容变化 (页/作品信息/标签/作者)。"""
+    try:
+        cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()]
+    except sqlite3.Error:
+        return {}
+    if not cols:
+        return {}
+    out: dict = {}
+    try:
+        for row in con.execute(f"SELECT * FROM {table}").fetchall():
+            if isinstance(row, sqlite3.Row):
+                d = {c: row[c] for c in cols}
+            else:
+                d = {c: row[i] for i, c in enumerate(cols)}
+            key = tuple(str(d.get(k)) for k in keys)
+            if len(key) == 1:
+                key = key[0]
+            out[key] = hashlib.sha256(
+                json.dumps(d, ensure_ascii=False, sort_keys=True, default=str)
+                .encode("utf-8")).hexdigest()
+    except sqlite3.Error:
+        return {}
+    return out
+
+
+def _db_snapshot(con: sqlite3.Connection) -> dict:
+    counts = {}
+    for table in ("reverse_search_history", "download_queue_items"):
+        try:
+            counts[table] = int(con.execute(
+                f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        except sqlite3.Error:
+            counts[table] = None
+    return {
+        "artworks": _table_row_hashes(con, "artworks", ("artwork_id",)),
+        "pages": _table_row_hashes(con, "pages", ("artwork_id", "page_num")),
+        "authors": _table_row_hashes(con, "authors", ("author_id",)),
+        "tags": _table_row_hashes(con, "artwork_tags", ("artwork_id", "tag_id")),
+        "counts": counts,
+    }
+
+
+def _snapshot_fingerprint(snap: dict) -> str:
+    payload = {
+        "artworks": sorted((snap.get("artworks") or {}).items()),
+        "pages": sorted((snap.get("pages") or {}).items()),
+        "authors": sorted((snap.get("authors") or {}).items()),
+        "tags": sorted((snap.get("tags") or {}).items()),
+        "counts": snap.get("counts") or {},
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        .encode("utf-8")).hexdigest()
+
+
+def _diff_snapshots(bak: dict, cur: dict) -> "RestoreDiff":
+    """按逐行哈希比较备份快照与当前快照 (同 ID 的页/信息/标签也计入)。"""
+    bak_authors, cur_authors = set(bak['authors']), set(cur['authors'])
+    bak_artworks, cur_artworks = set(bak['artworks']), set(cur['artworks'])
+    bak_pages, cur_pages = bak['pages'], cur['pages']
+    bak_tags, cur_tags = bak['tags'], cur['tags']
+
+    def _page_label(k) -> str:
+        if isinstance(k, (tuple, list)) and len(k) == 2:
+            return f"{k[0]}_p{k[1]}"
+        return str(k)
+
+    return RestoreDiff(
+        backup_only_authors=sorted(bak_authors - cur_authors),
+        backup_only_artworks=sorted(bak_artworks - cur_artworks),
+        current_only_authors=sorted(cur_authors - bak_authors),
+        current_only_artworks=sorted(cur_artworks - bak_artworks),
+        pages_added_in_backup=sorted(_page_label(k) for k in
+                                     set(bak_pages) - set(cur_pages)),
+        pages_removed_by_restore=sorted(_page_label(k) for k in
+                                        set(cur_pages) - set(bak_pages)),
+        pages_changed=sorted(_page_label(k) for k in
+                             set(cur_pages) & set(bak_pages)
+                             if cur_pages[k] != bak_pages[k]),
+        artworks_changed=sorted(
+            k for k in set(cur['artworks']) & set(bak['artworks'])
+            if cur['artworks'][k] != bak['artworks'][k]),
+        authors_changed=sorted(
+            k for k in set(cur['authors']) & set(bak['authors'])
+            if cur['authors'][k] != bak['authors'][k]),
+        tags_added_in_backup=len(set(bak_tags) - set(cur_tags)),
+        tags_removed_by_restore=len(set(cur_tags) - set(bak_tags)),
+        other_tables={
+            t: {"current": (cur['counts'] or {}).get(t),
+                "backup": (bak['counts'] or {}).get(t)}
+            for t in set((cur['counts'] or {})) | set((bak['counts'] or {}))
+        },
+    )
+
+
+def backup_file_sha256(path: "Path | str") -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def backup_preview_token(zip_path: "Path | str", fingerprint: str) -> str:
+    """确认令牌 = 备份文件指纹 + 预览时当前库指纹; 任一变化都会失效。"""
+    return hashlib.sha256(
+        f"{backup_file_sha256(zip_path)}:{fingerprint}".encode("utf-8")).hexdigest()
+
+
+def validate_backup_manifest(manifest) -> dict:
+    """按项目实际写出的清单结构校验: 对象 + 时间 + 非负整数覆盖范围。
+
+    兼容合法历史备份 (多出的字段忽略); 数组/缺字段/类型错误一律拒绝。
+    """
+    if not isinstance(manifest, dict):
+        raise ValueError("备份清单格式不正确（应为对象）")
+    required = ("created_at", "artworks", "pages_done", "authors")
+    missing = [k for k in required if k not in manifest]
+    if missing:
+        raise ValueError(f"备份清单缺少字段: {', '.join(missing)}")
+    created = manifest.get("created_at")
+    if not isinstance(created, str) or not created.strip():
+        raise ValueError("备份清单 created_at 必须是非空字符串")
+    for key in ("artworks", "pages_done", "authors"):
+        val = manifest.get(key)
+        if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+            raise ValueError(f"备份清单 {key} 必须是 >=0 的整数")
+    return manifest
+
+
 def _connect(path: "str | Path") -> sqlite3.Connection:
     """统一的 SQLite 连接: 长任务并发时"等锁"而不是直接报错。
 
@@ -543,7 +772,14 @@ class PixivDatabase:
 
         # 3) 先建连接（:memory: 用字面量字符串, 不要 Path 包装, 否则 sqlite3 不认）
         _p_str = ":memory:" if str(self.db_path) == ":memory:" else str(self.db_path)
-        self.conn = _connect(_p_str)
+        if not _DB_RW_LOCK.acquire_read(timeout=30.0):
+            raise RuntimeError("图库正在恢复，请稍后再试")
+        self._rw_held = True
+        try:
+            self.conn = _connect(_p_str)
+        except Exception:
+            self._release_read()
+            raise
         self.cursor = self.conn.cursor()
         self._trigger = None  # FTS5 同步触发器用
 
@@ -567,11 +803,18 @@ class PixivDatabase:
                 f"注意: 绝不要直接删除 {self.db_path.name}。"
             )
 
+    def _release_read(self):
+        if getattr(self, "_rw_held", False):
+            self._rw_held = False
+            _DB_RW_LOCK.release_read()
+
     def close(self):
         try:
             self.conn.close()
         except sqlite3.Error:
             pass
+        finally:
+            self._release_read()
 
     def __enter__(self):
         return self
@@ -6007,16 +6250,32 @@ class PixivDatabase:
     # ==================================================================
 
     # --- 1. 一键备份 ---
-    def backup_to_zip(self, custom_path: Optional[Path] = None) -> Path:
-        """备份 pixiv.db + feature_db/ 到一个 zip, 返回 zip 路径。"""
-        ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        zip_path = custom_path or (self.backup_dir / f"pixiv_backup_{ts}.zip")
-        # 先 VACUUM INTO 到一个临时 db, 避免备份被锁定
-        tmp_db = self.backup_dir / f".tmp_backup_{os.getpid()}.db"
+    def _reserve_backup_path(self, custom_path: Optional[Path] = None) -> Path:
+        """在备份锁内占住一个**不可覆盖**的唯一 zip 路径 (同秒追加 _2/_3)。"""
+        with _BACKUP_CREATE_LOCK:
+            ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            zip_path = Path(custom_path) if custom_path else (
+                self.backup_dir / f"pixiv_backup_{ts}.zip")
+            if zip_path.exists():
+                n = 2
+                stem, suffix = zip_path.stem, zip_path.suffix
+                while zip_path.exists():
+                    zip_path = zip_path.with_name(f"{stem}_{n}{suffix}")
+                    n += 1
+            # 先占住唯一文件名; 后续写临时 zip 不再需要拿着备份锁 (避免和恢复互斥锁死锁)
+            zip_path.touch(exist_ok=False)
+        return zip_path
+
+    def _write_backup_zip(self, zip_path: Path, conn: sqlite3.Connection) -> Path:
+        """把 conn 指向的库 + feature_db 写成已占位的 zip; 失败清理占位与半成品。"""
+        zip_path = Path(zip_path)
+        zip_tmp = zip_path.with_name(zip_path.name + f".tmp-{uuid.uuid4().hex}")
+        tmp_db = self.backup_dir / f".tmp_backup_{uuid.uuid4().hex}.db"
         tmp_db.unlink(missing_ok=True)
+        published = False
         try:
-            self.conn.execute(f"VACUUM INTO '{self._escape_path(str(tmp_db))}'")
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            conn.execute(f"VACUUM INTO '{self._escape_path(str(tmp_db))}'")
+            with zipfile.ZipFile(zip_tmp, 'w', zipfile.ZIP_DEFLATED) as zf:
                 zf.write(tmp_db, arcname='pixiv.db')
                 # feature_db 目录 (若存在)
                 feat_dir = paths.user_data_dir() / 'feature_db'
@@ -6027,92 +6286,313 @@ class PixivDatabase:
                 # 备份清单: 记录作品数/页数,给恢复时的对照
                 summary = {
                     'created_at': now_stamp(),
-                    'artworks': self.conn.execute(
+                    'artworks': conn.execute(
                         "SELECT COUNT(*) FROM artworks").fetchone()[0],
-                    'pages_done': self.conn.execute(
+                    'pages_done': conn.execute(
                         "SELECT COUNT(*) FROM pages WHERE status=?", (PSt.DONE,)).fetchone()[0],
-                    'authors': self.conn.execute(
+                    'authors': conn.execute(
                         "SELECT COUNT(*) FROM authors").fetchone()[0],
                     'db_path': str(self.db_path),
                 }
                 zf.writestr('backup_manifest.json',
                             json.dumps(summary, ensure_ascii=False, indent=2))
-            self.reporter.log(f"[备份] 完成 → {zip_path} ({zip_path.stat().st_size/1024:.0f} KB)")
+            if not zipfile.is_zipfile(zip_tmp) or zip_tmp.stat().st_size <= 0:
+                raise RuntimeError("备份 zip 写入后校验失败")
+            os.replace(zip_tmp, zip_path)
+            published = True
+            self.reporter.log(
+                f"[备份] 完成 → {zip_path} ({zip_path.stat().st_size/1024:.0f} KB)")
             return zip_path
+        except Exception:
+            if not published:
+                zip_path.unlink(missing_ok=True)   # 清掉占位/半成品
+            raise
         finally:
             tmp_db.unlink(missing_ok=True)
+            zip_tmp.unlink(missing_ok=True)
 
-    # --- 2. 从备份恢复 (对比差异后再确认, 不盲目覆盖) ---
-    def compare_backup(self, zip_path: Path) -> RestoreDiff:
-        """对比备份 vs 当前 DB, 返回 RestoreDiff。不会执行恢复操作。"""
+    def backup_to_zip(self, custom_path: Optional[Path] = None) -> Path:
+        """备份 pixiv.db + feature_db/ 到一个**唯一** zip, 返回实际路径。
+
+        普通备份与恢复前快照都不覆盖已有文件: 同一秒多次/并发请求会追加 _2/_3;
+        先写同目录临时 zip, 完整写完后再 os.replace 发布, 失败清理半成品。
+        """
+        return self._write_backup_zip(self._reserve_backup_path(custom_path), self.conn)
+
+    # --- 2. 从备份恢复 (先验证 zip/清单/SQLite, 对比差异后再确认) ---
+    def _inspect_backup_file(self, zip_path: Path, workdir: Path) -> dict:
+        """验证 zip 并把 pixiv.db 解到 workdir, 在解出的文件上做完整性检查。
+
+        调用方拿到的 info 与 `workdir/pixiv.db` 是同一份内容; 恢复切换只能用这份
+        已校验收据, 不能再按原路径重开 zip (防止校验后文件被替换)。
+        """
+        zip_path = Path(zip_path)
+        workdir = Path(workdir)
+        if not zip_path.is_file():
+            raise ValueError("备份文件不存在")
         if not zipfile.is_zipfile(zip_path):
-            raise ValueError(f"{zip_path} 不是合法的 zip 备份文件")
+            raise ValueError("不是合法的 zip 备份文件")
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            if 'pixiv.db' not in zf.namelist():
-                raise ValueError(f"{zip_path} 中未找到 pixiv.db, 不是合法备份")
-            tmp = self.backup_dir / f".compare_{os.getpid()}.db"
-            tmp.unlink(missing_ok=True)
-            zf.extract('pixiv.db', path=tmp.parent)
-            # extract 会建 pixiv.db 在 parent 下
-            bak_db_path = tmp.parent / 'pixiv.db'
+            names = set(zf.namelist())
+            if 'pixiv.db' not in names:
+                raise ValueError("备份中未找到 pixiv.db, 不是合法备份")
+            if 'backup_manifest.json' not in names:
+                raise ValueError("备份中缺少备份清单 backup_manifest.json")
             try:
-                bak = sqlite3.connect(str(bak_db_path))
-                bak.row_factory = sqlite3.Row
-                bak_authors = {r[0] for r in bak.execute("SELECT author_id FROM authors").fetchall()}
-                bak_artworks = {r[0] for r in bak.execute("SELECT artwork_id FROM artworks").fetchall()}
-                bak.close()
+                manifest = validate_backup_manifest(
+                    json.loads(zf.read('backup_manifest.json').decode('utf-8')))
+            except ValueError:
+                raise
+            except Exception as e:
+                raise ValueError(f"备份清单无法解析: {e}") from e
+            zf.extract('pixiv.db', path=workdir)
+            extracted = workdir / 'pixiv.db'
+            con = None
+            try:
+                con = sqlite3.connect(str(extracted))
+                con.row_factory = sqlite3.Row
+                integrity = str(con.execute("PRAGMA integrity_check").fetchone()[0])
+                if integrity != 'ok':
+                    raise ValueError(f"备份 SQLite 完整性检查未通过: {integrity}")
+                snapshot = _db_snapshot(con)
+                counts = {
+                    'artworks': int(con.execute(
+                        "SELECT COUNT(*) FROM artworks").fetchone()[0]),
+                    'pages_done': int(con.execute(
+                        "SELECT COUNT(*) FROM pages WHERE status=?",
+                        (PSt.DONE,)).fetchone()[0]),
+                    'authors': int(con.execute(
+                        "SELECT COUNT(*) FROM authors").fetchone()[0]),
+                }
+            except sqlite3.Error as e:
+                raise ValueError(f"备份 SQLite 无法打开或结构不完整: {e}") from e
             finally:
-                bak_db_path.unlink(missing_ok=True)
-        cur_authors = {r[0] for r in self.conn.execute(
-            "SELECT author_id FROM authors").fetchall()}
-        cur_artworks = {r[0] for r in self.conn.execute(
-            "SELECT artwork_id FROM artworks").fetchall()}
-        return RestoreDiff(
-            backup_only_authors=sorted(bak_authors - cur_authors),
-            backup_only_artworks=sorted(bak_artworks - cur_artworks),
-            current_only_authors=sorted(cur_authors - bak_authors),
-            current_only_artworks=sorted(cur_artworks - bak_artworks),
-        )
+                if con is not None:
+                    try:
+                        con.close()
+                    except Exception:
+                        pass
+        manifest_matches = all(
+            int(manifest.get(k, -1)) == counts[k]
+            for k in ("artworks", "pages_done", "authors"))
+        return {'manifest': manifest, 'counts': counts,
+                'authors': set(snapshot['authors']),
+                'artworks': set(snapshot['artworks']),
+                'integrity': integrity, 'snapshot': snapshot,
+                'fingerprint': _snapshot_fingerprint(snapshot),
+                'manifest_matches': manifest_matches}
 
-    def restore_from_zip(self, zip_path: Path, confirm_accept_loss: bool = False) -> RestoreDiff:
-        """
-        从 zip 备份恢复当前 DB。操作:
-          1. 先生成对比 RestoreDiff
-          2. 如果当前有作品会丢失(will_lose_current=True):
-             - 未传 confirm_accept_loss=True → 抛错, 提示用户
-          3. 关闭连接 → 覆盖 pixiv.db → 重建连接 → 重跑迁移器
-        返回对比结果, 供 GUI 展示"恢复了多少条"。
-        """
-        diff = self.compare_backup(zip_path)
-        if diff.will_lose_current() and not confirm_accept_loss:
-            raise RuntimeError(
-                f"拒绝盲目恢复: 当前比备份多出 {len(diff.current_only_authors)} 作者 / "
-                f"{len(diff.current_only_artworks)} 作品, 恢复会永久丢失。\n"
-                f"确需接受丢失时, 请勾选【接受丢失并恢复】后重试。"
-            )
-        # 先备份一份当前 DB, 留一条反悔的路
-        self.backup_to_zip(self.backup_dir / "pre_restore_safety.zip")
-        # 执行恢复
-        self.close()
-        tmp_dir = self.backup_dir / f".restore_{os.getpid()}"
-        tmp_dir.mkdir(exist_ok=True)
+    def inspect_backup_zip(self, zip_path: Path) -> dict:
+        """验证备份并读回内容 (不碰当前库)。返回的 counts 以备份库内实数为准。"""
+        with tempfile.TemporaryDirectory(prefix='.inspect_', dir=self.backup_dir) as td:
+            return self._inspect_backup_file(zip_path, Path(td))
+
+    def compare_backup(self, zip_path: Path, info: "dict | None" = None) -> RestoreDiff:
+        """对比备份 vs 当前 DB (含同 ID 的页/作品/标签/作者内容变化)。"""
+        info = info or self.inspect_backup_zip(zip_path)
+        return _diff_snapshots(info['snapshot'], _db_snapshot(self.conn))
+
+    def database_fingerprint(self) -> str:
+        """当前库指纹: 作品/页/作者/标签内容 + 其他用户表计数。"""
+        return _snapshot_fingerprint(_db_snapshot(self.conn))
+
+    def preview_backup(self, zip_path: Path) -> dict:
+        """对比预览 + 绑定令牌: 预览和恢复都使用同一份私有暂存内容。"""
+        with tempfile.TemporaryDirectory(prefix='.preview_', dir=self.backup_dir) as td:
+            workdir = Path(td)
+            staged_zip = workdir / 'source.zip'
+            try:
+                shutil.copy2(Path(zip_path), staged_zip)
+            except OSError as e:
+                raise ValueError(f"备份文件无法读取: {e}") from e
+            info = self._inspect_backup_file(staged_zip, workdir)
+            self._release_read()
+            if not _DB_RW_LOCK.acquire_write(timeout=10.0):
+                self._rw_held = bool(_DB_RW_LOCK.acquire_read(timeout=30.0))
+                raise RuntimeError("图库正在被其他任务使用，请稍后再对比")
+            try:
+                diff = self.compare_backup(staged_zip, info=info)
+                fingerprint = self.database_fingerprint()
+                token = backup_preview_token(staged_zip, fingerprint)
+            finally:
+                _DB_RW_LOCK.downgrade_write_to_read()
+                self._rw_held = True
+        return {"info": info, "diff": diff,
+                "fingerprint": fingerprint, "token": token}
+
+    def _unique_backup_path(self, prefix: str = "pixiv_backup_pre-restore") -> Path:
+        """恢复前快照的唯一文件名 (带秒级时间 + 冲突序号), 保证界面列表能找到。"""
+        ts = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        p = self.backup_dir / f"{prefix}_{ts}.zip"
+        n = 2
+        while p.exists():
+            p = self.backup_dir / f"{prefix}_{ts}_{n}.zip"
+            n += 1
+        return p
+
+    def _open_exclusive_guard(self) -> sqlite3.Connection:
+        """打开并持有图库库的独占写锁; 无法独占时抛 sqlite3.Error。
+
+        SQLite 的 exclusive locking_mode 会把文件锁保持到连接关闭, 外部普通
+        `sqlite3.connect()` 的写入只能等待或被明确拒绝, 因此从快照到切换、迁移
+        期间不会再有外部提交落进旧库。"""
+        guard = sqlite3.connect(str(self.db_path), timeout=3.0, isolation_level=None)
         try:
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                zf.extract('pixiv.db', path=tmp_dir)
-            restored = tmp_dir / 'pixiv.db'
-            shutil.copy2(restored, self.db_path)
+            guard.execute("PRAGMA locking_mode=EXCLUSIVE")
+            # 触发并保持独占锁; 回滚事务不会释放 exclusive locking_mode 的锁
+            guard.execute("BEGIN IMMEDIATE")
+            guard.execute("ROLLBACK")
+        except Exception:
+            try:
+                guard.close()
+            except Exception:
+                pass
+            raise
+        return guard
+
+    def restore_from_zip(self, zip_path: Path, confirm_accept_loss: bool = False,
+                         preview_token: "str | None" = None) -> dict:
+        """从 zip 恢复当前 DB (私有暂存 + 独占窗口 + 快照 + 失败回滚)。
+
+        阶段: 校验暂存备份 → 确认预览未失效 → 对比差异 → 关闭连接并取得 SQLite
+              独占写锁 → 保存恢复前快照 → 用暂存库覆盖当前库 → 迁移并检查完整性。
+        所选 ZIP 先复制到私有临时目录, 校验/令牌/差异/切换全部基于这份副本;
+        恢复期间原 ZIP 被替换或删除都不会影响已确认内容, 也不会被换成别的库。
+        独占锁覆盖快照到迁移全程, 外部 SQLite 连接的写入会被推迟或拒绝。
+        """
+        zip_path = Path(zip_path)
+        self._release_read()
+        if not _DB_RW_LOCK.acquire_write(timeout=3.0):
+            self._rw_held = bool(_DB_RW_LOCK.acquire_read(timeout=30.0))
+            raise BackupRestoreError(
+                "等待图库写入结束",
+                "图库正在被其他任务使用，请稍后再恢复；当前库未改动")
+        stage = "校验备份"
+        snapshot = None
+        snapshot_done = False
+        workdir = None
+        guard = None
+        conn_closed = False
+        copy_started = False
+        try:
+            workdir = Path(tempfile.mkdtemp(prefix='.restore_', dir=self.backup_dir))
+            staged_zip = workdir / 'source.zip'
+            try:
+                shutil.copy2(zip_path, staged_zip)
+            except OSError as e:
+                raise ValueError(f"备份文件无法读取: {e}") from e
+            staged_db = workdir / 'pixiv.db'
+            info = self._inspect_backup_file(staged_zip, workdir)
+            stage = "关闭当前连接"
+            self.close()
+            conn_closed = True
+            stage = "获取独占写入"
+            try:
+                guard = self._open_exclusive_guard()
+            except sqlite3.Error as e:
+                raise BackupRestoreError(
+                    stage,
+                    f"图库数据库正被其他程序占用，恢复已中止；当前库未改动"
+                    f"（{str(e).splitlines()[0]}）") from e
+            # 令牌与差异都在独占窗口内重算: 外部写入既不能改库, 也不能绕过旧确认
+            stage = "确认预览"
+            cur_snap = _db_snapshot(guard)
+            fingerprint = _snapshot_fingerprint(cur_snap)
+            if not preview_token or backup_preview_token(staged_zip, fingerprint) != preview_token:
+                raise BackupRestoreError(
+                    "确认已失效",
+                    "预览后当前数据或备份文件已变化，请重新对比预览后再恢复")
+            stage = "对比差异"
+            diff = _diff_snapshots(info['snapshot'], cur_snap)
+            if diff.will_overwrite_current() and not confirm_accept_loss:
+                raise BackupRestoreError(
+                    stage,
+                    f"拒绝盲目恢复: 当前有 {len(diff.current_only_authors)} 作者 / "
+                    f"{len(diff.current_only_artworks)} 作品 / "
+                    f"{len(diff.pages_removed_by_restore)} 页 / "
+                    f"{len(diff.artworks_changed)} 个作品信息 / "
+                    f"{diff.tags_removed_by_restore} 条标签关联会被覆盖或移除。"
+                    f"确需接受时, 请勾选【接受覆盖并恢复】后重试。")
+            stage = "保存恢复前快照"
+            snapshot = self._reserve_backup_path(self._unique_backup_path())
+            self._write_backup_zip(snapshot, guard)
+            snapshot_done = True
+            if RESTORE_STAGE_HOOK is not None:
+                try:
+                    RESTORE_STAGE_HOOK(stage, self)
+                except Exception:
+                    pass
+            stage = "恢复数据库内容"
+            # 只用已校验的私有暂存库覆盖当前库; 不再按原路径重开 zip
+            copy_started = True
+            staged_conn = sqlite3.connect(str(staged_db), timeout=30.0)
+            try:
+                staged_conn.backup(guard)
+            finally:
+                staged_conn.close()
+            stage = "重新连接并迁移"
+            MigrationManager(self.db_path).ensure_migrations_applied(conn=guard)
+            integrity = guard.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != 'ok':
+                raise RuntimeError(f"恢复后完整性检查失败: {integrity}")
+        except BackupRestoreError:
+            raise
+        except Exception as e:
+            # 覆盖已开始后失败 → 用恢复前快照在同一条独占连接上回滚
+            rollback_error = None
+            rollback_ok = False
+            if copy_started and snapshot_done and guard is not None:
+                try:
+                    rb_dir = workdir / "rollback"
+                    rb_dir.mkdir(parents=True, exist_ok=True)
+                    with zipfile.ZipFile(snapshot, 'r') as zf:
+                        zf.extract('pixiv.db', path=rb_dir)
+                    rb_conn = sqlite3.connect(str(rb_dir / 'pixiv.db'), timeout=30.0)
+                    try:
+                        rb_conn.backup(guard)
+                    finally:
+                        rb_conn.close()
+                    integrity = guard.execute("PRAGMA integrity_check").fetchone()[0]
+                    if integrity != 'ok':
+                        raise RuntimeError(f"回滚后完整性检查失败: {integrity}")
+                    rollback_ok = True
+                except Exception as re:
+                    rollback_error = str(re).splitlines()[0]
+            msg = f"恢复失败（{stage}）：{str(e).splitlines()[0]}"
+            if not snapshot_done:
+                msg += "；原库未受影响，且尚未产生完整快照"
+            elif copy_started and rollback_ok:
+                msg += f"；已自动回滚到恢复前状态，快照：{snapshot.name}"
+            elif rollback_error:
+                msg += f"；自动回滚失败：{rollback_error}，请用快照 {snapshot.name} 手动恢复"
+            else:
+                msg += f"；原库未受影响，快照：{snapshot.name}"
+            raise BackupRestoreError(stage, msg,
+                                     snapshot.name if snapshot_done else None) from e
         finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-        # 重建连接 + 重跑迁移器(备份可能是旧版本 schema)
-        self.conn = _connect(self.db_path)
-        self.cursor = self.conn.cursor()
-        migrator = MigrationManager(self.db_path)
-        migrator.ensure_migrations_applied()
+            if guard is not None:
+                try:
+                    guard.close()
+                except Exception:
+                    pass
+            if conn_closed:
+                try:
+                    self.conn = _connect(str(self.db_path))
+                    self.cursor = self.conn.cursor()
+                    MigrationManager(self.db_path).ensure_migrations_applied(
+                        conn=self.conn)
+                except Exception:
+                    pass
+            if workdir is not None:
+                shutil.rmtree(workdir, ignore_errors=True)
+            _DB_RW_LOCK.downgrade_write_to_read()
+            self._rw_held = True
+
         self.reporter.log(
             f"[恢复] 完成: 备份新增 {len(diff.backup_only_artworks)} 作品 / "
-            f"丢失 {len(diff.current_only_artworks)} 作品(若 accept_loss=True)"
-        )
-        return diff
+            f"覆盖 {len(diff.current_only_artworks)} 作品(已确认)；快照 {snapshot.name}")
+        return {"diff": diff, "snapshot": snapshot.name,
+                "manifest": info['manifest'], "counts": info['counts']}
 
     # --- 3. 修复损坏的库 (绝不直接删库) ---
     def repair_corrupt(self) -> dict:

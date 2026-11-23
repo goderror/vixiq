@@ -1449,7 +1449,8 @@ class PixivDownloader:
         # 「无 done 页即 DELETE 作品」的逻辑, 对无关作品全生效, 是定时炸弹。
         # 现在每个作品下载完在 download_artwork() 末尾已当场 sync_work_and_pages(aid),
         # 页状态也是下载成功即 mark_page_status —— **不需要任何全库收尾**。
-        self.db.conn.close()
+        # 走 PixivDatabase.close(): 只关 conn 不会释放图库读锁, 恢复数据库会一直等到超时
+        self.db.close()
         if getattr(self, '_driver', None) is not None:
             try:
                 self._driver.quit()

@@ -7901,10 +7901,9 @@ function closeLibModal() {
   $('#lib-modal').style.display = 'none';
 }
 
-// ============ 💾 备份中心 (2026-09-16 合并原「一键备份」+「备份管理」) ============
-//   只留一个入口, 「一键备份」搬进里面 —— 上半是数据库备份(zip), 下半是
-//   「♻ 重下修复」覆盖前自动留下的 .bak 旧文件(对比/恢复/删除)。这两件事本来就是
-//   一体两面: 一个备份"库", 一个备份"图", 出问题时都在这里找回来。
+// ============ 💾 备份与恢复 (2026-09-16 合并原「一键备份」+「备份管理」) ============
+//   一个入口两件事: 上半是数据库备份(zip, 可对比/恢复/另存), 下半是原图旧版本
+//   (重下修复留下的 .bak + 每次切换前自动保留的 .bak-<时间>, 可对比/切换/删除)。
 async function openBackupCenter() {
   let dbk = { items: [], dir: '' }, bk = { items: [] };
   try {
@@ -7915,42 +7914,156 @@ async function openBackupCenter() {
     dbk = a || dbk; bk = b || bk;
   } catch (e) { /* 单项失败不影响另一块 */ }
   const dbItems = dbk.items || [];
+  const cover = (m) => (m && m.artworks != null)
+    ? `${m.artworks} 作品 / ${m.pages_done ?? 0} 图 / ${m.authors ?? 0} 作者`
+    : '—';
   const dbRows = dbItems.map(it => `<tr>
-      <td class="mono" title="${esc(it.name)}">${esc(it.name)}</td>
+      <td class="mono" title="${esc(it.name)}">${esc(it.name)}${it.kind === 'pre_restore'
+        ? ' <span class="op-badge">恢复前快照</span>' : ''}</td>
       <td style="white-space:nowrap">${fmtSize(it.size)}</td>
       <td style="white-space:nowrap">${it.mtime ? new Date(it.mtime * 1000).toLocaleString('zh-CN') : ''}</td>
-      <td style="white-space:nowrap"><button class="btn danger" onclick="deleteDbBackup('${esc(it.name)}')">🗑️ 删除</button></td>
+      <td>${it.valid ? cover(it.counts) + (it.manifest_matches === false
+        ? ' <span class="hint">⚠ 清单计数不一致，以库内实数为准</span>' : '')
+        : `<span class="hint">⚠ ${esc(it.error || '无法读取')}</span>`}</td>
+      <td style="white-space:nowrap">
+        <button class="btn ghost" ${it.valid ? '' : 'disabled'} onclick="compareDbBackup('${esc(it.name)}')">🔀 对比/恢复</button>
+        <button class="btn ghost" onclick="saveAsDbBackup('${esc(it.name)}')">📤 另存为</button>
+        <button class="btn danger" onclick="deleteDbBackup('${esc(it.name)}')">🗑️ 删除</button>
+      </td>
     </tr>`).join('');
   const bakItems = bk.items || [];
   const bakRows = bakItems.map(it => `
       <tr>
         <td style="white-space:nowrap">${esc(it.artwork_id || '?')}${it.page_num != null ? '_p' + it.page_num : ''}</td>
         <td class="w-path" title="${esc(it.orig_rel)}">${esc(it.orig_name)}</td>
+        <td style="white-space:nowrap">${it.kind === 'version'
+          ? `切换前版本${it.version ? ' · ' + fmtBakVersion(it.version) : ''}` : '旧 .bak'}</td>
         <td style="white-space:nowrap">${fmtSize(it.size)}</td>
         <td style="white-space:nowrap">${it.mtime ? new Date(it.mtime * 1000).toLocaleString('zh-CN') : ''}</td>
         <td style="white-space:nowrap">
           <button class="btn ghost" onclick="compareBackup(${JSON.stringify(it).replace(/"/g, '&quot;')})">🔀 对比</button>
-          <button class="btn ghost" onclick="restoreBackup('${esc(it.rel)}')">↩ 恢复</button>
+          <button class="btn ghost" onclick="restoreBackup('${esc(it.rel)}')">↩ 切换</button>
           <button class="btn danger" onclick="deleteBackup('${esc(it.rel)}')">🗑️ 删除</button>
         </td>
       </tr>`).join('');
-  openLibModal('💾 备份中心', `
-    <h4>🗄 数据库备份（pixiv.db + 反搜特征库）</h4>
-    <div class="hint">打包成 zip 存到 <code>${esc(dbk.dir || 'data/backup/')}</code>，可自行拷到别处长期保存（换机/重装后放回来即可）。</div>
+  openLibModal('💾 备份与恢复', `
+    <h4>🗄 图库数据库备份（pixiv.db + 反搜特征库）</h4>
+    <div class="hint">保存位置：<code>${esc(dbk.dir || 'data/backup/')}</code>。
+      恢复前会验证压缩包、清单和 SQLite 完整性；确认后先保存一份唯一命名的「恢复前快照」（会出现在本列表），再恢复数据库。</div>
     <div class="btn-row" style="margin:8px 0">
       <button class="btn accent" onclick="doBackup()">💾 立即备份数据库</button>
     </div>
     ${dbItems.length
-      ? `<table class="table"><thead><tr><th>备份文件</th><th>大小</th><th>备份时间</th><th>操作</th></tr></thead><tbody>${dbRows}</tbody></table>`
+      ? `<table class="table"><thead><tr><th>备份文件</th><th>大小</th><th>备份时间</th><th>覆盖范围</th><th>操作</th></tr></thead><tbody>${dbRows}</tbody></table>`
       : '<div class="hint">还没有数据库备份。点上面「立即备份数据库」生成第一个。</div>'}
-    <h4 style="margin-top:18px">🕒 重下修复留下的旧文件（.bak）</h4>
-    <div class="hint">「♻ 重下修复」用官方源覆盖本地前，旧文件会自动存为 <code>.bak</code>；
-      这里可以逐条「🔀 对比」新旧，再决定恢复或删除。</div>
+    <h4 style="margin-top:18px">🕒 原图旧版本</h4>
+    <div class="hint">「♻ 重下修复」覆盖前留下的 <code>.bak</code>，以及每次切换旧版本前自动保存的
+      <code>.bak-时间</code>。切换会先把当前版本存成新的可返回版本，再换成所选旧版本；不会丢当前图。</div>
     ${bakItems.length
-      ? `<table class="table"><thead><tr><th>作品/页</th><th>原文件</th><th>大小</th><th>备份时间</th><th>操作</th></tr></thead><tbody>${bakRows}</tbody></table>`
-      : '<div class="hint">暂无 .bak 旧文件。</div>'}
+      ? `<table class="table"><thead><tr><th>作品/页</th><th>原文件</th><th>类型</th><th>大小</th><th>时间</th><th>操作</th></tr></thead><tbody>${bakRows}</tbody></table>`
+      : '<div class="hint">暂无原图旧版本。</div>'}
     <div class="btn-row"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>`, { lg: true });
 }
+
+function fmtBakVersion(v) {
+  const s = String(v || '');
+  if (s.length < 15) return s;
+  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)} ` +
+         `${s.slice(9, 11)}:${s.slice(11, 13)}:${s.slice(13, 15)}`;
+}
+
+function showBackupError(title, r, backFn, retryFn) {
+  const stage = r && r.stage ? `失败阶段：${esc(r.stage)}<br>` : '';
+  const snap = r && r.snapshot
+    ? `<br>已保留恢复前快照：<code>${esc(r.snapshot)}</code>` : '';
+  openLibModal(title, `<div class="hint">${stage}${esc((r && r.error) || '未知错误')}${snap}</div>
+    <div class="btn-row">
+      ${retryFn ? `<button class="btn accent" onclick="${retryFn}">🔄 重新对比预览</button>` : ''}
+      <button class="btn ghost" onclick="${backFn}">↩ 返回备份与恢复</button>
+      <button class="btn ghost" onclick="closeLibModal()">关闭</button>
+    </div>`);
+}
+
+// DB 对比: 当前库 vs 备份 (同 ID 的页/信息/标签也计入); 确认令牌绑定预览状态
+window.compareDbBackup = async function (name) {
+  let r;
+  try {
+    r = await api('/api/library/db-backup/compare', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  } catch (e) { toast('对比失败: ' + e.message, 'err'); return; }
+  if (!r || r.status !== 'ok') { showBackupError('⚠ 备份无法恢复', r, 'openBackupCenter()'); return; }
+  const d = r.diff || {};
+  const list = (arr) => (arr || []).slice(0, 20).map(x => esc(x)).join('、') || '无';
+  const loss = !!(r.will_overwrite_current || r.will_lose_current);
+  const otherRows = Object.entries(d.other_tables || {})
+    .filter(([, v]) => v && v.current !== v.backup)
+    .map(([k, v]) => `${esc(k)}：当前 ${v.current == null ? '?' : v.current} → 备份 ${v.backup == null ? '?' : v.backup}`)
+    .join('<br>');
+  openLibModal('🔀 对比数据库备份 · ' + esc(name), `
+    <div class="hint">当前：${r.current_counts.artworks} 作品 / ${r.current_counts.pages_done} 图 / ${r.current_counts.authors} 作者<br>
+      备份实际：${r.counts.artworks} 作品 / ${r.counts.pages_done} 图 / ${r.counts.authors} 作者<br>
+      清单时间：${esc((r.manifest || {}).created_at || '—')}
+      ${r.manifest_matches === false ? '<br>⚠ 清单计数与备份库实际数量不一致，以上以备份库实数为准' : ''}</div>
+    <h4>同 ID 记录也会被整库恢复覆盖</h4>
+    <div class="hint">
+      恢复会新增/改回图片页：${list(d.pages_added_in_backup)}<br>
+      恢复会移除当前独有的图片页：${list(d.pages_removed_by_restore)}<br>
+      内容/状态不同的图片页：${list(d.pages_changed)}<br>
+      作品信息不同的作品：${list(d.artworks_changed)}<br>
+      作者信息不同的作者：${list(d.authors_changed)}<br>
+      标签关联：备份新增 ${Number(d.tags_added_in_backup) || 0} 条，恢复会移除当前 ${Number(d.tags_removed_by_restore) || 0} 条<br>
+      其他用户数据：${otherRows || '无变化'}
+    </div>
+    <h4>整条新增/移除</h4>
+    <div class="hint">备份独有（恢复后会回来）：作者 ${list(d.backup_only_authors)}；作品 ${list(d.backup_only_artworks)}<br>
+      当前独有（恢复后会被移除）：作者 ${list(d.current_only_authors)}；作品 ${list(d.current_only_artworks)}</div>
+    ${loss ? `<label class="hint"><input type="checkbox" id="db-accept-loss">
+      我已看清覆盖范围，接受覆盖当前独有数据并恢复</label>` : ''}
+    <div class="btn-row">
+      <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份与恢复</button>
+      <button class="btn accent" onclick="restoreDbBackup('${esc(name)}', ${loss
+        ? "document.getElementById('db-accept-loss').checked" : 'false'}, '${esc(r.preview_token || '')}')">💾 确认恢复</button>
+      <button class="btn ghost" onclick="closeLibModal()">关闭</button>
+    </div>`, { lg: true });
+};
+
+window.restoreDbBackup = async function (name, acceptLoss, token) {
+  if (!token) { await compareDbBackup(name); return; }
+  if (!confirm('确认恢复数据库？恢复前会自动保存一份唯一快照，可在备份列表里找到。')) return;
+  let r;
+  try {
+    r = await api('/api/library/db-backup/restore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, confirm_accept_loss: !!acceptLoss,
+                             preview_token: token }),
+    });
+  } catch (e) { toast('恢复失败: ' + e.message, 'err'); return; }
+  if (!r || r.status !== 'ok') {
+    const retry = r && r.stage === '确认已失效'
+      ? `compareDbBackup('${esc(name)}')` : '';
+    showBackupError('⚠ 数据库恢复未完成', r, 'openBackupCenter()', retry);
+    return;
+  }
+  toast('已恢复数据库；恢复前快照：' + (r.snapshot || '已保存'), 'ok');
+  loadStats(); loadLibrary(); loadLibFacets();
+  openBackupCenter();
+};
+
+window.saveAsDbBackup = async function (name) {
+  const dir = prompt('另存到哪个文件夹？请输入绝对路径（例如 F:\\备份\\vixiq）', '');
+  if (!dir || !dir.trim()) return;
+  let r;
+  try {
+    r = await api('/api/library/db-backup/save-as', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, dest_dir: dir.trim() }),
+    });
+  } catch (e) { toast('另存失败: ' + e.message, 'err'); return; }
+  if (!r || r.status !== 'ok') { toast('另存失败: ' + ((r && r.error) || '未知错误'), 'err'); return; }
+  toast('已另存到 ' + r.path, 'ok');
+};
 
 async function deleteDbBackup(name) {
   if (!confirm('删除这个数据库备份？只删这份 zip，不影响当前数据库。')) return;
@@ -7975,8 +8088,9 @@ function compareBackup(it) {
   openLibModal('🔀 对比备份 · ' + esc(it.orig_name),
     `<div class="bk-compare">
        <div class="bk-side">
-         <div class="bk-label">🕒 旧备份（强制重下前）</div>
-         <img class="bk-img" src="${oldUrl}" alt="旧备份" onerror="this.parentNode.innerHTML+='<div class=hint>旧备份不可读</div>'">
+         <div class="bk-label">🕒 所选旧版本${it.kind === 'version'
+           ? '（切换前保留 · ' + esc(fmtBakVersion(it.version)) + '）' : '（.bak）'}</div>
+         <img class="bk-img" src="${oldUrl}" alt="旧版本" onerror="this.parentNode.innerHTML+='<div class=hint>旧版本不可读</div>'">
        </div>
        <div class="bk-side">
          <div class="bk-label">📄 当前文件</div>
@@ -7985,22 +8099,27 @@ function compareBackup(it) {
      </div>
      <div class="hint">${esc(it.orig_name)} · ${fmtSize(it.size)}${stamp ? ' · ' + stamp : ''}${masked ? ' · 安全模式：R18 或分级未知，已用占位图；文件名/大小/时间仍可查看。' : ''}</div>
      <div class="btn-row">
-       <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份中心</button>
-       <button class="btn accent" onclick="restoreBackup('${esc(it.rel)}')">↩ 恢复此备份</button>
-       <button class="btn danger" onclick="deleteBackup('${esc(it.rel)}')">🗑️ 删除此备份</button>
+       <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份与恢复</button>
+       <button class="btn accent" onclick="restoreBackup('${esc(it.rel)}')">↩ 切换到此版本</button>
+       <button class="btn danger" onclick="deleteBackup('${esc(it.rel)}')">🗑️ 删除此版本</button>
        <button class="btn ghost" onclick="closeLibModal()">关闭</button>
      </div>`);
 }
 
 async function restoreBackup(rel) {
-  if (!confirm('恢复备份：将用备份文件覆盖当前文件（当前新版将被替换为备份内容）。确认恢复？')) return;
+  if (!confirm('切换原图旧版本：会先把当前文件保存为可返回的版本，再用所选旧版本替换。确认切换？')) return;
+  let r;
   try {
-    const r = await api('/api/library/backup/restore', { method: 'POST',
+    r = await api('/api/library/backup/restore', { method: 'POST',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rel }) });
-    if (r.status !== 'ok') throw new Error(r.error || '失败');
-    toast('已恢复备份', 'ok');
-    openBackupCenter();
-  } catch (e) { toast('恢复失败: ' + e.message, 'err'); }
+  } catch (e) { toast('切换失败: ' + e.message, 'err'); return; }
+  if (!r || r.status !== 'ok') {
+    showBackupError('⚠ 原图版本切换未完成', r, 'openBackupCenter()');
+    return;
+  }
+  toast('已切换旧版本；当前版本已保留，可随时切回', 'ok');
+  loadLibrary();
+  openBackupCenter();
 }
 
 async function deleteBackup(rel) {
