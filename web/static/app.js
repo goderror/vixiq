@@ -4190,6 +4190,57 @@ window.importFromFiles = () => importLocalImages('files');
 const HEALTH_OK_SHOW_MS = 8000;   // 正常态健康条亮多久后自动收起
 let _healthOkTimer = null;
 
+// ===== 第 5 项: 体检状态口径 (图库健康条 / 设置页 / 体检面板共用) =====
+// never=尚未检查 / running=正在检查 / ok=未发现异常 / issues=有待处理项 / incomplete=检查未完成
+const CHECK_STATE_TEXT = {
+  never: '尚未检查', running: '正在检查', ok: '未发现异常',
+  issues: '有待处理项', incomplete: '检查未完成',
+};
+
+function checkStatusInfo() {
+  const st = window._checkStatus || {};
+  if (st.state) return st;
+  if (checkRunning) {
+    return { state: 'running', text: '正在检查', running: checkRunning,
+             suspicious: 0, todos: 0, last_checked_at: '' };
+  }
+  const rc = lastCheckReport;
+  if (!rc) return { state: 'never', text: '尚未检查', suspicious: 0, todos: 0,
+                    last_checked_at: '' };
+  const sus = (rc.suspicious || []).length, todo = (rc.todos || []).length;
+  return { state: (sus + todo) ? 'issues' : 'ok',
+           text: (sus + todo) ? '有待处理项' : '未发现异常',
+           suspicious: sus, todos: todo, last_checked_at: rc.time || '' };
+}
+
+// 一行状态 + 对应动作; 报告/面板/健康条都用它, 避免三处各写一套文案
+function checkStatusLineHtml() {
+  const st = checkStatusInfo();
+  const when = st.last_checked_at ? ` · ${esc(st.last_checked_at)}` : '';
+  const sus = Number(st.suspicious) || 0, todo = Number(st.todos) || 0;
+  if (st.state === 'running') {
+    return `<span class="lib-sync-line">⏳ 正在检查：${esc(checkStepTitle(st.running || checkRunning || ''))}</span>`;
+  }
+  if (st.state === 'never') {
+    return `<span class="lib-sync-line">🩺 尚未检查</span>` +
+      `<button class="btn accent" onclick="startLibraryCheck()">🔍 检查全部</button>`;
+  }
+  if (st.state === 'incomplete') {
+    const failAt = st.failed_at ? ` · ${esc(st.failed_at)}` : '';
+    const err = st.error ? ` · ${esc(st.error)}` : '';
+    const last = st.last_checked_at ? ` · 上次完成 ${esc(st.last_checked_at)}` : '';
+    return `<span class="lib-sync-line lib-sync-clickable" title="点击查看完整体检报告" onclick="showSelfCheckReport()">⚠ 检查未完成${failAt}${err}${last}</span>` +
+      `<button class="btn ghost" onclick="openCheckReport()">📋 查看报告</button>`;
+  }
+  if (st.state === 'ok') {
+    return `<span class="lib-sync-line health-ok">✓ 未发现异常${when}</span>` +
+      `<button class="btn ghost" onclick="openCheckReport()">📋 查看报告</button>`;
+  }
+  return `<span class="lib-sync-line lib-sync-clickable" title="点击查看完整体检报告" onclick="showSelfCheckReport()">🩺 有待处理项 ${sus + todo}` +
+    `（系统异常 ${sus} · 缺信息 ${todo}）${when}</span>` +
+    `<button class="btn ghost" onclick="openCheckReport()">📋 查看报告</button>`;
+}
+
 function paintLibHealth(flash = false) {
   const bar = $('#lib-health-hint');
   if (!bar) return;
@@ -4212,10 +4263,15 @@ function paintLibHealth(flash = false) {
   // (这条"上次体检：…"一直显示 —— 它是上次的快照, 现在: 解决完了自动消失,
   //  没解决但不想看也能收起; 下次真跑体检会重新显示。)
   const showReport = !!rc && liveN > 0 && !rc.bar_dismissed;
+  // 第 5 项: 体检状态 (未发现异常 / 有待处理 / 检查未完成 / 检查中) 与磁盘健康分开算
+  const cs = checkStatusInfo();
+  const csIssue = ['running', 'issues', 'incomplete'].includes(cs.state);
+  const csLine = (cs.state === 'issues' && rc && rc.bar_dismissed)
+    ? '' : checkStatusLineHtml();
   // 正常态只亮一小会儿: 同步磁盘/刷新/整理文件夹等主动操作后 flash 一下, 8 秒后自动收起;
   // 周期轮询不重新点亮。有异常/体检报告/体检中则一直显示, 直到问题解决。
   const issue = !!(unavailable || miss || empty || bad || pend || norm || incomplete
-                   || showReport || checkRunning);
+                   || showReport || checkRunning || csIssue);
   const tabActive = $('#tab-library').classList.contains('active');
   let visible;
   if (issue) {
@@ -4234,7 +4290,7 @@ function paintLibHealth(flash = false) {
   bar.style.display = visible ? '' : 'none';
   if (!visible) { bar.innerHTML = ''; return; }
   const clean = !!(h && !unavailable && !miss && !empty && !bad && !pend && !norm
-                   && !incomplete && !showReport && !checkRunning);
+                   && !incomplete && !showReport && !checkRunning && !csIssue);
   if (unavailable) {
     bar.innerHTML = `<span class="lib-sync-line">⚠ ${esc(window._libUnavailableReason || '图库不可用：磁盘未连接或图库目录无法访问')}</span>`
       + `<span class="hint">缺失判定与清理已暂缓，磁盘恢复后重新同步即可。</span>`
@@ -4249,12 +4305,10 @@ function paintLibHealth(flash = false) {
     (norm ? `<button type="button" class="health-badge miss" title="点击预览并确认转为 PNG" onclick="openNormalizePreview()">🖼️ 待转为 PNG ${norm}</button>` : '') +
     (empty ? `<button type="button" class="health-badge empty" title="点击查看具体是哪些空文件夹" onclick="showLibHealthDetail('empty')">📁 空目录 ${empty}</button>` : '') +
     (bad ? `<button type="button" class="health-badge bad" title="点击查看具体是哪些损坏文件" onclick="showLibHealthDetail('corrupt')">💥 损坏 ${bad}</button>` : '') +
-    (showReport ? `<span class="lib-sync-line lib-sync-clickable" title="点击查看上次体检的完整明细" onclick="showSelfCheckReport()">🩺 上次体检：待处理 ${liveN}（系统异常 ${susN} · 缺信息 ${todoN}）</span>` : '') +
-    (checkRunning ? `<span class="lib-sync-line">⏳ 体检中：${esc(checkStepTitle(checkRunning))}</span>` : '') +
-    (showReport ? `<button class="btn accent" onclick="showSelfCheckReport()">📋 查看详情</button>` : '') +
-    (showReport ? `<button class="btn ghost icon-btn" title="收起这条提示（报告不删；下次体检会重新显示）" onclick="dismissCheckBar()">✕</button>` : '') +
-    (miss ? `<button class="btn danger" onclick="openMissingCleanup()">🗑️ 清理缺失</button>` : '') +
-    `<button class="btn ghost" onclick="runSelfCheck()">🩺 体检</button>`;
+    (csLine || `<button class="btn ghost" onclick="startLibraryCheck()">🔍 检查全部</button>`) +
+    (cs.state === 'issues' && rc && !rc.bar_dismissed
+      ? `<button class="btn ghost icon-btn" title="收起这条提示（报告不删；下次检查会重新显示）" onclick="dismissCheckBar()">✕</button>` : '') +
+    (miss ? `<button class="btn danger" onclick="openMissingCleanup()">🗑️ 清理缺失</button>` : '');
 }
 
 // 点击健康条徽标 → 看具体是哪些空文件夹 / 缺失作品 / 损坏文件 / 待确认项
@@ -4553,16 +4607,31 @@ window.applyNormalizePending = async function () {
     if (btn) btn.disabled = false;
     return;
   }
-  const fails = (r.items || []).filter(x => x.status !== 'ok');
+  const items = r.items || [];
+  const fails = items.filter(x => x.status !== 'ok');
+  const recycleFails = items.filter(x => x.status === 'ok' && (x.recycle_failed || []).length);
+  const kept = items.filter(x => x.status === 'ok' && x.recycle_skipped);
+  const okCount = items.filter(x => x.status === 'ok').length;
   await libSync(false, false);
   loadLibrary(); loadStats(); loadLibFacets();
-  if (fails.length) {
+  if (fails.length || recycleFails.length || kept.length) {
     const rows = fails.map(x =>
       `<li><code>${esc(x.path || '')}</code><div class="hint">${esc(x.error || x.stage || '失败')}</div></li>`
     ).join('');
+    const recRows = recycleFails.map(x =>
+      `<li><code>${esc(x.path || '')}</code><div class="hint">PNG 已入库，旧 JPG 仍保留：` +
+      `${esc((x.recycle_failed || []).join('；'))}</div></li>`
+    ).join('');
+    const keptRows = kept.map(x =>
+      `<li><code>${esc(x.path || '')}</code><div class="hint">已按选择保留旧文件，仍占用磁盘空间</div></li>`
+    ).join('');
     openLibModal('🖼️ 转换结果', `
-      <div class="hint">成功 ${r.converted || 0} 张，失败 ${fails.length} 张。失败项保留原文件，可重新预览后再试。</div>
-      <ul>${rows}</ul>
+      <div class="hint">${fails.length
+        ? `成功 ${okCount} 张，失败 ${fails.length} 张。失败项保留原文件，可重新预览后再试。`
+        : `已转为 PNG · 成功 ${okCount} 张。`}</div>
+      ${fails.length ? `<div class="hint" style="margin-top:10px">失败项：</div><ul>${rows}</ul>` : ''}
+      ${recycleFails.length ? `<div class="hint" style="margin-top:10px">PNG 已入库，旧 JPG 仍保留（可稍后手动清理）：</div><ul>${recRows}</ul>` : ''}
+      ${kept.length ? `<div class="hint" style="margin-top:10px">旧文件仍占用磁盘：</div><ul>${keptRows}</ul>` : ''}
       <div class="btn-row"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>
     `, { lg: true });
     return;
@@ -4587,21 +4656,24 @@ let checkOutline = [];        // 体检项定义 (后端下发, 前端不硬编�
 let checkSteps = {};          // 各体检项最近一次结果
 let checkProgress = {};       // 当前进度 {step,done,total,current}
 let checkRunning = null;      // 正在跑的体检项名 (null = 空闲)
+let checkStartGraceUntil = 0; // 刚点启动的短暂宽限: 后台线程可能还没把 running 写上
 let checkWatching = false;    // 是否在盯一次运行 (结束时要自动刷新报告)
 let lastCheckReport = null;   // 最近一次报告 {time,suspicious[],todos[],ignored}
 let pendingTask = null;       // 上次异常中断、等用户决定是否继续的任务
 
+const CHECK_LOCAL_TITLES = { inspect: '🔍 检查全部（只读）' };
+
 function checkStepTitle(name) {
   const it = (checkOutline || []).find(x => x.name === name);
-  return it ? it.title : (name || '');
+  return it ? it.title : (CHECK_LOCAL_TITLES[name] || name || '');
 }
 
 function _setCheckBtns() {
   const busy = !!checkRunning;
-  [['#lib-selfcheck-btn', '🩺 体检'], ['#set-selfcheck-btn', '🩺 体检']].forEach(([sel, txt]) => {
+  [['#lib-selfcheck-btn', '🩺 体检'], ['#set-selfcheck-btn', '🔍 检查全部']].forEach(([sel, txt]) => {
     const b = $(sel); if (!b) return;
     b.disabled = busy;
-    b.textContent = busy ? '🩺 体检中…' : txt;
+    b.textContent = busy ? '⏳ 检查中…' : txt;
   });
 }
 
@@ -4629,16 +4701,27 @@ async function refreshCheckStatus() {
   checkOutline = r.outline || checkOutline;
   checkSteps = r.steps || {};
   checkProgress = r.progress || {};
+  if (r.status) window._checkStatus = r.status;
   const run = r.running || null;
+  if (!run && checkWatching && Date.now() < checkStartGraceUntil) {
+    // 启动请求已成功, 后台线程还没开始: 保留本地「检查中」状态, 继续轮询
+    paintCheckPanel();
+    paintLibHealth();
+    return;
+  }
   if (run) checkWatching = true;
   checkRunning = run;
   _setCheckBtns();
   paintCheckPanel();
+  paintSelfCheckCard();
   if (!run && checkWatching) {
     checkWatching = false;
     await loadCheckReport();       // 跑完 → 拉回报告并重画图库顶部提示
-    libSync(); loadStats(); loadLibrary(); loadLibFacets();
+    loadLibrary(); loadStats(); loadLibFacets();
     setLastAction('library', [], '刚跑完的体检');
+    paintLibHealth(true);          // 正常态也让用户看到「未发现异常」8 秒
+  } else {
+    paintLibHealth();
   }
   // 空闲且面板没开着 → 没必要继续轮询
   const modal = $('#lib-modal');
@@ -4688,14 +4771,16 @@ function paintCheckPanel() {
   if (!el) return;
   const rc = (lastCheckReport || {});
   el.innerHTML =
-    `<div class="hint">各项可单独运行、单独查看结果。</div>` +
+    `<div class="chk-status">${checkStatusLineHtml()}</div>` +
+    `<div class="hint">「检查全部」只读：不联网、不写库、不动文件。需要修复时，从报告里对应分组的按钮启动。</div>` +
     `<div class="btn-row">
-       <button class="btn accent" onclick="chkRun('', true)" ${checkRunning ? 'disabled' : ''}>▶ 全部跑一遍</button>
+       <button class="btn accent" onclick="startLibraryCheck()" ${checkRunning ? 'disabled' : ''}>🔍 检查全部</button>
        <button class="btn ghost" onclick="refreshCheckStatus()">🔄 刷新状态</button>
        <button class="btn ghost" onclick="openCheckReport()">📋 查看报告</button>
        <button class="btn ghost" onclick="openIgnored()">🙈 已忽略项</button>
      </div>` +
     checkProgressHtml() +
+    `<div class="hint" style="margin-top:10px">修复动作（按需单独运行）：</div>` +
     `<div class="chk-list">${checkItemsHtml()}</div>` +
     `<div class="chk-stats">` +
       chkStatBadge('🔧 系统异常', (rc.suspicious || []).length, 'del') +
@@ -4705,6 +4790,29 @@ function paintCheckPanel() {
     `</div>` +
     recheckHintHtml(rc);
 }
+
+// 第 5 项: 只读检查全部 (不改库/不联网/不动文件)
+async function startLibraryCheck() {
+  if (checkRunning) { toast('已有体检任务在运行，请等它结束', 'err'); return; }
+  try {
+    const r = await api('/api/library/check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inspect: true }),
+    });
+    if (r.status !== 'started') throw new Error(r.error || '启动失败');
+    checkWatching = true;
+    checkStartGraceUntil = Date.now() + 1500;
+    checkRunning = (r.steps && r.steps[0]) || 'inspect';
+    window._checkStatus = { state: 'running', text: '正在检查', running: checkRunning,
+                            suspicious: 0, todos: 0, last_checked_at: '' };
+    _setCheckBtns();
+    startCheckPolling();
+    paintCheckPanel();
+    paintLibHealth();
+    toast('已开始只读检查（不改库、不联网、不动文件）', 'ok');
+  } catch (e) { toast('启动失败: ' + e.message, 'err'); }
+}
+window.startLibraryCheck = startLibraryCheck;
 
 // ⑥ 复检结论: 让"已解决的被清掉 / 变了的更新"看得见,
 // 而不是只给一个总数 —— 否则用户没法判断复检到底干了什么。
@@ -4740,6 +4848,7 @@ async function chkRun(step, all) {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (r.status !== 'started') throw new Error(r.error || '启动失败');
     checkWatching = true;
+    checkStartGraceUntil = Date.now() + 1500;
     checkRunning = (r.steps && r.steps[0]) || step || 'check';
     _setCheckBtns();
     if (!all) toast(`已开始「${checkStepTitle(step)}」`, 'ok');
@@ -4754,6 +4863,7 @@ async function loadCheckReport() {
   try {
     const r = await api('/api/library/check-report');
     if (r.report) lastCheckReport = r.report;
+    if (r.check_status) window._checkStatus = r.check_status;
     window._chkIgnored = r.ignored_items || [];
   } catch (e) { /* 忽略 */ }
   paintLibHealth();
@@ -4773,6 +4883,7 @@ async function loadLastSelfCheck() {
   try {
     const r = await api('/api/library/check-report');
     if (r.report) lastCheckReport = r.report;
+    if (r.check_status) window._checkStatus = r.check_status;
     window._chkIgnored = r.ignored_items || [];
   } catch (e) { /* 忽略 */ }
   paintLibHealth();
@@ -4781,9 +4892,11 @@ async function loadLastSelfCheck() {
     const s = await api('/api/library/check-status');
     checkOutline = s.outline || [];
     checkSteps = s.steps || {};
+    if (s.status) window._checkStatus = s.status;
     if (s.running) { checkWatching = true; startCheckPolling(); }
   } catch (e) { /* 忽略 */ }
   _setCheckBtns();   // 按钮文案/禁用态归一 (不跑体检时也应显示「🩺 体检」)
+  paintCheckPanel();
 }
 
 // ===== 任务运行记录: 上次被拦腰砍断的任务, 提示是否继续 =====
@@ -4824,6 +4937,7 @@ window.resumePendingTask = async function () {
     toast(`已接着跑：${(r.steps || []).map(checkStepTitle).join(' → ')}`, 'ok');
     pendingTask = null;
     checkWatching = true;
+    checkStartGraceUntil = Date.now() + 1500;
     openCheckPanel();
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = '▶ 继续'; }
@@ -4842,21 +4956,32 @@ window.ackPendingTask = async function () {
 };
 
 // ===== 设置页 · 🩺 体检与审批 =====
-// 概览卡片: 上次体检时间 + 可疑项/待办项计数; 「打开体检面板」逐项运行/查看结果
+// 第 5 项: 状态口径与图库健康条一致; 点「查看报告」打开的是同一份报告
 function paintSelfCheckCard() {
   const el = $('#settings-selfcheck');
   if (!el) return;
+  const st = checkStatusInfo();
   const rc = lastCheckReport;
-  if (!rc) {
-    el.innerHTML = '暂无体检报告。点击下方「🩺 体检」开始检查，各项可单独运行。';
-    return;
+  const when = st.last_checked_at ? ` · ${esc(st.last_checked_at)}` : '';
+  const sus = Number(st.suspicious) || 0, todo = Number(st.todos) || 0;
+  let line;
+  if (st.state === 'running') {
+    line = `⏳ 正在检查：${esc(checkStepTitle(st.running || checkRunning || ''))}`;
+  } else if (st.state === 'never') {
+    line = '🩺 尚未检查 · 点「检查全部」开始（只读，不改库、不联网、不动文件）';
+  } else if (st.state === 'incomplete') {
+    const failAt = st.failed_at ? ` · ${esc(st.failed_at)}` : '';
+    const err = st.error ? ` · ${esc(st.error)}` : '';
+    const last = st.last_checked_at ? ` · 上次完成 ${esc(st.last_checked_at)}` : '';
+    line = `⚠ 检查未完成${failAt}${err}${last}`;
+  } else if (st.state === 'ok') {
+    line = `✓ 未发现异常${when}`;
+  } else {
+    line = `🩺 有待处理项 ${sus + todo}（系统异常 ${sus} · 缺信息 ${todo}）${when}`;
   }
-  const sus = (rc.suspicious || []).length, todo = (rc.todos || []).length;
-  el.innerHTML = `上次体检 <strong>${esc(rc.time || '—')}</strong> · ` +
-    chkStatBadge('系统异常', sus, 'del') +
-    chkStatBadge('缺信息', todo, 'upd') +
-    (rc.ignored ? ` · 已忽略 ${rc.ignored} 项` : '') +
-    (rc.from_disk ? ' · 重启前的结果' : '');
+  el.innerHTML = line +
+    (rc && rc.ignored ? ` · 已忽略 ${rc.ignored} 项` : '') +
+    (rc && rc.from_disk ? ' · 重启前的结果' : '');
 }
 
 // ===== 设置页 · 📋 操作记录 (增/改/删审计) =====
@@ -4919,6 +5044,9 @@ window.clearOperations = clearOperations;
 const CHK_GROUPS = [
   ['missing_file', '⚠ 文件丢失：数据库有记录，但磁盘图片文件已找不到（可清理记录，或重新下载）',
    `<button class="btn danger" onclick="cleanMissing()">🗑️ 预览并清理这类记录</button>`],
+  ['scan_incomplete', '⚠ 检查范围不完整：有目录/文件读不了，这些范围暂不判定缺失（原登记保留）', ''],
+  ['sync_pending', '🔄 待同步：磁盘发现新图片或路径变化，尚未写入图库索引',
+   `<button class="btn accent" onclick="showSyncResult()">🔄 查看同步结果</button>`],
   ['corrupt', '💥 损坏图片：文件存在但无法正常打开', ''],
   ['duplicate', '🧩 重复图片：同一文件在图库中存在多份副本',
    `<button class="btn accent" onclick="dedupDups()">🧹 清理重复副本（每组保留画师文件夹内一份）</button>`],
@@ -4928,7 +5056,11 @@ const CHK_GROUPS = [
   ['loose_image', '📂 未整理：散落在图库根目录且无法自动归档的图片（可用反搜识别作者）',
    `<button class="btn accent" onclick="switchTab('reverse')">🔎 去反搜归类</button>`],
   ['no_author', '👤 缺作者名：文件夹名里也读不到作者名（可逐条「指定作者」，或对本地有图的作品「反搜来源」溯源）', ''],
+  ['metadata_missing', '⬇ 待补资料：缺少标题 / 标签 / 封面等（联网补全，检查本身不联网）',
+   `<button class="btn accent" onclick="runComplementFromReport()">⬇ 补全资料</button>`],
   ['metadata_failed', '🔧 元数据补全失败：作品可能已限流或需重新登录（作品页确认失效的已自动标记，不再重复报）', ''],
+  ['tidy_plan', '🧹 待整理：可执行的移动 / 改名 / 归类计划',
+   `<button class="btn accent" onclick="openTidyPreview()">🧹 打开整理预览</button>`],
 ];
 const CHK_TYPE_NAME = {};
 CHK_GROUPS.forEach(g => { CHK_TYPE_NAME[g[0]] = g[1].split('：')[0]; });
@@ -4949,7 +5081,7 @@ function chkItemHtml(s, idx) {
   return `<li>${t}<span class="sus-acts">${idChip}${acts.join('')}</span></li>`;
 }
 
-function chkSectionHtml(title, note, items, base, emptyText) {
+function chkSectionHtml(title, note, items, emptyText) {
   let html = `<h4 class="chk-sec">${title}<span class="chk-sec-note">${note}</span>` +
     `<span class="chk-sec-num">${items.length} 项</span></h4>`;
   if (!items.length) return html + `<div class="hint">${emptyText}</div>`;
@@ -4967,21 +5099,47 @@ function chkSectionHtml(title, note, items, base, emptyText) {
     }
     html += `<div class="health-group"><div class="health-group-title">${gtitle} · ${arr.length}</div>` +
       `<ul class="health-list">` +
-      arr.slice(0, 60).map(s => chkItemHtml(s, base + items.indexOf(s))).join('') +
-      (arr.length > 60 ? `<li class="hint">…其余 ${arr.length - 60} 项从略（可逐条忽略）</li>` : '') +
-      `</ul>${act ? `<div class="btn-row">${act}</div>` : ''}</div>`;
-  }
-  const known = new Set(CHK_GROUPS.map(g => g[0]));
-  const rest = items.filter(s => !known.has(s.type));
-  if (rest.length) {
-    html += `<div class="health-group"><div class="health-group-title">其他 · ${rest.length}</div><ul class="health-list">` +
-      rest.slice(0, 60).map(s => chkItemHtml(s, base + items.indexOf(s))).join('') + `</ul></div>`;
+      arr.slice(0, 60).map(s => chkItemHtml(s, (window._chkItems || []).indexOf(s))).join('') +
+      (arr.length > 60 ? `<li class="hint">…其余 ${arr.length - 60} 项从略</li>` : '') +
+      `</ul>` +
+      (arr.length > 60
+        ? `<div class="btn-row"><button class="btn ghost" onclick="openCheckItems('${type}', 0)">查看全部 ${arr.length} 项</button></div>`
+        : '') +
+      (act ? `<div class="btn-row">${act}</div>` : '') + `</div>`;
   }
   return html;
 }
 
+// 第 5 项返修 ③: 报告条目分页查看 (列表只显示前 60 条时, 末尾条目也能看到)
+window.openCheckItems = async function (type, offset = 0) {
+  offset = Math.max(0, Number(offset) || 0);
+  let r;
+  try {
+    r = await api(`/api/library/check-items?type=${encodeURIComponent(type)}` +
+                  `&offset=${offset}&limit=100`);
+  } catch (e) { toast('读取条目失败: ' + e.message, 'err'); return; }
+  const items = r.items || [];
+  const total = Number(r.total) || 0;
+  const rows = items.map(x => {
+    const aid = x.artwork_id
+      ? `<span class="id-chip" title="点击跳到图库定位这个作品" onclick="libFocusArtwork('${esc(String(x.artwork_id))}')">${esc(String(x.artwork_id))}</span>`
+      : '';
+    return `<li>${esc(x.text || '')}<span class="sus-acts">${aid}</span></li>`;
+  }).join('');
+  const page = Math.floor(offset / 100) + 1;
+  const pages = Math.max(1, Math.ceil(total / 100));
+  openLibModal(`📋 ${CHK_TYPE_NAME[type] || type} · ${total} 项`, `
+    <div class="hint">第 ${page} / ${pages} 页 · 共 ${total} 项（每页 100）</div>
+    <ul class="health-list">${rows || '<li class="hint">没有条目</li>'}</ul>
+    <div class="btn-row">
+      ${offset > 0 ? `<button class="btn ghost" onclick="openCheckItems('${type}', ${Math.max(0, offset - 100)})">‹ 上一页</button>` : ''}
+      ${offset + 100 < total ? `<button class="btn ghost" onclick="openCheckItems('${type}', ${offset + 100})">下一页 ›</button>` : ''}
+      <button class="btn ghost" onclick="closeLibModal()">关闭</button>
+    </div>`, { lg: true });
+};
+
 function renderCheckReport(rc, reopen = false) {
-  if (!rc) { toast('还没有体检报告，先点「🩺 体检」跑一遍', 'err'); return; }
+  if (!rc) { toast('尚未检查：先点「🔍 检查全部」', 'err'); return; }
   if (reopen) openLibModal('🩺 体检报告', '', { lg: true });
   // 去重兜底: 服务端已按 (type, ref) 去重, 前端再兜一层 —— 同一件作品若真有**两个不同问题**
   // (如"文件丢了" + "缺作者名"), 那是两条独立的问题, 各占一条是对的; 但完全相同的条目绝不该出现两次。
@@ -4995,23 +5153,49 @@ function renderCheckReport(rc, reopen = false) {
     });
   };
   const sus = uniq(rc.suspicious), todo = uniq(rc.todos);
-  window._chkItems = sus.concat(todo);      // 忽略按钮按下标取条目 (见 chkItemHtml)
-  let html = `<div class="hint">体检时间 ${esc(rc.time || '—')}` +
-    (rc.from_disk ? ' · 重启前的结果，重新运行可刷新' : '') +
+  const all = sus.concat(todo);
+  window._chkItems = all;                    // 忽略按钮按下标取条目 (见 chkItemHtml)
+  const st = checkStatusInfo();
+  let html = `<div class="hint">状态：${esc(st.text || CHECK_STATE_TEXT[st.state] || '—')}` +
+    (st.last_checked_at ? ` · ${esc(st.last_checked_at)}` : '') +
+    (rc.mode === 'inspect' ? ' · 只读检查（不改库、不联网、不动文件）' : '') +
+    (rc.from_disk ? ' · 重启前的结果，重新检查可刷新' : '') +
     (rc.ignored ? ` · 已忽略 ${rc.ignored} 项` : '') + `</div>`;
-  // 两类问题的说明折起来: 常看报告的人不需要每次读一遍判据, 第一次来的人点开就能懂
-  html += `<details class="chk-help"><summary>两类问题的区别</summary>` +
-    `<div class="hint"><b>🔧 系统异常</b>：可用界面上的按钮直接修复（重下修复、清理空文件夹等）。<br>` +
-    `<b>✋ 缺信息</b>：需要人工补齐的字段（作者名、来源等）。<br>` +
-    `同一作品存在多个不同问题时分别列出。</div></details>`;
+  if (rc.scan_incomplete) {
+    html += `<div class="hint">⚠ 本次扫描范围不完整：` +
+      `${(rc.unreadable_dirs || []).length} 个目录/文件无法读取；相关范围保留原登记、暂不判定缺失。</div>`;
+  }
+  // 四组: 缺失 / 损坏 / 待补资料 / 待整理目录; 每组动作启动现有修复入口
+  html += `<details class="chk-help"><summary>四类结果与修复入口</summary>` +
+    `<div class="hint"><b>⚠ 缺失</b>：数据库有记录但文件丢了，或磁盘新增/移动尚未写入索引 → 同步结果 / 清理缺失。<br>` +
+    `<b>💥 损坏</b>：文件存在但打不开 → 重下修复。<br>` +
+    `<b>✋ 待补资料</b>：缺作者名、标题、标签等 → 补全资料或逐条指定 / 反搜。<br>` +
+    `<b>📁 待整理目录</b>：空夹、散落图、命名与重复副本 → 打开整理预览。<br>` +
+    `检查本身只读；以上修复动作都在对应分组里单独启动。</div></details>`;
   html += recheckBlockHtml(rc);              // ⑥ 复检干了什么: 清掉哪些 / 哪些变了
-  html += chkSectionHtml('🔧 系统异常', '可一键修复', sus, 0,
-    rc.corrupt_verified === false
-      ? '本次未校验图片损坏情况，运行「① 磁盘对账」后可确认'
-      : '无异常项');
-  html += chkSectionHtml('✋ 缺信息', '需人工补齐', todo, sus.length, '无待办项');
+  const groups = [
+    ['⚠ 缺失', '文件缺失或磁盘新增未入索引',
+     ['missing_file', 'scan_incomplete', 'sync_pending'], '无缺失项'],
+    ['💥 损坏', '文件存在但无法正常打开', ['corrupt'], '无损坏项'],
+    ['✋ 待补资料', '需人工或联网补全', ['no_author', 'metadata_missing', 'metadata_failed'],
+     '无待补资料'],
+    ['📁 待整理目录', '目录、命名与重复副本',
+     ['empty_dir', 'duplicate', 'loose_image', 'legacy_name', 'tidy_plan'], '无待整理项'],
+  ];
+  const known = new Set(groups.flatMap(g => g[2]));
+  for (const [title, note, types, empty] of groups) {
+    html += chkSectionHtml(title, note, all.filter(x => types.includes(x.type)), empty);
+  }
+  const metaTotal = Number(rc.metadata_missing_total) || 0;
+  const metaShown = all.filter(x => x.type === 'metadata_missing').length;
+  if (metaTotal > metaShown) {
+    html += `<div class="hint">待补资料共 ${metaTotal} 项，本报告列出 ${metaShown} 项；` +
+      `其余可点「补全资料」按现有分批补全流程处理。</div>`;
+  }
+  const rest = all.filter(x => !known.has(x.type));
+  if (rest.length) html += chkSectionHtml('其他', '需人工确认', rest, '');
   html += `<div class="btn-row">
-      <button class="btn accent" onclick="openCheckPanel()">🩺 打开体检面板</button>
+      <button class="btn accent" onclick="openCheckPanel()">🩺 体检面板</button>
       <button class="btn ghost" onclick="openIgnored()">🙈 已忽略项</button>
       <button class="btn ghost" onclick="closeLibModal()">关闭</button>
     </div>`;
@@ -5156,6 +5340,22 @@ window.susSaveAuthor = async function (aid) {
 window.susReverseSource = function (aid) {
   closeLibModal();   // 反搜会切到反搜页并用弹窗/页内结果, 先收起报告 (报告还在 lastCheckReport, 随时可再看)
   sourceSearch(aid);
+};
+
+// 报告「待补资料」分组动作: 联网补全缺标题/标签/封面的作品
+// (检查本身不联网; 用户点这个按钮才启动现有补全链路)
+window.runComplementFromReport = async function () {
+  closeLibModal();
+  try {
+    const r = await api('/api/library/complement', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 50 }),
+    });
+    if (r.status === 'running') { toast('已有资料补全任务在运行', 'err'); return; }
+    if (r.status !== 'started') throw new Error(r.error || '启动失败');
+    toast('已开始补全资料；完成后重新检查即可看到结果', 'ok');
+    setLastAction('library', [], '补全资料');
+  } catch (e) { toast('补全资料失败: ' + e.message, 'err'); }
 };
 
 // 处理完一条 (如已指定作者) → 从当前报告里移除, 并刷新图库/统计

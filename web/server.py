@@ -313,7 +313,8 @@ _check_state = {
     "steps": {},         # {步骤名: {ok, at, summary, error}} —— 每步最近一次结果
     "progress": {},      # {step, done, total, current, started_at}
     "report": None,      # 最近一次报告 {time, suspicious[], todos[], ignored}
-    "last_run": None,    # {steps, at, fixed} 最近一次运行
+    "last_run": None,    # {steps, at, fixed, ok, errors} 最近一次运行 (失败也记)
+    "last_success": None,  # {at, mode} 最近一次完整成功 (失败时保留它作"上次完成时间")
     "journal_key": None, # 当前任务在任务记录里的键 (check:all / check:<步骤>)
 }
 _CHECK_STEPS = [
@@ -345,6 +346,81 @@ def _check_resumable(name: str) -> bool:
     所以都算可继续。留着这个判断, 是为了将来出现真正不可续跑的任务时能如实告诉用户
     "任务异常中断", 而不是给一个点了也没用的「继续」按钮。"""
     return name in _CHECK_TITLE_OF
+
+
+# 第 5 项「体检」: 只读检查入口。它不写库、不联网、不动磁盘, 只负责扫描与汇总;
+# 联网补资料 / 写库修复 / 移动文件仍由报告里的分组动作或各修复步骤单独启动。
+_CHECK_INSPECT_NAME = "inspect"
+_CHECK_TITLE_OF[_CHECK_INSPECT_NAME] = "🔍 检查全部（只读）"
+_CHECK_DESC_OF[_CHECK_INSPECT_NAME] = (
+    "扫描磁盘与数据库、校验损坏、统计待补资料与待整理目录；不改库、不联网、不动文件")
+
+
+def _ck_status() -> dict:
+    """体检状态 (图库健康条与设置页共用同一份口径)。
+
+    state: never=尚未检查 / running=正在检查 / ok=未发现异常 /
+           issues=有待处理项 / incomplete=检查未完成。
+    失败或中断优先于「尚未检查」: 首次失败没有上次完成时间, 但必须显示未完成与原因;
+    曾经成功过则保留最近一次成功完成时间, 当前失败另行显示。"""
+    rep = _check_state.get("report") or {}
+    running = _check_state.get("running")
+    last = _check_state.get("last_run") or {}
+    last_ok = last.get("ok")
+    errors = [str(x) for x in (last.get("errors") or []) if str(x).strip()]
+    interrupted = None
+    if not running and last_ok is not False:
+        try:
+            interrupted = next(
+                (x for x in _journal_pending()
+                 if str(x.get("key") or "").startswith("check")), None)
+        except Exception:
+            interrupted = None
+    if not interrupted and last_ok is False:
+        pass
+    sus = len(rep.get("suspicious") or [])
+    todo = len(rep.get("todos") or [])
+    if running:
+        state, text = "running", f"正在检查：{_check_title(running)}"
+    elif last_ok is False or interrupted:
+        state, text = "incomplete", "检查未完成"
+    elif not rep:
+        state, text = "never", "尚未检查"
+    elif sus + todo == 0:
+        state, text = "ok", "未发现异常"
+    else:
+        state, text = "issues", f"有待处理项 {sus + todo}"
+    failed_at = ""
+    if last_ok is False:
+        failed_at = str(last.get("at") or "")
+    elif interrupted:
+        failed_at = str(interrupted.get("updated_at") or "")
+        if not errors:
+            errors = [str(interrupted.get("note") or "上次检查被中断，可重新检查")]
+    success = _check_state.get("last_success") or {}
+    success_at = str(success.get("at") or "")
+    if not success_at and rep and rep.get("run_ok", True) is not False:
+        success_at = str(rep.get("time") or "")
+    # 第 5 项复验 ①: 本次任务的模式/根目录可用性/扫描范围优先于报告默认值
+    last_mode = str(last.get("mode") or "")
+    mode = last_mode or str(rep.get("mode") or "")
+    if "root_available" in last:
+        root_available = bool(last.get("root_available"))
+    else:
+        root_available = bool(rep.get("root_available", True))
+    if "scan_incomplete" in last:
+        scan_incomplete = bool(last.get("scan_incomplete"))
+    else:
+        scan_incomplete = bool(rep.get("scan_incomplete", False))
+    return {"state": state, "text": text,
+            "suspicious": sus, "todos": todo,
+            "last_checked_at": success_at,
+            "failed_at": failed_at,
+            "error": "；".join(errors)[:300],
+            "interrupted": bool(interrupted),
+            "running": running, "mode": mode,
+            "root_available": root_available,
+            "scan_incomplete": scan_incomplete}
 
 
 # ---------- 任务运行记录 (落盘): 异常中断检测 + 下次启动提示是否继续 ----------
@@ -1180,10 +1256,15 @@ _NORMALIZE_PREVIEWS_LOCK = threading.Lock()
 _NORMALIZE_PREVIEW_TTL = 600
 
 
-def _normalize_preview_issue(item: dict, ident: dict, png_size: int) -> str:
-    """4B-3: 登记一次性「待转 PNG」预览令牌, 绑定源文件身份。"""
+def _normalize_preview_issue(item: dict, ident: dict, png_size: int,
+                             page: "dict | None" = None) -> str:
+    """4B-3: 登记一次性「待转 PNG」预览令牌, 绑定源文件身份与页归属/登记。
+
+    确认时逐项比对: 源路径/内容指纹 + 页归属 + 页当前文件指纹 + 格式选择。
+    4B-3 返修 ②: 预览后原路径改登记到别页或页换图/改格式选择, 旧令牌必须作废。"""
     import uuid
     token = uuid.uuid4().hex
+    page = page or {}
     data = {
         "path": str(item.get("path") or "").replace("\\", "/"),
         "target_rel": str(item.get("target_rel") or "").replace("\\", "/"),
@@ -1193,6 +1274,9 @@ def _normalize_preview_issue(item: dict, ident: dict, png_size: int) -> str:
         "foreign": bool(item.get("foreign")),
         "registered": str(item.get("registered") or "").replace("\\", "/"),
         "registered_exists": bool(item.get("registered_exists")),
+        "registered_md5": str(page.get("md5") or ""),
+        "registered_size": str(page.get("file_size_bytes") or ""),
+        "format_choice": str(page.get("format_choice") or "").lower(),
         "format": str(item.get("format") or ""),
         "created_at": time.time(),
         "png_size": int(png_size or 0),
@@ -8397,6 +8481,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     items.append(item)
                     continue
                 out = tmpdir / f"n{idx}_{src.stem}.png"
+                try:
+                    ident_before = _jpg_source_identity(src)
+                except Exception as e:
+                    item["status"] = "error"
+                    item["error"] = f"读取源文件失败：{str(e).splitlines()[0]}"
+                    items.append(item)
+                    continue
                 r = normalize_to_png(src, out_path=out, delete_source=False,
                                      overwrite=False)
                 if not r.get("ok"):
@@ -8416,13 +8507,19 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     item["error"] = f"读取源文件失败：{str(e).splitlines()[0]}"
                     items.append(item)
                     continue
+                # 4B-3 返修 ②: 预览过程中源图被改写 → 不签发令牌 (编码内容与身份不一致)
+                if ident != ident_before:
+                    item["status"] = "error"
+                    item["error"] = "源文件在预览过程中发生变化，请重新预览"
+                    items.append(item)
+                    continue
                 item["status"] = "ready"
                 item["png_size"] = int(r["current_size"])
                 item["saved_bytes"] = int(item["size"]) - int(r["current_size"])
                 item["saved_pct"] = (round(item["saved_bytes"] * 100.0 / item["size"], 1)
                                      if item["size"] else 0)
                 item["preview_id"] = _normalize_preview_issue(item, ident,
-                                                              r["current_size"])
+                                                              r["current_size"], page)
                 items.append(item)
         finally:
             _cleanup_ingest_tmpdir(tmpdir)
@@ -8446,7 +8543,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     @app.route("/api/library/normalize-pending/apply", methods=["POST"])
     def api_library_normalize_pending_apply():
         """4B-3: 用户确认后把选中的静态图片转换为 PNG, 更新页登记并回收旧文件。"""
-        from core.image_format import actual_format_info, normalize_to_png
+        from core.image_format import (actual_format_info, normalize_to_png,
+                                       PublishRejected)
         from utils.hashutil import md5_of
         data = request.get_json(silent=True) or {}
         req_items = data.get("items") or []
@@ -8511,15 +8609,49 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                      "源文件在预览后发生变化，请重新预览")
                 failed += 1
                 continue
+
+            def _binding():
+                """复核页归属/现图/格式选择, 返回 (page, stage, msg)。
+
+                4B-3 返修 ②: 预览令牌绑定的是「哪一页的哪份现图」, 原路径被改登记
+                到别页、页换了现图或用户改了格式选择时, 旧预览一律作废。"""
+                with _db() as db0:
+                    pref = db0.find_page_by_local_path(path)
+                    page_now = None
+                    if pref:
+                        page_now = db0.get_page_conversion(pref["artwork_id"],
+                                                           pref["page_num"])
+                token_aid = token.get("artwork_id")
+                if token_aid in (None, ""):
+                    if pref:
+                        return None, "registration_changed", \
+                            "该文件在预览后已被登记到作品页，请重新预览"
+                    return None, "", ""
+                want_pg = int(token.get("page") or 0)
+                if (not pref or str(pref.get("artwork_id")) != str(token_aid)
+                        or int(pref.get("page_num") or 0) != want_pg):
+                    return None, "registration_changed", \
+                        "页归属在预览后发生变化，请重新预览"
+                if not page_now:
+                    return None, "registration_changed", "页记录已不存在，请重新预览"
+                cur_rel = str(page_now.get("local_path") or "").replace("\\", "/")
+                if (cur_rel != str(token.get("registered") or "").replace("\\", "/")
+                        or str(page_now.get("md5") or "")
+                        != str(token.get("registered_md5") or "")
+                        or str(page_now.get("file_size_bytes") or "")
+                        != str(token.get("registered_size") or "")
+                        or str(page_now.get("format_choice") or "").lower()
+                        != str(token.get("format_choice") or "")):
+                    return None, "registration_changed", \
+                        "页记录在预览后发生变化，请重新预览"
+                return page_now, "", ""
+
+            page, stage, msg = _binding()
+            if stage:
+                _err({"path": path}, stage, msg)
+                failed += 1
+                continue
             # 复核当前页状态: 已主动选 JPG 的页不动, 同页已有别的 PNG 也不覆盖
-            with _db() as db:
-                pref = db.find_page_by_local_path(path)
-                page = None
-                if pref:
-                    page = db.get_page_conversion(pref["artwork_id"], pref["page_num"])
-                elif token.get("artwork_id") not in (None, ""):
-                    page = db.get_page_conversion(str(token["artwork_id"]),
-                                                   int(token.get("page") or 0))
             if page and str(page.get("format_choice") or "").lower() == "jpg":
                 _err({"path": path}, "chosen_jpg",
                      "该页已主动选用 JPG，继续沿用所选格式")
@@ -8527,17 +8659,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 continue
             if page:
                 cur_rel = str(page.get("local_path") or "").replace("\\", "/")
-                if cur_rel and cur_rel != path:
-                    if cur_rel == target_rel and (img_root / cur_rel).is_file():
-                        _err({"path": path}, "target_conflict",
-                             "目标 PNG 已被同页使用，未覆盖")
-                        failed += 1
-                        continue
-                    if (img_root / cur_rel).is_file():
-                        _err({"path": path}, "registration_changed",
-                             "页记录在预览后发生变化，请重新预览")
-                        failed += 1
-                        continue
+                if cur_rel and cur_rel == target_rel \
+                        and (img_root / cur_rel).is_file():
+                    _err({"path": path}, "target_conflict",
+                         "目标 PNG 已被同页使用，未覆盖")
+                    failed += 1
+                    continue
             if target.exists():
                 _err({"path": path}, "target_conflict",
                      "目标 PNG 已存在，未覆盖", target_rel=target_rel)
@@ -8552,10 +8679,31 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                      info.get("error") or "该文件不是可转换的静态图片")
                 failed += 1
                 continue
+
+            def _recheck_before_publish():
+                """编码完成、正式发布前再次核对源身份与页登记 (4B-3 返修 ①②)。"""
+                try:
+                    ident2 = _jpg_source_identity(src)
+                except Exception as e:
+                    raise PublishRejected(
+                        "source_changed",
+                        f"读取源文件失败：{str(e).splitlines()[0]}")
+                if ident2 != ident:
+                    raise PublishRejected("source_changed",
+                                          "源文件在确认过程中发生变化，请重新预览")
+                _page2, stage2, msg2 = _binding()
+                if stage2:
+                    raise PublishRejected(stage2, msg2)
+
+            # 发布本身拒绝覆盖: 目标在预检后才出现时报告冲突, 不碰已有文件
             r = normalize_to_png(src, out_path=target, delete_source=False,
-                                 overwrite=False)
+                                 overwrite=False,
+                                 before_publish=_recheck_before_publish)
             if not r.get("ok"):
-                stage = "target_conflict" if r.get("reason") == "exists" else "convert_failed"
+                stage = {"exists": "target_conflict",
+                         "source_changed": "source_changed",
+                         "registration_changed": "registration_changed"}.get(
+                             str(r.get("reason") or ""), "convert_failed")
                 _err({"path": path}, stage, r.get("note") or "转换失败")
                 failed += 1
                 continue
@@ -8572,6 +8720,14 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                      png_rel=target_rel)
                 failed += 1
                 continue
+            # 发布后、登记前再核对一次: 期间页归属/现图被改也不写库
+            page_now, stage_now, msg_now = _binding()
+            if stage_now:
+                _remove_if_identity(target, new_md5, new_size)
+                _err({"path": path}, stage_now, msg_now, png_rel=target_rel)
+                failed += 1
+                continue
+            page = page_now
             aid = str(page["artwork_id"]) if page else (
                 str(token["artwork_id"]) if token.get("artwork_id") not in (None, "") else None)
             pg = int(page["page_num"]) if page else (
@@ -8583,10 +8739,11 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 "converted_at": r.get("converted_at"),
                 "current_format": "png", "note": None,
             }
+            created_foreign = None
             try:
                 with _db() as db:
                     if not aid:
-                        db.register_foreign_file(target_rel)
+                        created_foreign = db.register_foreign_file(target_rel)
                         pref2 = db.find_page_by_local_path(target_rel)
                         if not pref2:
                             raise RuntimeError("无法登记转换后的 PNG")
@@ -8600,9 +8757,22 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                         except Exception:
                             pass
             except Exception as e:
-                _err({"path": path}, "register_failed",
-                     f"登记失败，PNG 与旧文件都保留：{str(e).splitlines()[0]}",
-                     png_rel=target_rel)
+                # 4B-3 返修 ③: 只撤回能证明属于本次任务的目标; 旧 JPG 与旧登记原样保留,
+                # 故障消除后可直接重新预览再完成转换。
+                removed = _remove_if_identity(target, new_md5, new_size)
+                if created_foreign:
+                    try:
+                        with _db() as db2:
+                            db2.discard_foreign_shell(created_foreign, target_rel)
+                    except Exception:
+                        pass
+                if removed:
+                    msg = ("登记失败，已撤回本次生成的 PNG，旧文件保留，"
+                           f"可重新预览后再试：{str(e).splitlines()[0]}")
+                else:
+                    msg = ("登记失败，旧文件保留；本次 PNG 未能确认身份，已留在磁盘："
+                           f"{str(e).splitlines()[0]}")
+                _err({"path": path}, "register_failed", msg, png_rel=target_rel)
                 failed += 1
                 continue
             item_out = {
@@ -9507,6 +9677,50 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         rep_d["corrupt_verified"] = True
         _save_self_check_compat()
 
+    def _ck_step_inspect(ctx: dict) -> dict:
+        """第 5 项「检查全部」: 只读扫描磁盘/数据库并统计待办。
+
+        不调用任何修复动作: 不回填指纹、不重指路径、不补登记、不联网、不移动文件。
+        产出的 rec / 待补资料 / 整理计划交给 ⑥ 汇总成报告; 修复由报告上的分组动作启动。
+        根目录不可访问或子目录读不了时, 任务以失败结束 (状态=检查未完成), 但已确认的
+        发现与未扫范围仍写进报告, 原有登记保持不动。"""
+        _ck_progress("inspect", 0, 2, "扫描磁盘与数据库…")
+        img_root = _ck_img_root()
+        with _db() as db:
+            rec = db.reconcile_output(img_root, verify_corrupt=True, write=False)
+        ctx["rec"] = rec
+        ctx["corrupt_keep"] = list(getattr(rec, "corrupt_files", None) or [])
+        ctx["inspect"] = True
+        ctx["scan_incomplete"] = bool(getattr(rec, "scan_incomplete", False))
+        ctx["unreadable_dirs"] = list(getattr(rec, "unreadable_dirs", []) or [])
+        root_ok = bool(getattr(rec, "root_available", True))
+        scope_ok = root_ok and not ctx["scan_incomplete"]
+        if scope_ok:
+            # 只读对账完整覆盖「缺失/损坏/空夹/重复」→ ⑥ 才可据此判定已解决项
+            ctx.setdefault("_ran", set()).add("reconcile")
+        if not root_ok:
+            ctx["skip_report"] = True   # 不跑报告复核, 上一份报告保留
+            raise RuntimeError("图库不可用：磁盘未连接或图库目录无法访问")
+        _ck_progress("inspect", 1, 2, "检查待补资料与待整理目录…")
+        with _db() as db:
+            # 第 5 项返修: 列表与总数用同一口径; 列表不再截断到 500
+            meta_ids = db.works_missing_metadata(limit=100000)
+            meta_total = db.count_works_missing_metadata()
+            plans = _tidy_build_plans(db, img_root)
+        ctx["metadata_missing_ids"] = meta_ids
+        ctx["metadata_missing_total"] = meta_total
+        ctx["tidy_plans"] = plans
+        _ck_progress("inspect", 2, 2, "")
+        if not scope_ok:
+            raise RuntimeError(
+                f"有 {len(ctx['unreadable_dirs'])} 个目录/文件无法读取，检查范围不完整")
+        return {"scanned": int(getattr(rec, "scanned_images", 0) or 0),
+                "missing": len(rec.missing_ids or []),
+                "corrupt": len(ctx["corrupt_keep"]),
+                "new_files": int(getattr(rec, "new_pages_linked", 0) or 0),
+                "relinked": int(getattr(rec, "pages_relinked", 0) or 0),
+                "metadata_missing": meta_total, "tidy": len(plans)}
+
     def _ck_step_reconcile(ctx: dict) -> dict:
         """扫描磁盘↔数据库一致性, 并校验图片能否打开 (最重的磁盘 I/O, 只读＋路径自愈)。
 
@@ -9819,7 +10033,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     #     可疑项 = 系统异常, 通常能自动/一键修 (文件损坏/丢失/重复/数据存疑/空夹);
     #     待办项 = 需人工决策的 (缺作者名要指定或反搜; 散落图要识别来源)。
     #   旧实现混在一起, 于是"待办"永远挂在"可疑"里, 数字看着永远不降。
-    _CK_SUSPICIOUS = {"corrupt", "missing_file", "duplicate", "legacy_name", "empty_dir"}
+    _CK_SUSPICIOUS = {"corrupt", "missing_file", "duplicate", "legacy_name",
+                      "empty_dir", "sync_pending"}
     # 其余类型 (no_author / loose_image / metadata_failed …) 一律进「待办项」
     # 两个桶的判据 = **谁能修** (不是严重程度): 可疑项=系统异常、有现成的一键处理;
     # 待办项=缺信息、只能人工补。前端标题就按这个写。
@@ -9833,7 +10048,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     #   新增 → 并入; ③ **本次没条件复检的**(对应来源步骤没跑) → 保留并标注, 绝不误清。
     # 为什么 ③ 必须有: 单跑本步时 ④ 的"联网补全失败"、⑤ 的"历史文件名存疑"都拿不到,
     #   若把它们当成"已解决"清掉, 用户会以为问题消失了 —— 那是骗人, 比不报更糟。
-    _CK_FRESH_ALWAYS = {"loose_image", "no_author"}      # 现场重算, 任何情况下都能复检
+    _CK_FRESH_ALWAYS = {"loose_image", "no_author", "metadata_missing",
+                        "tidy_plan", "sync_pending", "scan_incomplete"}
     _CK_FRESH_BY_STEP = {"reconcile": {"missing_file", "empty_dir", "duplicate"},
                          "organize": {"legacy_name"},
                          "metadata": {"metadata_failed"}}
@@ -9857,13 +10073,20 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             # 损坏校验只属于「① 磁盘对账」, 所以这里要如实标注"没校验过损坏",
             # 否则用户会以为"可疑 0 项 = 一切正常"。
             with _db() as db:
-                rec = db.reconcile_output(img_root, verify_corrupt=False)
+                rec = db.reconcile_output(img_root, verify_corrupt=False, write=False)
             ctx["rec"] = rec
             light = True
         keep_corrupt = ctx.get("corrupt_keep")
         verified_corrupt = keep_corrupt is not None      # ① 跑过了才算真校验过损坏
         if keep_corrupt is None:
             keep_corrupt = list(getattr(rec, "corrupt_files", None) or [])
+        root_ok = bool(getattr(rec, "root_available", True))
+        scan_incomplete = bool(getattr(rec, "scan_incomplete", False))
+        scope_ok = root_ok and not scan_incomplete
+        unreadable = list(getattr(rec, "unreadable_dirs", []) or [])
+        if not root_ok:
+            # 第 5 项复验 ①: 根目录不可用时不重算报告, 上一份可查看的报告原样保留
+            raise RuntimeError("图库不可用：跳过报告复核，保留上一份报告")
         with _db() as db:
             rows = db.list_recent_artworks(limit=100000)
             row_of = {str(r["artwork_id"]): r for r in rows}
@@ -9895,6 +10118,17 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         def _add(kind: str, ref: str, text: str, **extra):
             items.append(dict(type=kind, ref=str(ref), text=text, **extra))
 
+        # 第 5 项返修 ②: 扫描范围不完整时明确标注, 不把「没扫到」当成「没有问题」
+        if not root_ok:
+            _add("scan_incomplete", "root",
+                 "图库目录不可访问：本次未检查磁盘文件，已有登记保持不变",
+                 unreadable_dirs=[])
+        elif scan_incomplete:
+            _add("scan_incomplete", f"dirs:{len(unreadable)}",
+                 f"有 {len(unreadable)} 个目录/文件无法读取，本次检查范围不完整；"
+                 f"这些范围保留原登记、暂不判定缺失",
+                 unreadable_dirs=unreadable[:50])
+
         for aid in (rec.missing_ids or []):
             _add("missing_file", str(aid),
                  f"{_artwork_label(row_of.get(str(aid)), str(aid))}"
@@ -9922,11 +10156,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             _add("duplicate", str(dup.get("md5") or (paths_[0] if paths_ else aid)),
                  f"{who} 有 {len(paths_)} 份重复副本：" + "；".join(paths_),
                  md5=dup.get("md5"), paths=paths_)
-        for p in sorted(img_root.iterdir()):
-            if p.is_file() and p.suffix.lower() in _TIDY_IMG_EXT:
-                _add("loose_image", p.name,
-                     f"未整理图片「{p.name}」：无法确定作者（可到反搜页识别后自动归档）",
-                     name=p.name)
+        if root_ok:
+            for p in sorted(img_root.iterdir()):
+                if p.is_file() and p.suffix.lower() in _TIDY_IMG_EXT:
+                    _add("loose_image", p.name,
+                         f"未整理图片「{p.name}」：无法确定作者（可到反搜页识别后自动归档）",
+                         name=p.name)
         for lp in (ctx.get("legacy_pending") or []):
             _add("legacy_name", str(lp.get("name")),
                  f"历史反搜文件「{lp.get('name')}」带存疑前缀 ({lp.get('bracket_id')})，"
@@ -9947,20 +10182,65 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         for i, alert in enumerate(ctx.get("metadata_alerts") or []):
             _add("metadata_failed", f"alert:{i}", str(alert))
 
+        # 待补资料 (第 5 项): 缺标题/标签/封面/ai_type 的 pixiv 作品, 本地即可判定;
+        # 真正联网补全由报告上的「补全资料」动作启动, 检查本身不联网。
+        # 第 5 项返修 ③: 列表与总数用同一口径; 列表不再截断到 500, 保证末尾条目也能查看。
+        meta_total = ctx.get("metadata_missing_total")
+        meta_ids = ctx.get("metadata_missing_ids")
+        if meta_ids is None or meta_total is None:
+            with _db() as db:
+                meta_ids = db.works_missing_metadata(limit=100000)
+                meta_total = db.count_works_missing_metadata()
+        for aid in meta_ids:
+            _add("metadata_missing", str(aid),
+                 f"作品 {aid} 缺少标题/标签/封面等资料（可联网补全）",
+                 artwork_id=str(aid))
+        # 待整理目录: 复用一键整理的只读预览 (只算计划, 不移动任何文件)
+        plans = ctx.get("tidy_plans")
+        if plans is None and root_ok:
+            with _db() as db:
+                plans = _tidy_build_plans(db, img_root)
+        _plan_label = {"move": "移动", "rename": "文件夹改名", "filrename": "文件改名",
+                       "categorize": "归类待确认", "rmdir": "清理空文件夹"}
+        for pl in (plans or [])[:100]:
+            ptype = str(pl.get("type") or "")
+            files = list(pl.get("files") or [])
+            _add("tidy_plan",
+                 f"tidy:{ptype}:{pl.get('from')}:{pl.get('to')}",
+                 f"{_plan_label.get(ptype, '整理')}：「{pl.get('from')}」"
+                 f"→「{pl.get('to')}」（{len(files)} 个文件）",
+                 plan_type=ptype, files=files[:50],
+                 plan_from=pl.get("from") or "", plan_to=pl.get("to") or "",
+                 reason=pl.get("reason") or "",
+                 plan_conflict=bool(pl.get("conflict")))
+        # 只读检查才会出现「磁盘新增/移动尚未写库」; 修复流程的 ① 已经当场写入。
+        if ctx.get("inspect") and scope_ok:
+            _new_n = int(getattr(rec, "new_pages_linked", 0) or 0)
+            _rel_n = int(getattr(rec, "pages_relinked", 0) or 0)
+            if _new_n or _rel_n:
+                _add("sync_pending", f"sync:{_new_n}:{_rel_n}",
+                     f"磁盘发现 {_new_n} 张新图片、{_rel_n} 个路径变化尚未写入索引",
+                     new_files=_new_n, relinked=_rel_n)
+
         kept = [it for it in items if (it["type"], it["ref"]) not in dismissed]
 
         # ---- 复检: 与上一版报告逐条对账 ----
         # 本次"有条件复检"的类型: 现场重算的恒可; 依赖某步产物的, 看那步这次有没有跑成功。
         ran = set(ctx.get("_ran") or ())
         fresh = set(_CK_FRESH_ALWAYS)
-        for step, types in _CK_FRESH_BY_STEP.items():
-            if step in ran:
-                fresh |= types
-        if light:
-            # 单跑本步时自己做了一次轻扫 → 这几类确实是"本次核对过"的
-            fresh |= {"missing_file", "empty_dir", "duplicate"}
-        if verified_corrupt:
-            fresh.add("corrupt")
+        if scope_ok:
+            for step, types in _CK_FRESH_BY_STEP.items():
+                if step in ran:
+                    fresh |= types
+            if light:
+                # 单跑本步时自己做了一次轻扫 → 这几类确实是"本次核对过"的
+                fresh |= {"missing_file", "empty_dir", "duplicate"}
+            if verified_corrupt:
+                fresh.add("corrupt")
+        else:
+            # 第 5 项返修 ②: 范围不完整时, 磁盘相关类型一律不判"已解决",
+            # 上一版条目原样保留; 只复核 DB 本地就能确认的缺作者/缺资料。
+            fresh -= {"loose_image", "tidy_plan", "sync_pending"}
         prev = (list((_check_state.get("report") or {}).get("suspicious") or [])
                 + list((_check_state.get("report") or {}).get("todos") or []))
         prev_map = {(str(x.get("type") or ""), str(x.get("ref") or "")): x for x in prev}
@@ -9991,14 +10271,18 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 "ignored": len(dismissed),
                 "resolved": len(resolved), "changed": len(changed),
                 "added": added, "unverified": len(unverified),
+                # 第 5 项返修 ③: 待补资料完整总数 + 本次实际列出数量
+                "metadata_missing_total": int(meta_total or 0),
+                "metadata_missing_shown": len(meta_ids or []),
                 "_items": kept, "_suspicious": suspicious, "_todos": todos,
                 "_resolved": resolved, "_changed": changed,
                 # 本次真正复核过的**来源步骤** (不含 ⑥ 自己 —— 它是执行者不是来源)。
                 # 由本步在执行时如实上报, 别在 _ck_run 里取 (那时 'report' 已被加进去了)。
                 "_steps_ran": sorted(ran),
-                "_corrupt_verified": verified_corrupt}
+                "_corrupt_verified": bool(verified_corrupt and scope_ok)}
 
-    _CK_FN = {"reconcile": _ck_step_reconcile, "offline": _ck_step_offline,
+    _CK_FN = {"inspect": _ck_step_inspect,
+              "reconcile": _ck_step_reconcile, "offline": _ck_step_offline,
               "authors": _ck_step_authors, "metadata": _ck_step_metadata,
               "organize": _ck_step_organize, "report": _ck_step_report}
 
@@ -10028,6 +10312,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         if not last_fixed:
             # 从盘里读回的报告没有 last_run → 保住文件里原本的 fixed, 别把这份摘要清空
             last_fixed = (_ck_read_legacy_result() or {}).get("fixed") or {}
+        last = _check_state.get("last_run") or {}
+        run_ok = bool(rep.get("run_ok", True)) if rep else bool(last.get("ok", True))
+        root_avail = bool(rep.get("root_available", True)) if rep \
+            else bool(last.get("root_available", True))
+        scan_inc = bool(rep.get("scan_incomplete", False)) if rep \
+            else bool(last.get("scan_incomplete", False))
         legacy = {"time": rep.get("time"),
                   "fixed": last_fixed,
                   "suspicious": list(rep.get("suspicious") or []),
@@ -10035,7 +10325,16 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                   "ignored": rep.get("ignored", 0),
                   # 复检结论也落盘: 重启后仍能看到"上次清掉了哪些已解决的"
                   "recheck": rep.get("recheck") or {},
-                  "bar_dismissed": rep.get("bar_dismissed") or ""}
+                  "bar_dismissed": rep.get("bar_dismissed") or "",
+                  # 第 5 项: 重启后仍能区分「成功/未完成」与未扫描范围、待补资料总数
+                  "run_ok": run_ok,
+                  "scan_incomplete": scan_inc,
+                  "root_available": root_avail,
+                  "unreadable_dirs": list(rep.get("unreadable_dirs") or [])[:200],
+                  "metadata_missing_total": int(rep.get("metadata_missing_total") or 0),
+                  # 第 5 项复验 ②: 最近一次尝试 (含失败原因/时间) 与最近一次完整成功
+                  "last_run": dict(last) or None,
+                  "last_success": (dict(_check_state.get("last_success") or {}) or None)}
         _self_check_state["result"] = legacy
         try:
             Path(paths.data_root()).joinpath("self_check.json").write_text(
@@ -10193,6 +10492,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             if not p.is_file():
                 return
             old = json.loads(p.read_text(encoding="utf-8"))
+            # 第 5 项复验 ②: 最近一次尝试与最近一次成功也随报告恢复,
+            # 否则重启后「检查未完成」会被误判成「有待处理项」。
+            if isinstance(old.get("last_run"), dict) and not _check_state.get("last_run"):
+                _check_state["last_run"] = old["last_run"]
+            if isinstance(old.get("last_success"), dict) \
+                    and not _check_state.get("last_success"):
+                _check_state["last_success"] = old["last_success"]
             merged: "list[dict]" = []
             seen: "set[tuple]" = set()
             for src in (old.get("suspicious") or []), (old.get("todos") or []):
@@ -10222,6 +10528,12 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 "recheck": old.get("recheck") or {},
                 # 用户点过「✕ 不再显示」→ 顶部那条汇总保持隐藏 (下次真跑体检才恢复)
                 "bar_dismissed": old.get("bar_dismissed") or "",
+                # 第 5 项: 失败/范围不完整/待补资料总数要跟着报告一起恢复
+                "run_ok": bool(old.get("run_ok", True)),
+                "scan_incomplete": bool(old.get("scan_incomplete", False)),
+                "root_available": bool(old.get("root_available", True)),
+                "unreadable_dirs": list(old.get("unreadable_dirs") or [])[:200],
+                "metadata_missing_total": int(old.get("metadata_missing_total") or 0),
                 "from_disk": True,
             }
             _self_check_state["result"] = old
@@ -10239,6 +10551,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     def _ck_dirty_scopes(name: str) -> tuple:
         """体检某一步改动了哪些数据域 (非 HTTP 触发 → 显式登记, 走同一套事件驱动刷新)。"""
         return {"reconcile": ("artworks", "pages", "facets", "stats"),
+                "inspect": ("check",),
                 "offline": ("authors", "artworks", "pages", "facets", "stats", "sources"),
                 "authors": ("authors", "facets", "stats"),
                 "metadata": ("artworks", "authors", "facets", "stats"),
@@ -10252,16 +10565,27 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         rep = _reporter()
         ctx = ctx if ctx is not None else {}
         fixed: dict = {}
+        errors: "list[str]" = []
         batch = len(names) > 1
         key = key or ("check:all" if batch else f"check:{names[0]}")
         _check_state["journal_key"] = key
         _journal_start(key,
-                       "🧹 体检（全部）" if batch else f"🩺 体检 · {_check_title(names[0])}",
+                       "🔍 检查全部（只读）" if key == "check:inspect"
+                       else ("🧹 体检（全部）" if batch
+                             else f"🩺 体检 · {_check_title(names[0])}"),
                        resumable=all(_check_resumable(n) for n in names),
                        steps=list(names))
         ok_all = True
         for i, name in enumerate(names):
             title = _check_title(name)
+            if name == "report" and ctx.get("skip_report"):
+                # 图库根目录不可用: 跳过报告复核, 上一份可查看的报告原样保留
+                rep.log(f"🩺 [体检] {title} 跳过：图库目录不可访问，保留上一份报告")
+                _journal_step_done(key, name,
+                                   names[i + 1] if i + 1 < len(names) else None)
+                _journal_write(key, "running",
+                               note=f"{title} 跳过：图库目录不可访问，保留上一份报告")
+                continue
             _check_state.update(running=name)
             _ck_progress(name, 0, 0, "")
             rep.log(f"🩺 [体检] {title} …")
@@ -10280,6 +10604,20 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                         "todos": list(res.get("_todos") or []),
                         "ignored": res.get("ignored", 0),
                         "corrupt_verified": bool(res.get("_corrupt_verified", True)),
+                        # 第 5 项: 报告区分「只读检查」与「修复流程」, 并如实记录图库是否可用
+                        "mode": "inspect" if ctx.get("inspect") else "repair",
+                        "root_available": bool(
+                            getattr(ctx.get("rec"), "root_available", True)),
+                        # 第 5 项返修: 本次运行是否完整成功 + 扫描范围 + 待补资料总数
+                        "run_ok": bool(ok_all),
+                        "scan_incomplete": bool(
+                            getattr(ctx.get("rec"), "scan_incomplete", False)),
+                        "unreadable_dirs": list(
+                            getattr(ctx.get("rec"), "unreadable_dirs", []) or [])[:200],
+                        "metadata_missing_total": int(
+                            res.get("metadata_missing_total") or 0),
+                        "metadata_missing_shown": int(
+                            res.get("metadata_missing_shown") or 0),
                         # 复检结论 ("已解决的清掉、变了的更新" → 要让他看见结果)
                         "recheck": {
                             "at": _now_str(),
@@ -10304,18 +10642,37 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             except Exception as e:
                 ok_all = False
                 err = str(e).splitlines()[0]
+                errors.append(f"{title}：{err}")
                 _check_state["steps"][name] = {
                     "ok": False, "at": _now_str(), "summary": {}, "error": err}
                 rep.error(f"🩺 [体检] {title} 出错: {err}")
                 _journal_step_done(key, name, names[i + 1] if i + 1 < len(names) else None)
                 _journal_write(key, "running", note=f"{title} 出错：{err}")
-        _check_state.update(running=None)
-        _check_state["progress"] = {}
-        _check_state["last_run"] = {"steps": list(names), "at": _now_str(), "fixed": fixed,
-                                    "ok": ok_all}
+        _check_state["last_run"] = {
+            "steps": list(names), "at": _now_str(), "fixed": fixed,
+            "ok": ok_all, "errors": errors,
+            # 第 5 项复验 ①: 把本次任务的模式/根目录可用性/扫描范围一起存下来,
+            # 状态接口不再在没有报告时默认 root_available=True / mode=""
+            "mode": "inspect" if ctx.get("inspect") else "repair",
+            "root_available": bool(getattr(ctx.get("rec"), "root_available", True)),
+            "scan_incomplete": bool(getattr(ctx.get("rec"), "scan_incomplete", False)),
+        }
+        if ok_all:
+            _check_state["last_success"] = {
+                "at": _check_state["last_run"]["at"],
+                "mode": "inspect" if ctx.get("inspect") else "repair"}
         _journal_finish(key, ok=ok_all,
                         note="体检完成" if ok_all
                              else "有步骤出错（其余步骤已完成，可单独重跑出错的那项）")
+        # 保存本次尝试与最近一次成功: 重启后仍能如实显示「检查未完成」与上次完成时间
+        try:
+            _save_self_check_compat()
+        except Exception:
+            pass
+        # running 必须等任务记录也写完再清: 否则下一个任务/测试可能抢在前一个线程
+        # 收尾前开始, 被它写到错误的 journal 里 (实测顺序跑测试时会偶发)
+        _check_state.update(running=None)
+        _check_state["progress"] = {}
         return fixed
 
     def _ck_start_bg(names: "list[str]", key: "str | None" = None,
@@ -10337,15 +10694,21 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     # ---------- 体检接口 ----------
     @app.route("/api/library/check", methods=["POST"])
     def api_library_check():
-        """跑体检的**单个**步骤: body {"step": reconcile|offline|authors|metadata|
-        organize|report} 或 {"all": true} 依次跑全部。后台执行, 进度看 check-status。"""
+        """体检入口 (第 5 项: 检查与修复分开)。
+
+        body {"inspect": true} → 只读「检查全部」(不改库/不联网/不动文件);
+        body {"step": reconcile|offline|authors|metadata|organize|report} 单跑修复步骤;
+        body {"all": true} 依次跑全部修复步骤 (保留给修复/兼容调用, 不是默认入口)。"""
         if _check_state.get("running"):
             return jsonify({"status": "error",
                             "error": f"「{_check_title(_check_state['running'])}」正在运行，"
                                      f"请等它结束",
                             "running": _check_state["running"]}), 409
         data = request.get_json(silent=True) or {}
-        if data.get("all"):
+        inspect = bool(data.get("inspect"))
+        if inspect:
+            names = [_CHECK_INSPECT_NAME, "report"]
+        elif data.get("all"):
             names = list(_CHECK_STEP_NAMES)
         else:
             step = str(data.get("step") or "").strip()
@@ -10353,14 +10716,18 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 return jsonify({"status": "error",
                                 "error": f"未知的体检项: {step or '(空)'}"}), 400
             names = [step]
-        if not data.get("all"):
+        if not data.get("all") and not inspect:
             _check_state["steps"].pop(names[0], None)
-        _ck_start_bg(names)
-        return jsonify({"status": "started", "steps": names})
+        _ck_start_bg(names, key=("check:inspect" if inspect else None))
+        return jsonify({"status": "started", "steps": names,
+                        "mode": "inspect" if inspect else "repair"})
 
     @app.route("/api/library/check-status")
     def api_library_check_status():
-        """体检面板状态: 每项最近结果 + 当前进度 + 报告计数。"""
+        """体检面板状态: 每项最近结果 + 当前进度 + 报告计数 + 统一状态口径。"""
+        if _check_state.get("report") is None:
+            # 重启后先恢复报告/最近一次尝试, 否则会把「检查未完成」误判成「有待处理」
+            _ck_load_report_from_disk()
         rep = _check_state.get("report") or {}
         return jsonify({
             "running": _check_state.get("running"),
@@ -10369,11 +10736,36 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             "outline": [{"name": n, "title": t, "desc": _CHECK_DESC_OF[n]}
                         for n, t, _d in _CHECK_STEPS],
             "last_run": _check_state.get("last_run"),
+            "status": _ck_status(),
             "report_count": {"suspicious": len(rep.get("suspicious") or []),
                              "todos": len(rep.get("todos") or []),
                              "ignored": rep.get("ignored", 0),
                              "time": rep.get("time")},
         })
+
+    @app.route("/api/library/check-items")
+    def api_library_check_items():
+        """按类型分页查看体检报告条目 (第 5 项返修 ③)。
+
+        报告里条目较多时前端只展示前 60 条; 这里提供分页, 保证末尾条目也能查看。"""
+        typ = str(request.args.get("type") or "").strip()
+        try:
+            offset = max(0, int(request.args.get("offset") or 0))
+        except (TypeError, ValueError):
+            offset = 0
+        try:
+            limit = min(200, max(1, int(request.args.get("limit") or 100)))
+        except (TypeError, ValueError):
+            limit = 100
+        rep = _check_state.get("report")
+        if rep is None:
+            _ck_load_report_from_disk()
+        rep = _check_state.get("report") or {}
+        items = [x for x in (rep.get("suspicious") or []) + (rep.get("todos") or [])
+                 if str(x.get("type") or "") == typ]
+        return jsonify({"status": "ok", "type": typ, "total": len(items),
+                        "offset": offset, "limit": limit,
+                        "items": items[offset:offset + limit]})
 
     @app.route("/api/library/check-report")
     def api_library_check_report():
@@ -10392,6 +10784,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             ignored = db.dismissed_issues()
         return jsonify({"status": "ok", "report": rep,
                         "ignored_items": ignored,
+                        "check_status": _ck_status(),
                         "running": _check_state.get("running")})
 
     @app.route("/api/library/check-report/dismiss", methods=["POST"])
@@ -10493,15 +10886,15 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     # ---------- 兼容入口 (旧按钮/旧测试仍在用) ----------
     @app.route("/api/library/self-check", methods=["POST"])
     def api_library_self_check():
-        """一键自检 (兼容入口): 等价于依次跑完 6 个体检步骤。
+        """一键自检 (兼容入口): 第 5 项起等价于只读「检查全部」。
 
-        保留它是因为「一次全跑一遍」仍是常用操作; 但每一步现在都能单独跑
-        (见 /api/library/check), 出错不会再"整体白跑", 中断也不会前功尽弃。"""
+        旧行为会把联网补资料/写库修复/移动文件一起跑; 现在检查与修复分开:
+        本入口只扫描与汇总, 修复由报告里的分组动作启动。"""
         if _check_state.get("running"):
             return jsonify({"status": "running", "step": _check_state["running"]})
         _check_state["steps"] = {}
-        _ck_start_bg(list(_CHECK_STEP_NAMES))
-        return jsonify({"status": "started"})
+        _ck_start_bg([_CHECK_INSPECT_NAME, "report"], key="check:inspect")
+        return jsonify({"status": "started", "mode": "inspect"})
 
     @app.route("/api/library/self-check-status")
     def api_library_self_check_status():

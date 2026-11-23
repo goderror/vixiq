@@ -3079,6 +3079,9 @@ def run_suite() -> SuiteResult:
     suite.add("T172", "🗜 4B-2 转 JPG: 质量/透明/大小预览 + 确认切换只留一份 + 回收失败重试与同步豁免 + 登记/编码失败保旧图 (隔离数据)", t172_page_jpg_convert_preview_and_switch)
     suite.add("T173", "🧷 4B-2 返修: 预览身份绑定 + 发布防覆盖 + 回收身份核对 + 仅静态单帧 PNG (隔离数据)", t173_page_jpg_convert_safety)
     suite.add("T174", "🖼 4B-3 同步发现待转 PNG: 只报告 + 预览确认 + 冲突保护 + 旧文件回收/保留 (隔离数据)", t174_normalize_pending_preview_and_apply)
+    suite.add("T175", "🧷 4B-3 返修: 发布防覆盖 + 源/页身份绑定 + 登记失败可重试 + 回收失败提示 (隔离数据)", t175_normalize_pending_safety)
+    suite.add("T176", "🩺 第5项 体检: 检查全部只读 + 缺失/损坏/待补资料/待整理四组报告 + 修复入口 + 旧入口兼容 (隔离数据)", t176_check_readonly_and_grouped_report)
+    suite.add("T177", "🧷 第5项返修: 首次失败显示未完成 + 扫描不完整标注 + 全部扫描 + 503 待补资料完整计数/末尾可查 (隔离数据)", t177_check_status_and_scope_safety)
     suite.write_report()
     return suite
 
@@ -7850,8 +7853,11 @@ def t103_check_recheck_report() -> None:
                 f"补回文件后应报'已解决', 实得 {rk}"
             res_refs = {x.get("ref") for x in rk.get("resolved_items") or []}
             assert "601" in res_refs, f"'已解决'名单里应能查到 601, 实得 {res_refs}"
-            still = {x.get("ref") for x in j["suspicious"] + j["todos"]}
-            assert "601" not in still, f"已解决的条目必须从报告里清掉, 实得 {still}"
+            # 第 5 项起同一作品可能同时有「缺文件 / 缺资料」等不同问题, 按 (type, ref) 判重
+            still_keys = {(x.get("type"), x.get("ref"))
+                          for x in j["suspicious"] + j["todos"]}
+            assert ("missing_file", "601") not in still_keys, \
+                f"已解决的缺文件条目必须从报告里清掉, 实得 {still_keys}"
 
             # ③ 问题变了 → 更新: 改 599 的标题(条目文案里带标题) → 复检应报"有变化"且给旧→新
             with PixivDatabase(str(tmp / "pixiv.db")) as _db3:
@@ -7860,10 +7866,12 @@ def t103_check_recheck_report() -> None:
             j = run_report()
             rk = j.get("recheck") or {}
             assert int(rk.get("changed") or 0) >= 1, f"文案变了应报'有变化', 实得 {rk}"
-            ch = (rk.get("changed_items") or [])[0]
+            chs = [x for x in (rk.get("changed_items") or [])
+                   if "改过的标题" in (x.get("now") or "")]
+            assert chs, f"'变化'要给旧→新文案, 实得 {rk.get('changed_items')}"
+            ch = chs[0]
             assert ch.get("was") and ch.get("now") and ch["was"] != ch["now"], \
                 f"'变化'要给旧→新文案, 实得 {ch}"
-            assert "改过的标题" in ch["now"], f"新文案应反映最新事实, 实得 {ch['now']}"
 
             # ④ 未复检保护: 上一版里塞一条只有「④ 联网补元数据」才推导得出的问题,
             #    然后单跑 ⑥ (④ 没跑) → 必须原样保留并计入 unverified, **绝不许**当成已解决清掉
@@ -8859,9 +8867,10 @@ def t110_check_report_no_stale_items() -> None:
                   "const uniq = (arr)", "auto_resolved",
                   # 2026-09-27 报告弹窗改版: 分节标题「标题 · 说明 · 计数」三段式 +
                   # 统计徽标 + 判据折进 <details>, 不许再回到长句堆叠的老样子
-                  "function chkStatBadge(", "chkSectionHtml('🔧 系统异常', '可一键修复'",
-                  "chkSectionHtml('✋ 缺信息', '需人工补齐'", '<details class="chk-help">',
-                  'class="chk-sec"'):
+                  # 第 5 项起报告按「缺失 / 损坏 / 待补资料 / 待整理目录」四组展示
+                  "function chkStatBadge(", "chkSectionHtml(title, note,",
+                  "['⚠ 缺失'", "['💥 损坏'", "['✋ 待补资料'", "['📁 待整理目录'",
+                  '<details class="chk-help">', 'class="chk-sec"'):
             assert k in appjs, f"前端缺少接线/文案: {k}"
 
         # 文案护栏: 上一轮为「去第二人称」做机械替换, 把判据/口径全塞进正文长句
@@ -10416,7 +10425,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261123a" and _mss.group(1) == "20261123a", \
+    assert _mjs and _mss and _mjs.group(1) == "20261123d" and _mss.group(1) == "20261123d", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10511,7 +10520,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261123a', html) and _re.search(r'app\.js\?v=20261123a', html), \
+    assert _re.search(r'style\.css\?v=20261123d', html) and _re.search(r'app\.js\?v=20261123d', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10919,7 +10928,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261123a" in html and "app.js?v=20261123a" in html, \
+        assert "style.css?v=20261123d" in html and "app.js?v=20261123d" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13302,7 +13311,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261123a" in _h and "style.css?v=20261123a" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261123d" in _h and "style.css?v=20261123d" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14671,7 +14680,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261123a" in html and "app.js?v=20261123a" in html
+            assert "style.css?v=20261123d" in html and "app.js?v=20261123d" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14780,7 +14789,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261123a" in html and "app.js?v=20261123a" in html
+            assert "style.css?v=20261123d" in html and "app.js?v=20261123d" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14891,7 +14900,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261123a" in html and "app.js?v=20261123a" in html
+    assert "style.css?v=20261123d" in html and "app.js?v=20261123d" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14931,7 +14940,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261123a" in html
+    assert "20261123d" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15642,7 +15651,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261123a" in html
+    assert "同步磁盘索引" in html and "20261123d" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16056,7 +16065,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261123a" in html
+    assert "20261123d" in html
     for token in ("转为 PNG", "重复导入已复用", "张待确认", "转 PNG 失败",
                   "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -16790,7 +16799,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261123a" in html
+    assert "20261123d" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -17493,6 +17502,920 @@ def t174_normalize_pending_preview_and_apply() -> None:
         assert token in store, f"缺少对账 4B-3 接线 {token}"
     fmt = (PROJECT_ROOT / "core" / "image_format.py").read_text(encoding="utf-8")
     assert "def actual_format_info" in fmt
+
+
+def t175_normalize_pending_safety() -> None:
+    """T175: 4B-3 验收返修回归 (发布防覆盖/身份绑定/登记可重试/回收失败提示)。
+
+    ① 目标 PNG 在预检后出现 → 发布拒绝覆盖, 目标与原 JPG 都保留, 登记不变;
+       同一项两次确认 → 先到者成功, 后到者不覆盖已发布 PNG;
+    ② 确认时源 JPG 在预检后被改写 → 拒绝, 不发布/不改登记/不回收;
+       预览后原路径改登记到别页 → 拒绝; 预览过程中源图被改写 → 不签发令牌;
+    ③ 登记被拒绝 → 只撤回本次 PNG, 旧 JPG/旧登记可用, 故障消除后重新预览可完成;
+       新建「其他来源」作品登记失败 → 不留下错误页与输出, 可重试;
+    ④ 回收失败逐项报告 recycle_failed; 用合成结果执行真实前端提交函数,
+       部分失败/全部成功/主动保留三种文案都要如实提示。
+    """
+    import hashlib
+    import json as _json
+    import shutil as _shutil
+    import subprocess as _sp
+    import tempfile
+    import utils.paths as upaths
+    import web.server as ws
+    import core.image_format as cif
+    from db.store import PixivDatabase, WSt, PSt
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory(prefix="t175norm_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir()
+        orig_ud = upaths.user_data
+        orig_subdir = ws._config["paths"]["img_subdir"]
+        orig_recycle = ws._recycle_files
+        orig_fill = ws._kick_metadata_fill
+        recycle_fail = {"on": False}
+
+        def _fake_recycle(paths):
+            if recycle_fail["on"]:
+                return 0, [f"{x}: 回收站不可用" for x in paths]
+            n = 0
+            for x in list(paths):
+                try:
+                    Path(x).unlink()
+                    n += 1
+                except OSError:
+                    pass
+            return n, []
+
+        upaths.user_data = lambda rel: tmp / str(rel)
+        ws._config["paths"]["img_subdir"] = "img"
+        ws._recycle_files = _fake_recycle
+        ws._kick_metadata_fill = lambda *a, **k: None
+        ws._reconcile_state["rep"] = None
+        ws._reconcile_state["ts"] = 0.0
+        try:
+            app = ws.create_app()
+            client = app.test_client()
+
+            def _db():
+                return PixivDatabase(str(tmp / "pixiv.db"))
+
+            def _jpg(rel: str, color=(80, 120, 160), size=(80, 64)):
+                p = img / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", size, color).save(p, "JPEG", quality=90)
+                return p
+
+            def _sync():
+                return client.post("/api/library/sync").get_json()
+
+            def _preview():
+                return client.post("/api/library/normalize-pending/preview").get_json()
+
+            def _item(preview: dict, path: str):
+                return next((x for x in (preview.get("items") or [])
+                             if x.get("path") == path), None)
+
+            def _apply(item: dict, recycle: bool = True):
+                rp = client.post("/api/library/normalize-pending/apply",
+                                 json={"items": [{"preview_id": item["preview_id"],
+                                                  "path": item["path"]}],
+                                       "recycle_old": recycle})
+                return rp, rp.get_json()
+
+            def _tmp_left():
+                return [str(p) for p in img.rglob(".vixiq-png-*.tmp")]
+
+            # ① 预检后目标 PNG 出现 → 发布拒绝覆盖; 同一项两次确认后到者不覆盖
+            _jpg("993101_p0.jpg", (200, 40, 40))
+            _sync()
+            it1 = _item(_preview(), "993101_p0.jpg")
+            assert it1 and it1.get("preview_id"), it1
+            other1 = tmp / "_race1.png"
+            Image.new("RGB", (13, 17), (5, 6, 7)).save(other1, "PNG")
+            other1_bytes = other1.read_bytes()
+            target1 = img / "993101_p0.png"
+            orig_publish = cif._publish_new_file
+
+            def _race_publish(tmp_path, out_path):
+                # 模拟预检通过后、正式发布前另一张 PNG 落到目标路径
+                Path(out_path).write_bytes(other1_bytes)
+                return orig_publish(tmp_path, out_path)
+
+            cif._publish_new_file = _race_publish
+            try:
+                rp1, j1 = _apply(it1)
+            finally:
+                cif._publish_new_file = orig_publish
+            o1 = j1["items"][0]
+            assert rp1.status_code == 200 and j1["converted"] == 0, j1
+            assert o1["stage"] == "target_conflict", j1
+            assert target1.read_bytes() == other1_bytes, "发布不得覆盖预检后出现的 PNG"
+            assert (img / "993101_p0.jpg").is_file(), "原 JPG 必须保留"
+            with _db() as db:
+                assert db.find_page_by_local_path("993101_p0.jpg"), "登记不得被改动"
+            assert not _tmp_left(), _tmp_left()
+            target1.unlink()
+
+            _jpg("993102_p0.jpg", (30, 90, 180))
+            _sync()
+            it2a = _item(_preview(), "993102_p0.jpg")
+            it2b = _item(_preview(), "993102_p0.jpg")
+            assert it2a and it2b and it2a["preview_id"] != it2b["preview_id"]
+            _, j2a = _apply(it2a)
+            assert j2a["converted"] == 1, j2a
+            png2 = img / "993102_p0.png"
+            h2 = hashlib.md5(png2.read_bytes()).hexdigest()
+            _, j2b = _apply(it2b)
+            assert j2b["converted"] == 0, j2b
+            assert j2b["items"][0]["stage"] in (
+                "source_missing", "target_conflict", "registration_changed"), j2b
+            assert hashlib.md5(png2.read_bytes()).hexdigest() == h2, \
+                "后到确认不得覆盖先到者发布的 PNG"
+            assert not _tmp_left(), _tmp_left()
+
+            # ② 源文件身份绑定: 确认预检后改写 / 预览后改登记别页 / 预览中被改写
+            jpg3 = _jpg("993103_p0.jpg", (60, 160, 60))
+            _sync()
+            it3 = _item(_preview(), "993103_p0.jpg")
+            assert it3 and it3.get("preview_id"), it3
+            orig_norm = cif.normalize_to_png
+
+            def _rewrite_then_norm(src_path, **kw):
+                Image.new("RGB", (29, 40), (7, 7, 7)).save(Path(src_path), "JPEG")
+                return orig_norm(src_path, **kw)
+
+            cif.normalize_to_png = _rewrite_then_norm
+            try:
+                _, j3 = _apply(it3)
+            finally:
+                cif.normalize_to_png = orig_norm
+            o3 = j3["items"][0]
+            assert j3["converted"] == 0 and o3["stage"] == "source_changed", j3
+            assert jpg3.is_file() and not (img / "993103_p0.png").exists()
+            with _db() as db:
+                assert db.find_page_by_local_path("993103_p0.jpg"), "旧登记必须保留"
+                assert db.find_page_by_local_path("993103_p0.png") is None
+            assert not _tmp_left(), _tmp_left()
+
+            _jpg("993104_p0.jpg", (140, 40, 140))
+            _sync()
+            it4 = _item(_preview(), "993104_p0.jpg")
+            assert it4 and it4.get("preview_id"), it4
+            p4 = img / "993104_p0.jpg"
+            with _db() as db:
+                db.change_work_status("993904", WSt.DONE, title="993904",
+                                      total_pages=1, author_id="1")
+                db.mark_page_status(
+                    "993904", 0, PSt.DONE, local_path="993104_p0.jpg",
+                    md5=hashlib.md5(p4.read_bytes()).hexdigest(),
+                    file_size_bytes=p4.stat().st_size)
+                db.conn.execute(
+                    "UPDATE pages SET local_path=NULL WHERE artwork_id=? AND page_num=0",
+                    (str(it4["artwork_id"]),))
+                db.conn.commit()
+            _, j4 = _apply(it4)
+            o4 = j4["items"][0]
+            assert j4["converted"] == 0 and o4["stage"] == "registration_changed", j4
+            assert p4.is_file() and not (img / "993104_p0.png").exists()
+            with _db() as db:
+                now_page = db.find_page_by_local_path("993104_p0.jpg") or {}
+                assert now_page.get("artwork_id") == "993904", now_page
+
+            _jpg("993105_p0.jpg", (10, 10, 180))
+            _sync()
+
+            def _norm_then_rewrite(src_path, **kw):
+                r = orig_norm(src_path, **kw)
+                if Path(src_path).name == "993105_p0.jpg":
+                    Image.new("RGB", (29, 40), (1, 2, 3)).save(Path(src_path), "JPEG")
+                return r
+
+            cif.normalize_to_png = _norm_then_rewrite
+            try:
+                pv5 = _preview()
+            finally:
+                cif.normalize_to_png = orig_norm
+            it5 = _item(pv5, "993105_p0.jpg")
+            assert it5 and it5.get("status") == "error", it5
+            assert not it5.get("preview_id"), it5
+            assert "预览过程中" in (it5.get("error") or ""), it5
+
+            # ③ 登记失败: 只撤回本次 PNG, 旧 JPG/旧登记可用, 解除后可直接重新预览
+            jpg6 = _jpg("993106_p0.jpg", (100, 100, 20))
+            _sync()
+            it6 = _item(_preview(), "993106_p0.jpg")
+            assert it6 and it6.get("preview_id"), it6
+            with _db() as db:
+                db.conn.execute(
+                    "CREATE TRIGGER t175_block_png BEFORE UPDATE OF local_path ON pages "
+                    "WHEN NEW.local_path LIKE '%.png' "
+                    "BEGIN SELECT RAISE(ABORT, 'blocked by test'); END")
+                db.conn.commit()
+            _, j6 = _apply(it6)
+            assert j6["items"][0]["stage"] == "register_failed", j6
+            assert jpg6.is_file() and not (img / "993106_p0.png").exists(), \
+                "登记失败不得留下阻塞重试的 PNG"
+            with _db() as db:
+                assert db.find_page_by_local_path("993106_p0.jpg"), "旧登记必须可用"
+                db.conn.execute("DROP TRIGGER t175_block_png")
+                db.conn.commit()
+            _sync()
+            it6b = _item(_preview(), "993106_p0.jpg")
+            assert it6b and it6b.get("preview_id"), it6b
+            _, j6b = _apply(it6b)
+            assert j6b["converted"] == 1, j6b
+            assert (img / "993106_p0.png").is_file() and not jpg6.exists()
+            assert not _tmp_left(), _tmp_left()
+
+            # 新建「其他来源」作品登记失败: 不得留下错误页/输出, 可重新预览完成
+            f7 = img / "作者_9" / "手放图.jpg"
+            f7.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (80, 64), (30, 160, 160)).save(f7, "JPEG")
+            it7 = _item(_preview(), "作者_9/手放图.jpg")
+            assert it7 and it7.get("preview_id"), it7
+            assert it7.get("foreign") is True and it7.get("artwork_id") in (None, ""), it7
+            with _db() as db:
+                db.conn.execute(
+                    "CREATE TRIGGER t175_block_png2 BEFORE UPDATE OF local_path ON pages "
+                    "WHEN NEW.local_path LIKE '%.png' "
+                    "BEGIN SELECT RAISE(ABORT, 'blocked by test'); END")
+                db.conn.commit()
+            _, j7 = _apply(it7)
+            assert j7["items"][0]["stage"] == "register_failed", j7
+            assert f7.is_file() and not (img / "作者_9" / "手放图.png").exists()
+            with _db() as db:
+                assert db.find_page_by_local_path("作者_9/手放图.png") is None, \
+                    "登记失败不得留下指向已撤回输出的错误页"
+                left = db.conn.execute(
+                    "SELECT artwork_id FROM artworks WHERE title='手放图'").fetchall()
+                assert not left, left
+                db.conn.execute("DROP TRIGGER t175_block_png2")
+                db.conn.commit()
+            _sync()
+            it7b = _item(_preview(), "作者_9/手放图.jpg")
+            assert it7b and it7b.get("preview_id"), it7b
+            _, j7b = _apply(it7b)
+            assert j7b["converted"] == 1, j7b
+            assert (img / "作者_9" / "手放图.png").is_file()
+
+            # ④ 转换成功但回收失败 → 逐项报告 recycle_failed, 两份文件都在
+            _jpg("993108_p0.jpg", (200, 120, 20))
+            _sync()
+            it8 = _item(_preview(), "993108_p0.jpg")
+            assert it8 and it8.get("preview_id"), it8
+            recycle_fail["on"] = True
+            try:
+                _, j8 = _apply(it8)
+            finally:
+                recycle_fail["on"] = False
+            o8 = j8["items"][0]
+            assert j8["converted"] == 1 and o8.get("recycle_failed"), j8
+            assert (img / "993108_p0.jpg").is_file()
+            assert (img / "993108_p0.png").is_file()
+        finally:
+            ws._recycle_files = orig_recycle
+            ws._config["paths"]["img_subdir"] = orig_subdir
+            upaths.user_data = orig_ud
+            ws._kick_metadata_fill = orig_fill
+            ws._reconcile_state["rep"] = None
+            ws._reconcile_state["ts"] = 0.0
+
+    js_src = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for token in ("PNG 已入库，旧 JPG 仍保留", "旧文件仍占用磁盘",
+                  "recycle_failed", "recycle_skipped"):
+        assert token in js_src, f"缺少前端返修文案 {token}"
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    for token in ("before_publish", "PublishRejected",
+                  "discard_foreign_shell", "registered_md5", "format_choice",
+                  "源文件在预览过程中发生变化"):
+        assert token in srv, f"缺少服务端返修接线 {token}"
+    store_src = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
+    assert "def discard_foreign_shell" in store_src, "缺少登记失败撤回占位页的 store 方法"
+    fmt_src = (PROJECT_ROOT / "core" / "image_format.py").read_text(encoding="utf-8")
+    for token in ("def _publish_new_file", "FileExistsError", "before_publish",
+                  "class PublishRejected"):
+        assert token in fmt_src, f"缺少发布防覆盖接线 {token}"
+
+    # 用合成结果走真实前端提交函数: 部分失败 / 全部成功 / 主动保留旧文件
+    node = _shutil.which("node")
+    if node:
+        start = js_src.index("window.applyNormalizePending = async function")
+        end = js_src.index("// 手动入口", start)
+        fn_src = js_src[start:end].rstrip()
+        harness = r"""
+const fs = require('fs');
+const fnSrc = fs.readFileSync(process.argv[2], 'utf8');
+const payload = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+const calls = {modal: [], toast: [], closed: 0};
+const noop = () => {};
+const window = {};
+const document = {getElementById: () => null};
+const esc = s => String(s == null ? '' : s);
+const fmtSize = n => String(n) + ' B';
+const api = async () => payload.response;
+const libSync = async () => {};
+const loadLibrary = noop, loadStats = noop, loadLibFacets = noop;
+const openLibModal = (title, html) => calls.modal.push({title: title, html: html});
+const closeLibModal = () => { calls.closed += 1; };
+const toast = (msg) => calls.toast.push(msg);
+eval(fnSrc);
+(async () => {
+  window._normalizePreview = {ready: payload.ready || [{preview_id: 'p', path: 'a.jpg'}]};
+  await window.applyNormalizePending();
+  process.stdout.write(JSON.stringify(calls));
+})().catch(e => { console.error((e && e.stack) || String(e)); process.exit(1); });
+"""
+        with tempfile.TemporaryDirectory(prefix="t175js_") as jd:
+            jdir = Path(jd)
+            (jdir / "fn.js").write_text(fn_src, encoding="utf-8")
+            (jdir / "harness.js").write_text(harness, encoding="utf-8")
+
+            def _run_frontend(response: dict, ready: "list[dict]"):
+                (jdir / "payload.json").write_text(
+                    _json.dumps({"response": response, "ready": ready},
+                                ensure_ascii=False), encoding="utf-8")
+                out = _sp.run([node, str(jdir / "harness.js"), str(jdir / "fn.js"),
+                               str(jdir / "payload.json")],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace")
+                assert out.returncode == 0, out.stderr
+                return _json.loads(out.stdout)
+
+            partial = _run_frontend(
+                {"status": "ok", "converted": 1, "failed": 1, "recycled": 0,
+                 "items": [{"status": "ok", "path": "ok.jpg", "recycle_failed": []},
+                           {"status": "error", "path": "bad.jpg",
+                            "stage": "convert_failed", "error": "文件被占用"}]},
+                [{"preview_id": "p1", "path": "ok.jpg"},
+                 {"preview_id": "p2", "path": "bad.jpg"}])
+            assert partial["closed"] == 0 and partial["modal"], partial
+            html_partial = partial["modal"][0]["html"]
+            assert "成功 1 张，失败 1 张" in html_partial, html_partial
+            assert "bad.jpg" in html_partial and "文件被占用" in html_partial, html_partial
+
+            allok = _run_frontend(
+                {"status": "ok", "converted": 1, "failed": 0, "recycled": 1,
+                 "items": [{"status": "ok", "path": "ok.jpg", "recycled": 1,
+                            "recycle_failed": []}]},
+                [{"preview_id": "p1", "path": "ok.jpg"}])
+            assert allok["closed"] == 1 and not allok["modal"], allok
+            toast_msg = allok["toast"][0] if allok["toast"] else ""
+            assert "已转为 PNG · 成功 1 张" in toast_msg, allok
+
+            recfail = _run_frontend(
+                {"status": "ok", "converted": 1, "failed": 0, "recycled": 0,
+                 "items": [{"status": "ok", "path": "old.jpg", "recycled": 0,
+                            "recycle_failed": ["old.jpg: 回收站不可用"]}]},
+                [{"preview_id": "p1", "path": "old.jpg"}])
+            assert recfail["closed"] == 0 and recfail["modal"], recfail
+            html_rec = recfail["modal"][0]["html"]
+            assert "PNG 已入库，旧 JPG 仍保留" in html_rec, html_rec
+            assert "old.jpg" in html_rec and "回收站不可用" in html_rec, html_rec
+
+            kept = _run_frontend(
+                {"status": "ok", "converted": 1, "failed": 0, "recycled": 0,
+                 "items": [{"status": "ok", "path": "keep.jpg",
+                            "recycle_skipped": True, "recycle_failed": []}]},
+                [{"preview_id": "p1", "path": "keep.jpg"}])
+            assert kept["closed"] == 0 and kept["modal"], kept
+            html_kept = kept["modal"][0]["html"]
+            assert "旧文件仍占用磁盘" in html_kept and "keep.jpg" in html_kept, html_kept
+
+
+def t176_check_readonly_and_grouped_report() -> None:
+    """T176: 第 5 项「体检」—— 检查和修复分开、报告四组、状态共用。
+
+    ① 「检查全部」只读: 检查前后数据库 pages/artworks 与磁盘文件清单逐项一致,
+       不回填指纹、不重指路径、不补登记;
+    ② 报告含缺失 / 损坏 / 待补资料 / 待整理目录四类条目 (missing_file、corrupt、
+       no_author/metadata_missing、empty_dir/loose_image/tidy_plan、sync_pending);
+    ③ 状态口径: 尚未检查 / 正在检查 / 未发现异常 / 有待处理项 / 检查未完成;
+    ④ 报告里的修复入口仍可单独调用: 整理预览有同一条计划, 补全资料接口能启动;
+    ⑤ 旧 /api/library/self-check 迁移为只读检查, 兼容状态接口仍可用;
+    ⑥ 前端四分组接线与「检查全部」文案 (静态)。
+    """
+    import tempfile
+    import time
+    import utils.paths as upaths
+    import web.server as ws
+    from db.store import PixivDatabase, WSt, PSt
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory(prefix="t176chk_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir()
+        orig_ud, orig_dr = upaths.user_data, upaths.data_root
+        orig_kick = ws._kick_metadata_fill
+        upaths.user_data = lambda rel: tmp / str(rel)
+        upaths.data_root = lambda: tmp
+        ws._kick_metadata_fill = lambda *a, **k: None
+        ws._check_state.update(running=None, steps={}, progress={}, report=None,
+                               last_run=None, journal_key=None)
+        ws._self_check_state["result"] = None
+        try:
+            def _png(rel: str, size=(32, 24), color=(10, 120, 200)):
+                p = img / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", size, color).save(p, "PNG")
+                return p
+
+            # 正常页
+            _png("作者甲_1/880001_p0.png")
+            # 缺文件页 (DB 有、磁盘没有)
+            # 损坏页 (文件存在但打不开)
+            bad = img / "作者甲_1" / "880003_p0.png"
+            bad.write_bytes(b"not-an-image")
+            # 缺作者 + 待补资料
+            _png("作者甲_1/880004_p0.png", color=(200, 80, 40))
+            _png("作者甲_1/880005_p0.png", color=(40, 200, 80))
+            # 错位夹: 应生成整理计划
+            _png("错误夹/880006_p0.png", color=(80, 40, 200))
+            # 磁盘新增但未入索引 + 根目录散落图
+            _png("880007_p0.png", color=(120, 120, 40))
+            _png("散图.png", color=(40, 120, 120))
+            (img / "空夹子").mkdir()
+
+            db = PixivDatabase(str(tmp / "pixiv.db"))
+            try:
+                db.upsert_author("1", "作者甲")
+                rows = [
+                    ("880001", "作者甲_1/880001_p0.png", "1", True),
+                    ("880002", "作者甲_1/880002_p0.png", "1", False),
+                    ("880003", "作者甲_1/880003_p0.png", "1", True),
+                    ("880004", "作者甲_1/880004_p0.png", None, True),
+                    ("880005", "作者甲_1/880005_p0.png", "1", True),
+                    ("880006", "错误夹/880006_p0.png", "1", True),
+                ]
+                for aid, rel, author_id, exists in rows:
+                    db.change_work_status(aid, WSt.DONE, title=aid,
+                                          total_pages=1, author_id=author_id)
+                    p = img / rel
+                    md5 = None
+                    size = None
+                    if exists:
+                        import hashlib as _hl
+                        md5 = _hl.md5(p.read_bytes()).hexdigest()
+                        size = p.stat().st_size
+                    db.mark_page_status(aid, 0, PSt.DONE, local_path=rel,
+                                        md5=md5, file_size_bytes=size)
+            finally:
+                db.close()
+
+            def _db_snap():
+                with PixivDatabase(str(tmp / "pixiv.db")) as d:
+                    pages = [tuple(r) for r in d.conn.execute(
+                        "SELECT artwork_id,page_num,status,local_path,md5,"
+                        "file_size_bytes,current_format,format_choice,source_md5 "
+                        "FROM pages ORDER BY artwork_id,page_num")]
+                    arts = [tuple(r) for r in d.conn.execute(
+                        "SELECT artwork_id,title,author_id FROM artworks "
+                        "ORDER BY artwork_id")]
+                return pages, arts
+
+            def _disk_snap():
+                return sorted(
+                    (p.relative_to(img).as_posix(), p.stat().st_size, p.stat().st_mtime_ns)
+                    for p in img.rglob("*") if p.is_file())
+
+            def _wait_new_run(prev, timeout=20.0):
+                """等一次新的体检跑完 (last_run 对象会被整体替换; 只看 running 会赶在启动前误判;
+                还要等 running 清空 —— 服务端先写 last_run, 再落任务记录, 最后才清 running)。"""
+                end = time.time() + timeout
+                while time.time() < end:
+                    lr = ws._check_state.get("last_run")
+                    if lr is not None and lr is not prev \
+                            and not ws._check_state.get("running"):
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            client = ws.create_app().test_client()
+            before_db, before_disk = _db_snap(), _disk_snap()
+
+            # ①/② 检查全部 = 只读扫描 + 四组报告
+            prev_run = ws._check_state.get("last_run")
+            r = client.post("/api/library/check", json={"inspect": True})
+            assert r.status_code == 200 and r.get_json()["status"] == "started", r.data
+            assert r.get_json().get("mode") == "inspect", r.get_json()
+            assert _wait_new_run(prev_run), "检查全部应在超时前完成"
+            after_db, after_disk = _db_snap(), _disk_snap()
+            pages_diff = [(a, b) for a, b in zip(before_db[0], after_db[0]) if a != b][:5]
+            arts_diff = [(a, b) for a, b in zip(before_db[1], after_db[1]) if a != b][:5]
+            assert after_db == before_db, (
+                "只读检查不得写库 (pages/artworks 必须逐项一致); "
+                f"pages_diff={pages_diff} arts_diff={arts_diff} "
+                f"pages_len={len(before_db[0])}->{len(after_db[0])} "
+                f"arts_len={len(before_db[1])}->{len(after_db[1])}")
+            assert after_disk == before_disk, "只读检查不得移动/删除磁盘文件"
+            with PixivDatabase(str(tmp / "pixiv.db")) as d:
+                assert d.find_page_by_local_path("880007_p0.png") is None, \
+                    "只读检查不得把磁盘新图补登记进索引"
+
+            got = client.get("/api/library/check-report").get_json()
+            rep = got["report"]
+            assert rep and rep.get("mode") == "inspect", rep
+            assert rep.get("corrupt_verified") is True, rep
+            sus = rep.get("suspicious") or []
+            todo = rep.get("todos") or []
+            types_s = {x["type"] for x in sus}
+            types_t = {x["type"] for x in todo}
+            for t in ("missing_file", "corrupt", "sync_pending", "empty_dir"):
+                assert t in types_s, f"缺失/损坏组缺少 {t}: {types_s}"
+            for t in ("no_author", "metadata_missing", "loose_image", "tidy_plan"):
+                assert t in types_t, f"待补资料/待整理组缺少 {t}: {types_t}"
+            assert not (types_s & types_t), "同一类型不得同时出现在两个桶"
+            assert all(x.get("ref") for x in sus + todo), "每条都要有 ref"
+            assert any(x.get("artwork_id") == "880002" for x in sus
+                       if x["type"] == "missing_file"), "880002 的缺文件要进报告"
+            assert any("880003_p0.png" in str(x.get("path") or "") for x in sus
+                       if x["type"] == "corrupt"), "损坏文件要带绝对路径进报告"
+            assert any(x.get("plan_type") == "move" and x.get("plan_from") == "错误夹"
+                       for x in todo if x["type"] == "tidy_plan"), \
+                "错位夹应生成待整理计划"
+
+            # ③ 状态口径 (health bar / settings 共用同一份)
+            st = client.get("/api/library/check-status").get_json()
+            assert st["status"]["state"] == "issues", st["status"]
+            assert "有待处理项" in st["status"]["text"], st["status"]
+            assert st["status"]["last_checked_at"], st["status"]
+            assert got["check_status"]["state"] == st["status"]["state"], got["check_status"]
+
+            # ④ 报告里的修复入口单独可用
+            pv = client.post("/api/library/tidy/preview").get_json()
+            assert pv["status"] == "ok" and pv["counts"]["total"] >= 1, pv.get("counts")
+            assert any(p["type"] == "move" and p["from"] == "错误夹"
+                       for p in pv["plans"]), "整理预览应能打开同一批待整理计划"
+            calls = []
+            ws._kick_metadata_fill = lambda *a, **k: calls.append((a, k))
+            cp = client.post("/api/library/complement", json={"limit": 5}).get_json()
+            assert cp["status"] == "started" and calls, cp
+
+            # ⑤ 旧入口迁移为只读检查; 兼容状态接口仍可用
+            before2 = _db_snap()
+            prev_run2 = ws._check_state.get("last_run")
+            r2 = client.post("/api/library/self-check")
+            assert r2.status_code == 200 and r2.get_json().get("mode") == "inspect", r2.data
+            assert _wait_new_run(prev_run2), "旧 self-check 入口应能完成"
+            assert _db_snap() == before2, "旧 self-check 入口也必须只读"
+            legacy = client.get("/api/library/self-check-status").get_json()
+            assert legacy["running"] is False and legacy.get("result") is not None, legacy
+
+            # 状态映射: never / running / ok / incomplete
+            saved = dict(ws._check_state)
+            try:
+                ws._check_state.update(report=None, last_run=None, last_success=None,
+                                       running=None)
+                assert ws._ck_status()["state"] == "never"
+                # 首次失败必须显示「检查未完成」, 不是「尚未检查」; 没有上次完成时间
+                ws._check_state.update(last_run={"ok": False, "at": "t1",
+                                                 "errors": ["图库不可用：磁盘未连接"]})
+                st_fail = ws._ck_status()
+                assert st_fail["state"] == "incomplete", st_fail
+                assert st_fail["last_checked_at"] == "", st_fail
+                assert st_fail["failed_at"] == "t1", st_fail
+                assert "图库不可用" in st_fail["error"], st_fail
+                ws._check_state.update(last_run=None, running="inspect")
+                assert ws._ck_status()["state"] == "running"
+                ws._check_state.update(
+                    running=None, last_success={"at": "t0"},
+                    report={"suspicious": [], "todos": [], "time": "t0", "run_ok": True},
+                    last_run={"ok": True, "at": "t0"})
+                assert ws._ck_status()["state"] == "ok"
+                # 曾经成功过: 保留上次完成时间; 当前失败另行显示
+                ws._check_state.update(last_run={"ok": False, "at": "t1",
+                                                 "errors": ["① 磁盘对账：权限不足"]})
+                st_fail2 = ws._ck_status()
+                assert st_fail2["state"] == "incomplete", st_fail2
+                assert st_fail2["last_checked_at"] == "t0", st_fail2
+                assert st_fail2["failed_at"] == "t1", st_fail2
+                assert "权限不足" in st_fail2["error"], st_fail2
+            finally:
+                ws._check_state.clear()
+                ws._check_state.update(saved)
+        finally:
+            upaths.user_data, upaths.data_root = orig_ud, orig_dr
+            ws._kick_metadata_fill = orig_kick
+            ws._check_state.update(running=None, steps={}, progress={}, report=None,
+                                   last_run=None, journal_key=None)
+            ws._self_check_state["result"] = None
+
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for token in ("🔍 检查全部", "inspect: true", "checkStatusInfo",
+                  "checkStatusLineHtml", "尚未检查", "正在检查", "未发现异常",
+                  "有待处理项", "检查未完成", "⚠ 缺失", "💥 损坏",
+                  "✋ 待补资料", "📁 待整理目录", "runComplementFromReport",
+                  "metadata_missing", "tidy_plan", "sync_pending"):
+        assert token in js, f"缺少第 5 项前端接线 {token}"
+    assert "全部跑一遍" not in js, "「全部跑一遍」应改为「检查全部」"
+    html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+    assert "startLibraryCheck()" in html and "🔍 检查全部" in html, \
+        "设置页主按钮应改为「检查全部」"
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    for token in ("_ck_step_inspect", "write=False", "check_status",
+                  '"inspect": true'):
+        assert token in srv, f"缺少第 5 项服务端接线 {token}"
+    store = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
+    assert "write: bool = True" in store, "reconcile_output 必须支持只读模式"
+
+
+def t177_check_status_and_scope_safety() -> None:
+    """T177: 第 5 项体检返修回归。
+
+    ① 首次检查失败 (图库目录不可用) → 状态「检查未完成」而不是「尚未检查」,
+       显示失败原因, 没有上次完成时间; 健康条/设置页共用同一份状态;
+    ② 子目录不可读 → 状态未完成 + 报告标注未扫描范围, 未扫范围保留原登记;
+       无既有报告/已有报告两种状态都覆盖; 恢复扫描后回到正常检查;
+    ③ 503 个待补资料 → 总数准确、列表不截断、末尾条目可经 check-items 查看;
+       检查前后库与图片一致。
+    """
+    import tempfile
+    import time
+    import utils.paths as upaths
+    import web.server as ws
+    import db.store as store
+    from db.store import PixivDatabase, WSt, PSt
+
+    def _reset():
+        ws._check_state.update(running=None, steps={}, progress={}, report=None,
+                               last_run=None, last_success=None, journal_key=None)
+        ws._self_check_state["result"] = None
+
+    def _wait_new_run(prev, timeout=25.0):
+        """等本轮收尾完成: last_run 已更新且 running 已清空 (服务端最后才清 running)。"""
+        end = time.time() + timeout
+        while time.time() < end:
+            lr = ws._check_state.get("last_run")
+            if lr is not None and lr is not prev \
+                    and not ws._check_state.get("running"):
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _run_inspect(client):
+        prev = ws._check_state.get("last_run")
+        r = client.post("/api/library/check", json={"inspect": True})
+        assert r.status_code == 200 and r.get_json()["status"] == "started", r.data
+        assert _wait_new_run(prev), "检查全部应在超时前结束"
+
+    # ---------- ① 首次失败: 不能显示「尚未检查」 ----------
+    with tempfile.TemporaryDirectory(prefix="t177fail_") as td:
+        tmp = Path(td)
+        orig_ud, orig_dr = upaths.user_data, upaths.data_root
+        upaths.user_data = lambda rel: tmp / str(rel)   # 故意不创建 img 目录
+        upaths.data_root = lambda: tmp
+        _reset()
+        try:
+            client = ws.create_app().test_client()
+            if (tmp / "img").is_dir():
+                try:
+                    (tmp / "img").rmdir()
+                except OSError:
+                    pass
+            _run_inspect(client)
+            st = client.get("/api/library/check-status").get_json()["status"]
+            assert st["state"] == "incomplete", st
+            assert st["text"] == "检查未完成", st
+            assert st["last_checked_at"] == "", st
+            assert st["failed_at"], st
+            assert "图库不可用" in st["error"], st
+            # 状态不能默认 root_available=True / mode=""
+            assert st["root_available"] is False, st
+            assert st["mode"] == "inspect", st
+            # 根目录不可用时跳过报告复核, 不能把第二条路径错误混进原始原因
+            assert "No such file" not in st["error"], st
+            assert "找不到" not in st["error"] and "cannot find" not in st["error"].lower(), st
+            got = client.get("/api/library/check-report").get_json()
+            assert got["check_status"]["state"] == "incomplete", got["check_status"]
+            assert got["check_status"]["error"] == st["error"], got["check_status"]
+            # 重启: 清空进程内状态, 同一数据目录新建 app → 仍显示未完成且原因/模式一致
+            ws._check_state.update(report=None, last_run=None, last_success=None,
+                                   running=None, steps={}, progress={}, journal_key=None)
+            ws._self_check_state["result"] = None
+            client2 = ws.create_app().test_client()
+            st2 = client2.get("/api/library/check-status").get_json()["status"]
+            assert st2["state"] == "incomplete", st2
+            assert st2["root_available"] is False, st2
+            assert st2["mode"] == "inspect", st2
+            assert st2["last_checked_at"] == "", st2
+            assert st2["failed_at"], st2
+            assert "图库不可用" in st2["error"], st2
+        finally:
+            upaths.user_data, upaths.data_root = orig_ud, orig_dr
+            _reset()
+
+    # ---------- ② 扫描范围不完整 ----------
+    with tempfile.TemporaryDirectory(prefix="t177scope_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        (img / "作者甲_1").mkdir(parents=True)
+        (img / "坏目录").mkdir()
+        (img / "作者甲_1" / "910001_p0.png").write_bytes(b"SYNTH")
+        (img / "坏目录" / "910002_p0.png").write_bytes(b"SYNTH")
+        # 910003: DB 有登记, 磁盘故意没有 → 完整扫描时应报缺失
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            db.upsert_author("1", "作者甲")
+            for aid, rel in (("910001", "作者甲_1/910001_p0.png"),
+                             ("910002", "坏目录/910002_p0.png"),
+                             ("910003", "作者甲_1/910003_p0.png")):
+                db.change_work_status(aid, WSt.DONE, title=aid, total_pages=1,
+                                      author_id="1")
+                db.mark_page_status(aid, 0, PSt.DONE, local_path=rel)
+        orig_ud, orig_dr = upaths.user_data, upaths.data_root
+        upaths.user_data = lambda rel: tmp / str(rel)
+        upaths.data_root = lambda: tmp
+        _reset()
+        orig_walk = store._walk_tree
+
+        def _walk_denied(root, onerror):
+            denied = Path(root) / "坏目录"
+            for dirpath, dirnames, filenames in orig_walk(root, onerror):
+                if Path(dirpath) == Path(root):
+                    if onerror and denied.is_dir():
+                        onerror(PermissionError(13, "denied", str(denied)))
+                    dirnames[:] = [d for d in dirnames if d != "坏目录"]
+                yield dirpath, dirnames, filenames
+
+        def _db_snap():
+            with PixivDatabase(str(tmp / "pixiv.db")) as d:
+                return [tuple(r) for r in d.conn.execute(
+                    "SELECT artwork_id,page_num,status,local_path,md5,file_size_bytes "
+                    "FROM pages ORDER BY artwork_id,page_num")]
+
+        def _disk_snap():
+            return sorted((p.relative_to(img).as_posix(), p.stat().st_size)
+                          for p in img.rglob("*") if p.is_file())
+        try:
+            client = ws.create_app().test_client()
+            # 无既有报告: 首次就范围不完整
+            store._walk_tree = _walk_denied
+            before_db, before_disk = _db_snap(), _disk_snap()
+            _run_inspect(client)
+            st = client.get("/api/library/check-status").get_json()["status"]
+            assert st["state"] == "incomplete", st
+            assert st["scan_incomplete"] is True, st
+            assert st["last_checked_at"] == "", st
+            assert "无法读取" in st["error"], st
+            rep = client.get("/api/library/check-report").get_json()["report"]
+            assert rep and rep.get("scan_incomplete") is True, rep
+            types = {x["type"] for x in rep["suspicious"] + rep["todos"]}
+            assert "scan_incomplete" in types, types
+            # 未扫到的 910002 不得被判缺失; 原登记保持
+            assert not any(x.get("type") == "missing_file"
+                           and str(x.get("artwork_id")) == "910002"
+                           for x in rep["suspicious"] + rep["todos"]), rep["suspicious"]
+            assert _db_snap() == before_db and _disk_snap() == before_disk
+            with PixivDatabase(str(tmp / "pixiv.db")) as d:
+                assert d.find_page_by_local_path("坏目录/910002_p0.png"), \
+                    "未扫到的范围必须保留原登记"
+
+            # 恢复完整扫描: 回到正常状态, 不完整标注消失
+            store._walk_tree = orig_walk
+            _run_inspect(client)
+            st = client.get("/api/library/check-status").get_json()["status"]
+            assert st["state"] == "issues", st
+            assert st["scan_incomplete"] is False, st
+            success_at = st["last_checked_at"]
+            assert success_at, st
+            rep = client.get("/api/library/check-report").get_json()["report"]
+            assert not rep.get("scan_incomplete"), rep
+            assert "scan_incomplete" not in {
+                x["type"] for x in rep["suspicious"] + rep["todos"]}
+            assert any(x.get("type") == "missing_file"
+                       and str(x.get("artwork_id")) == "910003"
+                       for x in rep["suspicious"]), "完整扫描应报 910003 缺失"
+
+            # 已有报告 + 范围再次不完整: 上一版缺失项必须保留, 不能当已解决
+            stored = ws._check_state.get("report")
+            assert isinstance(stored, dict), stored
+            stored["suspicious"].append({"type": "missing_file", "ref": "999999",
+                                         "text": "上一版遗留的缺失项"})
+            store._walk_tree = _walk_denied
+            _run_inspect(client)
+            rep2 = client.get("/api/library/check-report").get_json()["report"]
+            assert rep2.get("scan_incomplete") is True, rep2
+            assert any(x.get("type") == "missing_file" and x.get("ref") == "999999"
+                       for x in rep2["suspicious"] + rep2["todos"]), \
+                "范围不完整时上一版缺失项必须原样保留"
+            st3 = client.get("/api/library/check-status").get_json()["status"]
+            assert st3["state"] == "incomplete", st3
+            assert st3["last_checked_at"] == success_at, st3
+            assert st3["failed_at"], st3
+            assert "无法读取" in st3["error"], st3
+            assert st3["scan_incomplete"] is True, st3
+
+            # 重启: 清空进程内状态, 同一数据目录恢复报告与最近一次尝试
+            ws._check_state.update(report=None, last_run=None, last_success=None,
+                                   running=None, steps={}, progress={}, journal_key=None)
+            ws._self_check_state["result"] = None
+            client_r = ws.create_app().test_client()
+            st_r = client_r.get("/api/library/check-status").get_json()["status"]
+            assert st_r["state"] == "incomplete", st_r
+            assert st_r["last_checked_at"] == success_at, st_r
+            assert st_r["failed_at"], st_r
+            assert "无法读取" in st_r["error"], st_r
+            assert st_r["scan_incomplete"] is True, st_r
+            rep_r = client_r.get("/api/library/check-report").get_json()["report"]
+            assert rep_r and rep_r.get("scan_incomplete") is True, rep_r
+            assert "scan_incomplete" in {x["type"] for x in
+                                         rep_r["suspicious"] + rep_r["todos"]}
+
+            # 恢复扫描后: 不完整标注消失, 遗留假条目被正常复检清掉
+            store._walk_tree = orig_walk
+            _run_inspect(client_r)
+            st = client_r.get("/api/library/check-status").get_json()["status"]
+            assert st["state"] == "issues" and st["scan_incomplete"] is False, st
+            rep3 = client_r.get("/api/library/check-report").get_json()["report"]
+            assert not rep3.get("scan_incomplete"), rep3
+            assert not any(x.get("ref") == "999999"
+                           for x in rep3["suspicious"] + rep3["todos"]), \
+                "恢复完整扫描后, 上一版已不存在的条目应被复检清掉"
+            # 再重启一次: 未完成状态已被完整成功清除
+            ws._check_state.update(report=None, last_run=None, last_success=None,
+                                   running=None, steps={}, progress={}, journal_key=None)
+            ws._self_check_state["result"] = None
+            client_r2 = ws.create_app().test_client()
+            st_ok = client_r2.get("/api/library/check-status").get_json()["status"]
+            assert st_ok["state"] == "issues", st_ok
+            assert st_ok["scan_incomplete"] is False, st_ok
+            assert st_ok["failed_at"] == "", st_ok
+        finally:
+            store._walk_tree = orig_walk
+            upaths.user_data, upaths.data_root = orig_ud, orig_dr
+            _reset()
+
+    # ---------- ③ 503 项待补资料: 完整总数 + 末尾条目可查看 ----------
+    with tempfile.TemporaryDirectory(prefix="t177meta_") as td:
+        tmp = Path(td)
+        img = tmp / "img"
+        img.mkdir()
+        (img / "散图.png").write_bytes(b"SYNTH")
+        ids = [f"93{i:05d}" for i in range(503)]
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            db.upsert_author("1", "作者甲")
+            for aid in ids:
+                db.change_work_status(aid, WSt.DONE, title="", total_pages=0,
+                                      author_id="1")
+        orig_ud, orig_dr = upaths.user_data, upaths.data_root
+        upaths.user_data = lambda rel: tmp / str(rel)
+        upaths.data_root = lambda: tmp
+        _reset()
+        try:
+            client = ws.create_app().test_client()
+
+            def _db_dump():
+                with PixivDatabase(str(tmp / "pixiv.db")) as d:
+                    pages = [tuple(r) for r in d.conn.execute(
+                        "SELECT artwork_id,page_num,status,local_path,md5 FROM pages "
+                        "ORDER BY artwork_id,page_num")]
+                    arts = [tuple(r) for r in d.conn.execute(
+                        "SELECT artwork_id,title,author_id,ai_type FROM artworks "
+                        "ORDER BY artwork_id")]
+                    expected = d.works_missing_metadata(limit=100000)
+                return pages, arts, expected
+
+            def _disk_dump():
+                return sorted((p.relative_to(img).as_posix(), p.stat().st_size)
+                              for p in img.rglob("*") if p.is_file())
+            before_db, before_disk = _db_dump(), _disk_dump()
+            _run_inspect(client)
+            rep = client.get("/api/library/check-report").get_json()["report"]
+            assert rep.get("metadata_missing_total") == 503, \
+                rep.get("metadata_missing_total")
+            meta_items = [x for x in rep["suspicious"] + rep["todos"]
+                          if x["type"] == "metadata_missing"]
+            assert len(meta_items) == 503, len(meta_items)
+            assert {x["ref"] for x in meta_items} == set(ids)
+            after_db, after_disk = _db_dump(), _disk_dump()
+            assert after_db == before_db and after_disk == before_disk, \
+                "只读检查不得改变库与图片"
+            last_id = after_db[2][-1]
+            page = client.get("/api/library/check-items",
+                              query_string={"type": "metadata_missing",
+                                            "offset": 502, "limit": 10}).get_json()
+            assert page["total"] == 503 and len(page["items"]) == 1, page
+            assert page["items"][0]["ref"] == last_id, page["items"]
+            st = client.get("/api/library/check-status").get_json()["status"]
+            assert st["state"] == "issues", st
+        finally:
+            upaths.user_data, upaths.data_root = orig_ud, orig_dr
+            _reset()
+
+    # 前端/服务端接线 (静态)
+    js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for token in ("检查未完成", "failed_at", "st.error", "scan_incomplete",
+                  "openCheckItems", "查看全部", "metadata_missing_total"):
+        assert token in js, f"缺少第 5 项返修前端接线 {token}"
+    srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+    for token in ("failed_at", "last_success", "scan_incomplete",
+                  "metadata_missing_total", "count_works_missing_metadata",
+                  "check-items", "limit=100000"):
+        assert token in srv, f"缺少第 5 项返修服务端接线 {token}"
+    st_src = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
+    assert "def count_works_missing_metadata" in st_src
 
 
 def main() -> int:

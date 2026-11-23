@@ -112,6 +112,16 @@ def _walk_tree(root, onerror):
     return os.walk(str(root), onerror=onerror)
 
 
+# 「待补资料」口径 (第 5 项: 报告条目与总数必须用同一套条件):
+# 纯数字 pixiv 作品 + 缺标题/标签/封面/ai_type; 非 pixiv 作品不去 pixiv 问, 不算。
+_WORKS_MISSING_METADATA_WHERE = """
+    deleted_at IS NULL AND trashed_at IS NULL
+      AND artwork_id GLOB '[0-9]*' AND artwork_id NOT GLOB '*[^0-9]*'
+      AND (tags_json IS NULL OR title IS NULL OR title = ''
+           OR thumb_url IS NULL OR ai_type IS NULL)
+"""
+
+
 @dataclass
 class RestoreDiff:
     """备份 vs 当前的差异对比。返回给 GUI, 恢复前由使用者确认, 避免盲目覆盖丢失数据。"""
@@ -1558,17 +1568,20 @@ class PixivDatabase:
         会把全库都标成缺, 属于误导 (两口径刻意分离)。
         """
         rows = self.conn.execute(
-            """
-            SELECT artwork_id FROM artworks
-             WHERE deleted_at IS NULL AND trashed_at IS NULL
-               AND artwork_id GLOB '[0-9]*' AND artwork_id NOT GLOB '*[^0-9]*'
-               AND (tags_json IS NULL OR title IS NULL OR title = ''
-                    OR thumb_url IS NULL OR ai_type IS NULL)
-             ORDER BY created_at ASC LIMIT ?
-            """,
+            "SELECT artwork_id FROM artworks WHERE " + _WORKS_MISSING_METADATA_WHERE +
+            " ORDER BY created_at ASC LIMIT ?",
             (limit,),
         ).fetchall()
         return [r['artwork_id'] for r in rows]
+
+    def count_works_missing_metadata(self) -> int:
+        """与 works_missing_metadata 完全同口径的**完整数量** (不受列表 limit 影响)。
+
+        第 5 项: 检查报告只展示前 N 条时, 总数仍要按全库算准。"""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM artworks WHERE " + _WORKS_MISSING_METADATA_WHERE
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
 
     def count_missing_metadata(self) -> int:
         """缺元数据(标签/标题/缩略图)的**pixiv 作品**数量, 供前端提示补全进度
@@ -1667,6 +1680,30 @@ class PixivDatabase:
         if n:
             self.conn.commit()
         return n
+
+    def discard_foreign_shell(self, ext_id: str, rel: str) -> bool:
+        """撤回登记失败时本次新建的「其他来源」占位 (仅当页仍指向本次输出)。
+
+        4B-3 返修 ③: 新建占位页后登记失败不能留下指向已撤回文件的错误页;
+        页不是本次路径的绝不动。返回是否真的撤回了。"""
+        rel = str(rel).replace("\\", "/")
+        try:
+            with self.conn:
+                row = self.conn.execute(
+                    "SELECT 1 FROM pages WHERE artwork_id=? AND local_path=?",
+                    (str(ext_id), rel)).fetchone()
+                if not row:
+                    return False
+                self.conn.execute("DELETE FROM pages WHERE artwork_id=?",
+                                  (str(ext_id),))
+                self.conn.execute(
+                    "DELETE FROM artworks WHERE artwork_id=? AND NOT EXISTS "
+                    "(SELECT 1 FROM pages WHERE artwork_id=?)",
+                    (str(ext_id), str(ext_id)))
+            return True
+        except sqlite3.Error as e:
+            self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
+            return False
 
     def refresh_foreign_sources(self) -> int:
         """把仍是「其他来源」(other/NULL) 的 ext_ 作品按路径启发式细分到具体站点
@@ -2958,7 +2995,8 @@ class PixivDatabase:
         except Exception:
             return False
 
-    def reconcile_output(self, img_root: "Path", *, verify_corrupt: bool = False) -> ReconcileReport:
+    def reconcile_output(self, img_root: "Path", *, verify_corrupt: bool = False,
+                         write: bool = True) -> ReconcileReport:
         """图库 ↔ 磁盘实时对账 (磁盘为路径真源, 双重身份识别)。
 
         身份识别:
@@ -2974,6 +3012,8 @@ class PixivDatabase:
           ④ DONE 作品自然键+指纹都找不到 → 缺失;
           ⑤ 空目录收集 / (可选) PIL 损坏校验。
         不删任何 DB 记录、不删磁盘文件——只对账与报告。
+        write=False (第 5 项「检查全部」): 只扫描与统计, 不回填指纹/不重指/不补页,
+        库和磁盘保持原样 (new_pages_linked / pages_relinked 变成"待处理数量")。
         """
         from utils.hashutil import md5_of
         img_root = Path(img_root)
@@ -3080,7 +3120,9 @@ class PixivDatabase:
                 if not r['md5']:
                     h = md5_of(p)
                     if h:
-                        self._backfill_page_fingerprint(r['artwork_id'], r['page_num'], h, sz)
+                        if write:
+                            self._backfill_page_fingerprint(
+                                r['artwork_id'], r['page_num'], h, sz)
                         md5_of_disk[rel] = h
                 else:
                     md5_of_disk[rel] = r['md5']
@@ -3127,7 +3169,8 @@ class PixivDatabase:
                         target_row = cand
             if target_row is not None:
                 ta, tp = str(target_row['artwork_id']), int(target_row['page_num'])
-                self._relink_page(ta, tp, rel, h, sz)
+                if write:
+                    self._relink_page(ta, tp, rel, h, sz)
                 relinked += 1
                 relinked_keys.add((ta, tp))
                 if h:
@@ -3136,12 +3179,13 @@ class PixivDatabase:
                 cand = page_by_key.get(nkey)
                 if cand is None:
                     # 真正的全新页补登记 (含单页裸ID/大写_P0: pixiv 图, 建正式作品壳)
-                    self.mark_page_status(nkey[0], nkey[1], PSt.DONE,
-                                          local_path=rel, md5=h, file_size_bytes=sz)
+                    if write:
+                        self.mark_page_status(nkey[0], nkey[1], PSt.DONE,
+                                              local_path=rel, md5=h, file_size_bytes=sz)
+                        # 外置图片导入: 文件在「作者名_作者ID/」文件夹里 → 本地已有信息,
+                        # 当场回填作者 (不联网); 不覆盖 DB 已知作者
+                        self._adopt_author_from_rel(nkey[0], rel)
                     new_pages += 1
-                    # 外置图片导入: 文件在「作者名_作者ID/」文件夹里 → 本地已有信息,
-                    # 当场回填作者 (不联网); 不覆盖 DB 已知作者
-                    self._adopt_author_from_rel(nkey[0], rel)
                 else:
                     # 用户主动转 JPG 后的旧派生 PNG: 不报同页冲突/待确认副本
                     if self._is_old_derived_png(cand, rel, h):

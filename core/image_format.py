@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -91,9 +92,35 @@ def is_readable(path: "str | Path") -> bool:
         return False
 
 
+class PublishRejected(Exception):
+    """发布前复核否决: 携带失败原因码与说明, 供调用方原样回报。"""
+
+    def __init__(self, reason: str, note: str = ""):
+        super().__init__(note or reason)
+        self.reason = reason
+        self.note = note
+
+
+def _publish_new_file(tmp: "str | Path", out: "str | Path") -> None:
+    """把已校验的临时文件发布到正式路径; 目标已存在时抛 FileExistsError, 绝不覆盖。
+
+    4B-3 返修 ①: 预检通过不代表发布时目标仍为空 (另一请求/手动放入都可能抢先)。
+    Windows 用 rename (目标存在会抛 FileExistsError), POSIX 用硬链接 (同样拒绝已存在目标)。
+    """
+    tmp_p, out_p = Path(tmp), Path(out)
+    if out_p.exists():
+        raise FileExistsError(str(out_p))
+    if os.name == "nt":
+        os.rename(str(tmp_p), str(out_p))
+    else:
+        os.link(str(tmp_p), str(out_p))
+        tmp_p.unlink()
+
+
 def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = None,
                      delete_source: bool = False,
-                     overwrite: bool = False) -> dict:
+                     overwrite: bool = False,
+                     before_publish: "Callable[[], None] | None" = None) -> dict:
     """按入库规则处理一张图, 返回转换结果与来源记录。
 
     - PNG: 原样登记 (指定了不同 out_path 时复制过去)
@@ -107,6 +134,10 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
     reason: unreadable=源图打不开; exists=目标已存在; convert_failed=生成/替换失败;
             copy_failed=原生 PNG 复制失败; 空=正常。
     overwrite=True 时若目标 PNG 已存在, 先留一份 `.bak` 再覆盖 (沿用覆盖备份流程)。
+    before_publish: 编码完成且临时文件校验通过后、正式发布前调用; 回调发现问题时
+            抛 PublishRejected(reason, note), 本次不发布并原样回报。4B-3 用它复核
+            源文件身份与页登记。正式发布用同盘唯一临时文件 + 拒绝覆盖的重命名,
+            目标在预检后出现时返回 reason="exists", 绝不覆盖已有文件。
     """
     src = Path(src_path)
     out = Path(out_path) if out_path else src.with_suffix(".png")
@@ -195,7 +226,8 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
     cleanup_failed = False
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        tmp = out.with_name(out.name + ".part")
+        # 同盘唯一临时文件名: 并发确认/上次中断残留都不会互相顶掉
+        tmp = out.with_name(f".vixiq-png-{uuid.uuid4().hex}.tmp")
         try:
             with src_img as im:
                 im = ImageOps.exif_transpose(im)
@@ -209,12 +241,24 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
                 chk.load()
                 if not chk.size[0] or not chk.size[1]:
                     raise ValueError("PNG 尺寸无效")
-            os.replace(tmp, out)
+            # 发布前最后复核 (源身份/页登记), 有问题就地否决, 不碰正式路径
+            if before_publish is not None:
+                before_publish()
+            if overwrite:
+                os.replace(str(tmp), str(out))
+            else:
+                _publish_new_file(tmp, out)
         finally:
             try:
                 tmp.unlink(missing_ok=True)
             except Exception:
                 cleanup_failed = True
+    except PublishRejected as e:
+        result.update(ok=False, reason=e.reason, note=e.note)
+        return result
+    except FileExistsError:
+        result.update(ok=False, reason="exists", note="目标 PNG 已存在 (发布时检测到)，未覆盖")
+        return result
     except Exception as e:
         result.update(ok=False, reason="convert_failed",
                       note=f"PNG 转换失败：{str(e).splitlines()[0]}")
