@@ -1,5 +1,79 @@
 // 壁纸文件管理：作品归属与自定义分组独立，所有图片遵循安全模式。
-const WFA = { groups: [], page: 1, per: 80, results: [], visible: [], loading: 0, works: [], workSeq: 0, busy: false };
+const WFA = {
+  groups: [], page: 1, per: 80, results: [], visible: [], loading: 0,
+  works: [], workSeq: 0, busy: false, sort: 'name', order: 'asc', compact: false,
+};
+
+const WF_FILTER_LABELS = {
+  all: '全部', owned: '已归属', orphan: '未归属', dupe: '重复图片', favorite: '收藏',
+};
+const WF_SORT_LABELS = { name: '文件名', new: '最近修改', size: '文件大小' };
+const WF_ORDER_LABELS = { asc: '升序', desc: '降序' };
+const WF_MENUS = ['wf-sort-menu', 'wf-filters', 'wf-scan-menu',
+                  'wf-organize-menu', 'wf-more-menu', 'wf-batch-menu'];
+let _wfMenuTrigger = null;
+
+// 过滤: 范围 + 状态 + 作品 + 分组 + 关键词; 壁纸库范围追加图库原图。
+// 图库原图没有自定义分组, 分组筛选只作用于壁纸夹文件。
+function wallFilterEntries(d, opt) {
+  opt = opt || {};
+  const scope = opt.scope === 'library' ? 'library' : 'wall';
+  const filter = WF_FILTER_LABELS[opt.filter] ? opt.filter : 'all';
+  const work = String(opt.work || '');
+  const group = String(opt.group || '');
+  const q = String(opt.q || '').trim().toLocaleLowerCase();
+  const duplicateNames = opt.duplicateNames || new Set();
+  const matchQ = f => !q || [f.name, f.title, f.artwork_id, f.author_name,
+    f.group_name, f.rel, f.match_label, ...(f.labels || [])]
+    .join(' ').toLocaleLowerCase().includes(q);
+  let list = (d.items || []).filter(f => {
+    if (filter === 'owned' && !f.artwork_id) return false;
+    if (filter === 'orphan' && f.artwork_id) return false;
+    if (filter === 'dupe' && !duplicateNames.has(f.name)) return false;
+    if (filter === 'favorite' && !f.favorite) return false;
+    if (work && f.artwork_id !== work) return false;
+    if (group === 'none' && f.group_id != null) return false;
+    if (group && group !== 'none' && String(f.group_id) !== group) return false;
+    return matchQ(f);
+  });
+  if (scope === 'library') {
+    const lib = (d.library_items || []).filter(f => {
+      if (work && f.artwork_id !== work) return false;
+      if (group) return false;
+      return matchQ(f);
+    });
+    list = list.concat(lib);
+  }
+  return list;
+}
+
+// 排序: 文件名自然排序; 最近修改/大小按方向, 同值用文件名升序做稳定次级。
+function wallSortEntries(list, sort, order) {
+  const dir = order === 'desc' ? -1 : 1;
+  const nameOf = f => String(f.name || f.rel || '');
+  const nameCmp = (a, b) => nameOf(a).localeCompare(nameOf(b), 'zh-CN', { numeric: true });
+  return list.slice().sort((a, b) => {
+    if (sort === 'name') return nameCmp(a, b) * dir;
+    let v = 0;
+    if (sort === 'new') v = (a.mtime || 0) - (b.mtime || 0);
+    else if (sort === 'size') v = (a.size || 0) - (b.size || 0);
+    if (v === 0) return nameCmp(a, b);
+    return v * dir;
+  });
+}
+
+// 首次改选字段: 文件名升序, 最近修改/文件大小降序; 同字段保持当前方向。
+function wallNextSort(field, currentSort, currentOrder) {
+  const f = WF_SORT_LABELS[field] ? field : 'name';
+  if (f === currentSort) return { sort: f, order: currentOrder };
+  return { sort: f, order: f === 'name' ? 'asc' : 'desc' };
+}
+
+function wallFilterCount(opt) {
+  opt = opt || {};
+  return (WF_FILTER_LABELS[opt.filter] && opt.filter !== 'all' ? 1 : 0)
+    + (opt.work ? 1 : 0) + (opt.group ? 1 : 0);
+}
 
 async function wallPost(url, data) {
   const r = await api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
@@ -7,25 +81,347 @@ async function wallPost(url, data) {
   return r;
 }
 
+// ---- 下拉菜单: 点外部/Esc 关闭, 焦点回入口 ----
+function wfCloseMenus(exceptId) {
+  let closedTrigger = null;
+  WF_MENUS.forEach(id => {
+    if (id === exceptId) return;
+    const menu = document.getElementById(id);
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    const btn = document.querySelector(`[data-wf-menu="${id}"]`);
+    if (btn) {
+      btn.setAttribute('aria-expanded', 'false');
+      if (!closedTrigger) closedTrigger = btn;
+    }
+  });
+  if (!exceptId) _wfMenuTrigger = null;
+  return closedTrigger;
+}
+
+function wfToggleMenu(btn, menuId) {
+  const menu = document.getElementById(menuId);
+  if (!menu) return;
+  const open = menu.hidden;
+  wfCloseMenus(menuId);
+  menu.hidden = !open;
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  _wfMenuTrigger = open ? btn : null;
+  if (open && menuId === 'wf-more-menu') wallPaintMoreToggle();
+  if (open) {
+    const first = menu.querySelector('button:not([disabled])');
+    if (first) first.focus();
+  }
+}
+
+function wallPaintMoreToggle() {
+  const btn = document.getElementById('wf-more-toggle');
+  if (!btn) return;
+  const main = document.querySelector('main');
+  btn.textContent = main && main.classList.contains('management-compact') ? '展开菜单' : '收起菜单';
+}
+
+window.wallMoreToggle = function () {
+  wfCloseMenus();
+  const btn = document.querySelector('#tab-wallpapers .management-primary .management-toggle');
+  if (btn) btn.click();
+};
+
+window.wallOpenBatchMenu = function () {
+  if (!WF_SEL.size) { toast('请先选择壁纸', 'info'); return; }
+  wfCloseMenus();
+  const btn = document.getElementById('wf-batch-btn');
+  const menu = document.getElementById('wf-batch-menu');
+  if (!btn || !menu) return;
+  menu.hidden = false;
+  btn.setAttribute('aria-expanded', 'true');
+  _wfMenuTrigger = btn;
+  const first = menu.querySelector('button:not([disabled])');
+  if (first) first.focus();
+};
+
+// ---- 工具栏布局: 桌面两行; 窄屏把范围/排序/筛选收成第二行, 其余进「更多」 ----
+function initWallpaperToolbarLayout() {
+  const bar = document.querySelector('#tab-wallpapers .management-toolbar');
+  if (!bar || bar.dataset.wfLayout === '1') return;
+  bar.dataset.wfLayout = '1';
+  const primary = bar.querySelector('.management-primary');
+  const filtersRow = document.getElementById('wf-extra-tools');
+  const scopeGroup = document.getElementById('wf-scope');
+  const scopeSelect = document.getElementById('wf-scope-select');
+  const sortWrap = bar.querySelector('.wf-sort-wrap');
+  const selectAll = document.getElementById('wf-select-all');
+  const collapseBtn = bar.querySelector('.wf-collapse-btn');
+  const moreBtn = document.getElementById('wf-more-btn');
+  const toolMenus = bar.querySelector('.wf-tool-menus-desktop');
+  const filterWrap = bar.querySelector('.wf-filter-wrap');
+  const filterMenu = document.getElementById('wf-filters');
+  const work = document.getElementById('wf-work-filter');
+  const group = document.getElementById('wf-group-filter');
+  const clearBtn = document.getElementById('wf-clear-filters');
+  if (!primary || !filtersRow || !scopeGroup || !scopeSelect || !sortWrap
+      || !selectAll || !collapseBtn || !moreBtn || !toolMenus || !filterWrap
+      || !filterMenu || !work || !group || !clearBtn) return;
+
+  const mq = window.matchMedia('(max-width: 980px)');
+  function apply(compact) {
+    WFA.compact = compact;
+    wfCloseMenus();
+    if (compact) {
+      filtersRow.insertBefore(scopeSelect, filtersRow.firstChild);
+      filtersRow.insertBefore(sortWrap, scopeSelect.nextSibling);
+      filterMenu.append(work, group, clearBtn);
+      scopeGroup.hidden = true;
+      scopeSelect.hidden = false;
+      selectAll.hidden = true;
+      collapseBtn.hidden = true;
+      moreBtn.hidden = false;
+      toolMenus.hidden = true;
+    } else {
+      primary.insertBefore(scopeSelect, scopeGroup.nextSibling);
+      primary.insertBefore(sortWrap, selectAll);
+      filterWrap.after(work, group, clearBtn);
+      scopeGroup.hidden = false;
+      scopeSelect.hidden = true;
+      selectAll.hidden = false;
+      collapseBtn.hidden = false;
+      moreBtn.hidden = true;
+      toolMenus.hidden = false;
+    }
+    wallSyncFiltersUI();
+    wallSyncSortUI();
+  }
+  mq.addEventListener('change', e => apply(e.matches));
+  apply(mq.matches);
+
+  // 下拉触发按钮与菜单的对应关系 (HTML 只写按钮 ID, 这里统一接线)
+  [['wf-sort-btn', 'wf-sort-menu'], ['wf-filter-btn', 'wf-filters'],
+   ['wf-scan-menu-btn', 'wf-scan-menu'], ['wf-organize-menu-btn', 'wf-organize-menu'],
+   ['wf-more-btn', 'wf-more-menu'], ['wf-batch-btn', 'wf-batch-menu']]
+    .forEach(([btnId, menuId]) => {
+      const b = document.getElementById(btnId);
+      if (b) b.dataset.wfMenu = menuId;
+    });
+  document.addEventListener('click', e => {
+    if (e.target.closest('[data-wf-menu]') || e.target.closest('.lib-menu')) return;
+    const open = WF_MENUS.some(id => {
+      const m = document.getElementById(id);
+      return m && !m.hidden;
+    });
+    if (!open) return;
+    const trigger = _wfMenuTrigger;
+    wfCloseMenus();
+    // 点空白处关闭时把焦点还给入口; 点到其他交互控件则保留用户的新焦点
+    const focusable = e.target.closest(
+      'input, select, textarea, button, a, [contenteditable="true"]');
+    if (!focusable && trigger && trigger.getClientRects().length) trigger.focus();
+  });
+}
+
+function wallSyncScopeUI() {
+  document.querySelectorAll('#wf-scope [data-wf-scope]').forEach(b => {
+    const on = b.dataset.wfScope === WF_SCOPE;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  const sel = document.getElementById('wf-scope-select');
+  if (sel) sel.value = WF_SCOPE;
+}
+
+window.wallSetScope = function (scope) {
+  const next = scope === 'library' ? 'library' : 'wall';
+  if (next === WF_SCOPE) return;
+  WF_SCOPE = next;
+  // 筛选只作用于壁纸夹: 换范围从全范围搜索开始, 保留关键词/排序/作品
+  WF_FILTER = 'all';
+  const group = document.getElementById('wf-group-filter');
+  if (group) group.value = '';
+  WFA.page = 1;
+  wfCloseMenus();
+  wallSyncScopeUI();
+  wallSyncFiltersUI();
+  wallFilesPaint();
+};
+
+function wallSetFilter(filter) {
+  if (!WF_FILTER_LABELS[filter]) return;
+  const trigger = _wfMenuTrigger;
+  WF_FILTER = filter;
+  WFA.page = 1;
+  wfCloseMenus();
+  wallSyncFiltersUI();
+  wallFilesPaint();
+  if (trigger && trigger.getClientRects().length) trigger.focus();
+}
+
+window.wallClearFilters = function () {
+  WF_FILTER = 'all';
+  ['wf-work-filter', 'wf-group-filter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  WFA.page = 1;
+  wfCloseMenus();
+  wallSyncFiltersUI();
+  wallFilesPaint();
+};
+
+function wallSyncFiltersUI() {
+  const work = document.getElementById('wf-work-filter')?.value || '';
+  const group = document.getElementById('wf-group-filter')?.value || '';
+  const n = wallFilterCount({ filter: WF_FILTER, work, group });
+  const label = document.getElementById('wf-filter-label');
+  if (label) label.textContent = WF_FILTER_LABELS[WF_FILTER] || '全部';
+  const count = document.getElementById('wf-filter-count');
+  if (count) {
+    count.textContent = n ? ` ${n}` : '';
+    count.hidden = n === 0;
+  }
+  const btn = document.getElementById('wf-filter-btn');
+  if (btn) {
+    btn.dataset.count = String(n);
+    btn.setAttribute('aria-label', n ? `筛选，已启用 ${n} 项` : '筛选');
+  }
+  document.querySelectorAll('#wf-filters [data-f]').forEach(b => {
+    const on = b.dataset.f === WF_FILTER;
+    b.classList.toggle('active', on);
+    b.classList.toggle('is-checked', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    const chk = b.querySelector('.wf-check');
+    if (chk) chk.textContent = on ? '✓' : '';
+  });
+  const clear = document.getElementById('wf-clear-filters');
+  if (clear) clear.hidden = n === 0;
+}
+
+function wallSyncSortUI() {
+  const field = WF_SORT_LABELS[WFA.sort] ? WFA.sort : 'name';
+  const order = WFA.order === 'desc' ? 'desc' : 'asc';
+  const btn = document.getElementById('wf-sort-btn');
+  if (btn) {
+    const fEl = btn.querySelector('.wf-sort-field');
+    const wEl = btn.querySelector('.wf-sort-word');
+    const aEl = btn.querySelector('.wf-sort-arrow');
+    if (fEl) fEl.textContent = WF_SORT_LABELS[field];
+    if (wEl) wEl.textContent = ' ' + WF_ORDER_LABELS[order];
+    if (aEl) aEl.textContent = order === 'asc' ? '↑' : '↓';
+    btn.setAttribute('aria-label',
+      `排序，${WF_SORT_LABELS[field]}，${WF_ORDER_LABELS[order]}`);
+  }
+  const native = document.getElementById('wf-sort');
+  if (native) native.value = field;
+  document.querySelectorAll('#wf-sort-menu [data-wf-sort]').forEach(b => {
+    const on = b.dataset.wfSort === field;
+    b.classList.toggle('is-checked', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    const chk = b.querySelector('.wf-check');
+    if (chk) chk.textContent = on ? '✓' : '';
+  });
+  document.querySelectorAll('#wf-sort-menu [data-wf-order]').forEach(b => {
+    const on = b.dataset.wfOrder === order;
+    b.classList.toggle('is-checked', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    const chk = b.querySelector('.wf-check');
+    if (chk) chk.textContent = on ? '✓' : '';
+  });
+}
+
+function wallSetSortField(field) {
+  const next = wallNextSort(field, WFA.sort, WFA.order);
+  const changed = next.sort !== WFA.sort || next.order !== WFA.order;
+  const trigger = _wfMenuTrigger;
+  WFA.sort = next.sort;
+  WFA.order = next.order;
+  wfCloseMenus();
+  wallSyncSortUI();
+  if (!changed) {
+    if (trigger && trigger.getClientRects().length) trigger.focus();
+    return;
+  }
+  WFA.page = 1;
+  wallFilesPaint();
+  if (trigger && trigger.getClientRects().length) trigger.focus();
+}
+
+function wallSetSortOrder(order) {
+  const next = order === 'desc' ? 'desc' : 'asc';
+  const trigger = _wfMenuTrigger;
+  wfCloseMenus();
+  if (next === WFA.order) {
+    if (trigger && trigger.getClientRects().length) trigger.focus();
+    return;
+  }
+  WFA.order = next;
+  WFA.page = 1;
+  wallSyncSortUI();
+  wallFilesPaint();
+  if (trigger && trigger.getClientRects().length) trigger.focus();
+}
+
+function wallPaintSearchClear() {
+  const input = document.getElementById('wf-search');
+  const btn = document.getElementById('wf-search-clear');
+  if (input && btn) btn.hidden = !input.value;
+}
+
 function wallFilesEnter() {
   const root = $('#tab-wallpapers');
   if (!root._adminBound) {
     root._adminBound = true;
+    initWallpaperToolbarLayout();
     root.addEventListener('click', e => {
-      const b = e.target.closest('[data-f]');
-      if (b) {
-        WF_FILTER = b.dataset.f; WFA.page = 1;
-        $$('#wf-filters [data-f]').forEach(x => x.classList.toggle('active', x === b));
-        wallFilesPaint();
+      const trigger = e.target.closest('[data-wf-menu]');
+      if (trigger) {
+        e.preventDefault();
+        wfToggleMenu(trigger, trigger.dataset.wfMenu);
+        return;
       }
+      const scope = e.target.closest('[data-wf-scope]');
+      if (scope) { wallSetScope(scope.dataset.wfScope); return; }
+      const sortField = e.target.closest('[data-wf-sort]');
+      if (sortField) { wallSetSortField(sortField.dataset.wfSort); return; }
+      const sortOrder = e.target.closest('[data-wf-order]');
+      if (sortOrder) { wallSetSortOrder(sortOrder.dataset.wfOrder); return; }
+      const filter = e.target.closest('#wf-filters [data-f]');
+      if (filter) { wallSetFilter(filter.dataset.f); return; }
       const more = e.target.closest('[data-wall-more]');
       if (more) wallDetails(more.dataset.wallMore);
       const preview = e.target.closest('[data-preview]');
       if (preview) wallFilesPreview(preview.dataset.preview);
+      const libPreview = e.target.closest('[data-preview-lib]');
+      if (libPreview) wallLibraryPreview(libPreview.dataset.previewLib);
       const page = e.target.closest('[data-wall-page]');
       if (page) wallGoPage(Number(page.dataset.wallPage));
+      if (e.target.closest('#wf-search-clear')) {
+        const input = document.getElementById('wf-search');
+        if (input) {
+          input.value = '';
+          WFA.page = 1;
+          wallPaintSearchClear();
+          wallFilesPaint();
+          input.focus();
+        }
+      }
+      // 菜单项执行完动作后收起; 「操作（已选 N）」要接着打开批量菜单
+      if (e.target.closest('.lib-menu button') && !e.target.closest('#wf-more-batch')) {
+        wfCloseMenus();
+      }
     });
     root.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        const open = WF_MENUS.some(id => {
+          const m = document.getElementById(id);
+          return m && !m.hidden;
+        });
+        if (open) {
+          const trigger = _wfMenuTrigger;
+          wfCloseMenus();
+          if (trigger && trigger.getClientRects().length) trigger.focus();
+          // 打开的壁纸下拉先消费这次 Esc, 不再冒泡去关闭外层简化工具栏
+          e.stopPropagation();
+          return;
+        }
+      }
       if (!e.target.matches('[data-wall-page-input]') || e.key !== 'Enter') return;
       const n = parseInt(e.target.value, 10);
       if (Number.isFinite(n)) wallGoPage(n);
@@ -33,9 +429,19 @@ function wallFilesEnter() {
     });
     root.addEventListener('change', e => {
       if (e.target.matches('input[data-name]')) wallFilesToggle(e.target);
-      if (['wf-work-filter', 'wf-group-filter', 'wf-sort'].includes(e.target.id)) { WFA.page = 1; wallFilesPaint(); }
+      if (['wf-work-filter', 'wf-group-filter'].includes(e.target.id)) {
+        WFA.page = 1;
+        wallSyncFiltersUI();
+        wallFilesPaint();
+      }
+      if (e.target.id === 'wf-scope-select') wallSetScope(e.target.value);
     });
-    $('#wf-search').addEventListener('input', () => { WFA.page = 1; wallFilesPaint(); });
+    const search = document.getElementById('wf-search');
+    if (search) search.addEventListener('input', () => {
+      WFA.page = 1;
+      wallPaintSearchClear();
+      wallFilesPaint();
+    });
   }
   wallFilesLoad();
   api('/api/wallpaper/files/scan/status').then(s => { if (s?.status === 'scanning') wallFilesPoll(); }).catch(() => {});
@@ -61,13 +467,18 @@ async function wallFilesLoad() {
     const alive = new Set(d.items.map(x => x.name));
     [...WF_SEL].forEach(n => { if (!alive.has(n)) WF_SEL.delete(n); });
     const works = new Map();
-    d.items.forEach(x => { if (x.artwork_id) {
-      const w = works.get(x.artwork_id) || { title: x.title, n: 0 }; w.n++; works.set(x.artwork_id, w);
-    } });
-    wallOptions($('#wf-work-filter'), '<option value="">所有作品</option>' + [...works].map(([id, w]) =>
+    const addWork = x => {
+      if (!x.artwork_id) return;
+      const w = works.get(x.artwork_id) || { title: x.title, n: 0 };
+      w.n++;
+      works.set(x.artwork_id, w);
+    };
+    d.items.forEach(addWork);
+    (d.library_items || []).forEach(addWork);
+    wallOptions($('#wf-work-filter'), '<option value="">作品：全部</option>' + [...works].map(([id, w]) =>
       `<option value="${esc(id)}">${esc(w.title || id)} · ${w.n} 张</option>`).join(''));
-    wallOptions($('#wf-group-filter'), '<option value="">所有分组</option><option value="none">未分组</option>' + WFA.groups.map(g =>
-      `<option value="${g.id}">${esc(g.name)} · ${d.items.filter(x => x.group_id === g.id).length} 张</option>`).join(''));
+    wallOptions($('#wf-group-filter'), '<option value="">分组：全部（仅壁纸夹）</option><option value="none">未分组（仅壁纸夹）</option>' + WFA.groups.map(g =>
+      `<option value="${g.id}">${esc(g.name)} · ${d.items.filter(x => x.group_id === g.id).length} 张 · 仅壁纸夹</option>`).join(''));
     wallFilesPaint();
   } catch (e) { if (seq === WFA.loading) $('#wf-result').innerHTML = `<div class="hint err-text">${esc(e.message)}</div>`; }
 }
@@ -87,9 +498,33 @@ function wallFilesCard(f) {
     </div></article>`;
 }
 
+function wallLibraryCard(f) {
+  const owner = f.artwork_id ? `${f.title || f.artwork_id}${f.page_num == null ? '' : ' · 第 ' + (f.page_num + 1) + ' 张'}` : '未归属';
+  return `<article class="wf-card wf-lib-card${f.current ? ' is-current' : ''}">
+    <span class="wf-lib-badge">图库原图</span>
+    <button class="wf-thumb" data-preview-lib="${esc(f.rel)}" aria-label="预览 ${esc(f.name)}">
+      <img src="${esc(safeThumb(f.thumb, f))}" alt="" loading="lazy" onerror="this.style.opacity=.15">
+      ${f.current ? '<span class="wf-cur">当前桌面</span>' : ''}</button>
+    <div class="wf-meta"><div class="wf-name" title="${esc(f.rel)}">${esc(f.name)}</div>
+      <div class="wf-line" title="${esc(owner)}">${esc(owner)}</div>
+      <div class="wf-line">${esc(f.author_name || '')} ${fmtSize(f.size)} · ${esc(f.format || '')}</div>
+      <div class="wf-badges"><span class="wf-tag">图库原图</span>${f.used_at
+        ? `<span class="wf-tag">${esc(String(f.used_at).slice(0, 10))}</span>` : ''}</div>
+    </div></article>`;
+}
+
+function wallLibraryPreview(rel) {
+  const f = (WFD?.library_items || []).find(x => x.rel === rel);
+  if (!f) return;
+  openLightbox({ page_num: f.page_num || 0, url: f.url, width: f.width, height: f.height,
+    file_size: f.size, title: f.name, author_name: f.author_name,
+    is_r18: f.is_r18 == null ? 1 : f.is_r18, artwork_id: f.artwork_id }, null, null);
+}
+
 function wallFilesPaint() {
   if (!WFD) return;
-  const d = WFD, stats = d.stats || {}, q = $('#wf-search').value.trim().toLocaleLowerCase();
+  const d = WFD, stats = d.stats || {};
+  const q = $('#wf-search').value.trim();
   $('#wf-dir').textContent = d.dir ? '壁纸夹 ' + d.dir : '尚未指定壁纸夹';
   $('#wf-scan-tip').textContent = d.scanned ? `共 ${stats.total} 张 · ${fmtSize(stats.bytes)} · 上次扫描 ${stats.scanned_at || '未知'}` : '扫描归属后可管理壁纸文件。';
   $('#wf-stats').innerHTML = [
@@ -100,29 +535,36 @@ function wallFilesPaint() {
   ].map(([label, n, tip]) =>
     `<div class="stat-card" title="${esc(tip)}"><div class="num">${n}</div><div class="lbl">${label}</div></div>`).join('');
   const duplicateNames = new Set((d.groups || []).flatMap(g => g.files));
-  const work = $('#wf-work-filter').value, group = $('#wf-group-filter').value;
-  let list = (d.items || []).filter(f => {
-    if (WF_FILTER === 'owned' && !f.artwork_id || WF_FILTER === 'orphan' && f.artwork_id || WF_FILTER === 'dupe' && !duplicateNames.has(f.name) || WF_FILTER === 'favorite' && !f.favorite) return false;
-    if (work && f.artwork_id !== work || group === 'none' && f.group_id != null || group && group !== 'none' && String(f.group_id) !== group) return false;
-    return !q || [f.name, f.title, f.artwork_id, f.author_name, f.group_name, ...(f.labels || [])].join(' ').toLocaleLowerCase().includes(q);
-  });
-  const sort = $('#wf-sort').value;
-  list.sort((a, b) => sort === 'new' ? b.mtime - a.mtime : sort === 'size' ? b.size - a.size : a.name.localeCompare(b.name, 'zh-CN', { numeric: true }));
+  const list = wallSortEntries(wallFilterEntries(d, {
+    scope: WF_SCOPE, filter: WF_FILTER,
+    work: $('#wf-work-filter').value,
+    group: $('#wf-group-filter').value,
+    q, duplicateNames,
+  }), WFA.sort, WFA.order);
   WFA.results = list;
   const pages = Math.max(1, Math.ceil(list.length / WFA.per));
   WFA.page = Math.max(1, Math.min(WFA.page, pages));
   WFA.visible = list.slice((WFA.page - 1) * WFA.per, WFA.page * WFA.per);
   let content = '';
-  if (WF_FILTER === 'dupe') {
-    const visible = new Set(WFA.visible.map(x => x.name));
+  if (WF_FILTER === 'dupe' && WF_SCOPE === 'wall') {
+    const visible = new Set(WFA.visible.filter(x => x.kind !== 'library').map(x => x.name));
     content = (d.groups || []).map(g => {
       const files = list.filter(f => visible.has(f.name) && g.files.includes(f.name));
       if (!files.length) return '';
       const label = g.kind === 'page' ? `${g.title || g.artwork_id} · 第 ${Number(g.page_num) + 1} 张图片` : '同一张图片';
       return `<div class="wf-group"><div class="wf-group-head">${esc(label)} · ${g.files.length} 个版本</div><div class="wf-grid">${files.map(wallFilesCard).join('')}</div></div>`;
     }).join('');
-  } else content = `<div class="wf-grid">${WFA.visible.map(wallFilesCard).join('')}</div>`;
-  $('#wf-result').innerHTML = list.length ? content : '<div class="hint">没有符合条件的壁纸。</div>';
+  } else {
+    content = `<div class="wf-grid">${WFA.visible.map(f =>
+      f.kind === 'library' ? wallLibraryCard(f) : wallFilesCard(f)).join('')}</div>`;
+  }
+  if (!list.length) {
+    // 壁纸夹没搜到: 提供沿用关键词去壁纸库继续搜
+    content = WF_SCOPE === 'wall' && q
+      ? `<div class="hint wf-empty">没有符合条件的壁纸。<button type="button" class="btn ghost" onclick="wallSetScope('library')">到壁纸库搜索</button></div>`
+      : '<div class="hint wf-empty">没有符合条件的壁纸。</div>';
+  }
+  $('#wf-result').innerHTML = content;
   // 与图库/作者同一套分页: 左侧总数, 右侧首页/上一页/页码输入/下一页/尾页
   const pagerNav = pages > 1 ? `
       <button class="btn ghost" data-wall-page="1"${WFA.page === 1 ? ' disabled' : ''} title="首页">«</button>
@@ -133,8 +575,16 @@ function wallFilesPaint() {
       </span>
       <button class="btn ghost" data-wall-page="${WFA.page + 1}"${WFA.page === pages ? ' disabled' : ''} title="下一页">›</button>
       <button class="btn ghost" data-wall-page="${pages}"${WFA.page === pages ? ' disabled' : ''} title="尾页">»</button>` : '';
-  $('#wf-pager').innerHTML = `<div class="pager-inner"><span class="pager-total">共 ${list.length} 张</span>${pagerNav}</div>`;
+  const libCount = list.filter(f => f.kind === 'library').length;
+  const totalText = WF_SCOPE === 'library'
+    ? `共 ${list.length} 项 · 壁纸夹 ${list.length - libCount} · 图库原图 ${libCount}`
+    : `共 ${list.length} 张`;
+  $('#wf-pager').innerHTML = `<div class="pager-inner"><span class="pager-total">${totalText}</span>${pagerNav}</div>`;
   wallFilesSyncSel();
+  wallSyncFiltersUI();
+  wallSyncSortUI();
+  wallSyncScopeUI();
+  wallPaintSearchClear();
 }
 
 // 翻页: 页码越界钳制到有效范围; 页码输入框由重新渲染复位
@@ -154,17 +604,25 @@ function wallFilesToggle(cb) {
 }
 function wallFilesSyncSel() {
   const n = WF_SEL.size;
-  const works = new Set((WFD?.items || []).filter(f => WF_SEL.has(f.name) && f.artwork_id).map(f => f.artwork_id)).size;
-  $('#wf-sel-count').textContent = n ? `已选 ${n} 张 · ${works} 个作品` : '未选择';
-  $('#wf-batch').classList.toggle('hidden', !n);
-  $('#wf-recycle').disabled = !n;
-  $('#wf-rename').disabled = n !== 1;
-  // 未选中时整行操作区收起, 顶部只留搜索/全选/展开
-  const selBox = document.querySelector('#tab-wallpapers .management-selection');
-  if (selBox) selBox.hidden = n === 0;
+  const selRow = document.getElementById('wf-selection-row');
+  const filterRow = document.getElementById('wf-extra-tools');
+  if (selRow) selRow.hidden = n === 0;
+  if (filterRow) filterRow.hidden = n > 0;
+  const count = document.getElementById('wf-sel-count');
+  if (count) count.textContent = n ? `已选 ${n} 张` : '未选择';
+  const recycle = document.getElementById('wf-recycle');
+  if (recycle) recycle.disabled = !n;
+  const rename = document.getElementById('wf-rename');
+  if (rename) rename.disabled = n !== 1;
+  const moreBatch = document.getElementById('wf-more-batch');
+  if (moreBatch) {
+    moreBatch.hidden = n === 0;
+    moreBatch.textContent = n ? `操作（已选 ${n} 张）` : '操作（未选择）';
+  }
+  // 选中后第二行切成操作行, 筛选/扫描菜单不再留在屏上
+  if (n > 0) wfCloseMenus();
 }
-function wallSelectVisible() { WFA.visible.forEach(f => WF_SEL.add(f.name)); wallFilesPaint(); }
-function wallSelectResults() { WFA.results.forEach(f => WF_SEL.add(f.name)); wallFilesPaint(); }
+function wallSelectVisible() { WFA.visible.filter(f => f.kind !== 'library').forEach(f => WF_SEL.add(f.name)); wallFilesPaint(); }
 function wallClearSelection() { WF_SEL.clear(); wallFilesPaint(); }
 
 function wallSelectionInfo() {

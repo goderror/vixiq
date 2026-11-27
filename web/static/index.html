@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261123e">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261123e">
+<link rel="stylesheet" href="/static/style.css?v=20261127b">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261127b">
 </head>
 <body>
 
@@ -261,7 +261,7 @@
                   title="立即核对图库记录与磁盘文件，登记新图片并更新缺失提示">🔄 同步磁盘索引</button>
           <span class="lib-menu-wrap">
             <button id="lib-import-btn" class="btn ghost" aria-haspopup="menu" aria-expanded="false"
-                    title="从本机导入图片：文件名含作品ID的直接入库，无ID的转反搜收件箱；源文件进回收站（可还原）">📁 导入 ▾</button>
+                    title="从本机导入图片：文件名含作品ID的直接入库，无ID的转反搜收件箱；外部源文件保持原位（不会被移走或删除）">📁 导入 ▾</button>
             <span id="lib-import-menu" class="lib-menu" role="menu" aria-label="导入" hidden>
               <button id="lib-import-folder-item" type="button" role="menuitem">导入文件夹</button>
               <button id="lib-import-files-item" type="button" role="menuitem">导入图片</button>
@@ -422,21 +422,54 @@
       <div class="panel-head management-heading">
         <h2>👤 作者管理</h2>
       </div>
-      <div class="management-primary field-row">
-        <div class="search-box">
-          <input id="authors-search-input" type="text" placeholder="搜索作者名 / 曾用名 / ID…" spellcheck="false">
+      <div class="management-primary field-row au-row-main">
+        <div class="search-box au-search-box">
+          <input id="authors-search-input" type="text" placeholder="搜索作者名、曾用名或 ID…" aria-label="搜索作者" spellcheck="false">
           <button id="authors-search-clear" class="input-clear" type="button" title="清空" hidden>✕</button>
         </div>
         <button id="authors-search-btn" class="btn accent">搜索</button>
-        <button id="authors-dupes-btn" class="btn ghost" onclick="openAuthorDuplicates()"
-          title="列出同名/同别名的重复作者，逐组确认合并">🔍 重复作者</button>
+        <div class="lib-menu-wrap au-sort-wrap">
+          <button id="authors-sort-btn" type="button" class="btn ghost au-sort-btn"
+                  aria-haspopup="menu" aria-expanded="false" aria-controls="authors-sort-menu"
+                  aria-label="排序，作品数，降序">排序：<span id="authors-sort-field">作品数</span><span
+            id="authors-sort-word" class="au-sort-word"> 降序</span><span class="au-sort-arrow" aria-hidden="true">↓</span><span
+            class="wf-caret" aria-hidden="true">▾</span></button>
+          <div id="authors-sort-menu" class="lib-menu au-sort-menu" role="menu" aria-label="排序" hidden>
+            <div class="wf-menu-label">排序字段</div>
+            <button type="button" role="menuitemradio" data-au-sort="name" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>画师（曾用名）</button>
+            <button type="button" role="menuitemradio" data-au-sort="id" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>作者 ID</button>
+            <button type="button" role="menuitemradio" data-au-sort="count" aria-checked="true"><span class="wf-check" aria-hidden="true">✓</span>作品数</button>
+            <button type="button" role="menuitemradio" data-au-sort="last_updated" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>最后更新</button>
+            <div class="wf-menu-sep" role="separator"></div>
+            <button type="button" role="menuitemradio" data-au-order="asc" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>升序</button>
+            <button type="button" role="menuitemradio" data-au-order="desc" aria-checked="true"><span class="wf-check" aria-hidden="true">✓</span>降序</button>
+          </div>
+        </div>
         <button type="button" class="btn ghost management-toggle" aria-expanded="true" aria-controls="authors-filters">收起菜单</button>
+        <div class="lib-menu-wrap au-more-wrap">
+          <button id="authors-more-btn" type="button" class="btn ghost au-more-btn"
+                  aria-haspopup="menu" aria-expanded="false" aria-controls="authors-more-menu" hidden>更多 ▾</button>
+          <div id="authors-more-menu" class="lib-menu au-more-menu" role="menu" aria-label="更多操作" hidden>
+            <button id="authors-more-toggle" type="button" role="menuitem" onclick="authorsMoreToggle()">收起菜单</button>
+          </div>
+        </div>
       </div>
       <div class="management-extra">
         <div class="management-extra-inner">
-        <div class="field-row lib-filters" id="authors-filters">
+        <div class="field-row lib-filters au-row-filters" id="authors-filters">
         <select id="authors-f-status" title="按作者存续状态筛选"><option value="">状态: 全部</option><option value="alive">活跃中</option><option value="gone">已注销</option><option value="unknown">未知</option></select>
         <select id="authors-f-source" title="按作品来源筛选"><option value="">来源: 全部</option><option value="pixiv">pixiv</option><option value="danbooru">danbooru</option><option value="twitter">X（推特）</option><option value="bilibili">bilibili</option><option value="ggac">GGAC</option><option value="other">未知来源</option></select>
+        <button id="authors-clear-filters" type="button" class="btn ghost" onclick="authorsClearFilters()" hidden>清除筛选</button>
+        <span class="au-filter-spacer"></span>
+        <div class="lib-menu-wrap au-filter-wrap">
+          <button id="authors-filter-btn" type="button" class="btn ghost au-filter-btn"
+                  aria-haspopup="menu" aria-expanded="false" aria-controls="authors-filter-menu"
+                  aria-label="筛选" hidden>筛选<span id="authors-filter-count" hidden></span><span
+            class="wf-caret" aria-hidden="true">▾</span></button>
+          <div id="authors-filter-menu" class="lib-menu au-filter-menu" role="menu" aria-label="筛选" hidden></div>
+        </div>
+        <button id="authors-dupes-btn" type="button" class="btn ghost" onclick="openAuthorDuplicates()"
+          title="列出同名/同别名的重复作者，逐组确认合并">🔍 查找重复作者</button>
         </div>
         </div>
       </div>
@@ -459,10 +492,51 @@
       <div class="panel-head management-heading">
         <h2>🖼️ 壁纸管理</h2>
       </div>
-      <div class="management-primary field-row">
-        <input id="wf-search" type="search" placeholder="搜索文件名、作品、作者或标记" aria-label="搜索壁纸">
-        <button type="button" class="btn ghost" onclick="wallSelectVisible()">全选本页</button>
-        <button type="button" class="btn ghost management-toggle" aria-expanded="true" aria-controls="wf-extra-tools">收起菜单</button>
+      <div class="management-primary wf-row wf-row-main">
+        <div class="search-box wf-search-box">
+          <input id="wf-search" type="search" placeholder="按文件名、作品或作者搜索…" aria-label="搜索壁纸">
+          <button type="button" class="input-clear wf-search-clear" hidden aria-label="清空搜索" title="清空">✕</button>
+        </div>
+        <span id="wf-scope" class="view-toggle wf-scope" role="group" aria-label="壁纸范围">
+          <button type="button" class="btn view-btn active" data-wf-scope="wall" aria-pressed="true">壁纸夹</button>
+          <button type="button" class="btn view-btn" data-wf-scope="library" aria-pressed="false">壁纸库</button>
+        </span>
+        <select id="wf-scope-select" class="wf-scope-select" aria-label="壁纸范围" hidden>
+          <option value="wall">壁纸夹</option>
+          <option value="library">壁纸库</option>
+        </select>
+        <div class="lib-menu-wrap wf-sort-wrap">
+          <button id="wf-sort-btn" type="button" class="btn ghost wf-sort-btn"
+                  aria-haspopup="menu" aria-expanded="false" aria-controls="wf-sort-menu"
+                  aria-label="排序，文件名，升序">排序：<span class="wf-sort-field">文件名</span><span
+            class="wf-sort-word"> 升序</span><span class="wf-sort-arrow" aria-hidden="true">↑</span><span
+            class="wf-caret" aria-hidden="true">▾</span></button>
+          <div id="wf-sort-menu" class="lib-menu wf-sort-menu" role="menu" aria-label="排序" hidden>
+            <div class="wf-menu-label">排序字段</div>
+            <button type="button" role="menuitemradio" data-wf-sort="name" aria-checked="true"><span class="wf-check" aria-hidden="true">✓</span>文件名</button>
+            <button type="button" role="menuitemradio" data-wf-sort="new" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>最近修改</button>
+            <button type="button" role="menuitemradio" data-wf-sort="size" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>文件大小</button>
+            <div class="wf-menu-sep" role="separator"></div>
+            <button type="button" role="menuitemradio" data-wf-order="asc" aria-checked="true"><span class="wf-check" aria-hidden="true">✓</span>升序</button>
+            <button type="button" role="menuitemradio" data-wf-order="desc" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>降序</button>
+          </div>
+        </div>
+        <button id="wf-select-all" type="button" class="btn ghost wf-select-all" onclick="wallSelectVisible()">全选本页</button>
+        <button type="button" class="btn ghost management-toggle wf-collapse-btn" aria-expanded="true" aria-controls="wf-extra-tools">收起菜单</button>
+        <div class="lib-menu-wrap wf-more-wrap">
+          <button id="wf-more-btn" type="button" class="btn ghost wf-more-btn"
+                  aria-haspopup="menu" aria-expanded="false" aria-controls="wf-more-menu" hidden>更多 ▾</button>
+          <div id="wf-more-menu" class="lib-menu wf-more-menu" role="menu" aria-label="更多操作" hidden>
+            <button type="button" role="menuitem" onclick="wallFilesScan(false)">🔍 扫描归属</button>
+            <button type="button" role="menuitem" onclick="wallFilesScan(true)">✨ 深度扫描</button>
+            <button type="button" role="menuitem" onclick="wallDupesOpen()">🧹 清理副本</button>
+            <button type="button" role="menuitem" onclick="wallGroupsManage()">管理分组</button>
+            <div class="wf-menu-sep" role="separator"></div>
+            <button type="button" role="menuitem" onclick="wallSelectVisible()">全选本页</button>
+            <button id="wf-more-batch" type="button" role="menuitem" onclick="wallOpenBatchMenu()" hidden>操作（未选择）</button>
+            <button id="wf-more-toggle" type="button" role="menuitem" onclick="wallMoreToggle()">收起菜单</button>
+          </div>
+        </div>
       </div>
       <div class="management-extra">
         <div class="management-extra-inner">
@@ -470,47 +544,83 @@
         <div id="wf-scan-fill" class="progress-bar"></div>
         <span id="wf-scan-text">0%</span>
       </div>
-      <div class="wf-tools" id="wf-extra-tools">
-        <button id="wf-scan-btn" class="btn" onclick="wallFilesScan(false)">🔍 扫描归属</button>
-        <button id="wf-scan-deep-btn" class="btn" onclick="wallFilesScan(true)"
-                title="用图像特征识别手动裁剪/另存出来的壁纸（首次较慢，之后只扫新增和改动的文件）">✨ 深度扫描</button>
-        <button class="btn ghost" onclick="wallDupesOpen()"
-                title="与图库字节一致的壁纸副本，勾选后移进电脑回收站">🧹 清理副本</button>
-        <select id="wf-work-filter" aria-label="按作品筛选"><option value="">所有作品</option></select>
-        <select id="wf-group-filter" aria-label="按自定义分组筛选"><option value="">所有分组</option></select>
-        <select id="wf-sort" aria-label="壁纸排序"><option value="name">文件名</option><option value="new">最近修改</option><option value="size">文件大小</option></select>
-        <button class="btn" onclick="wallGroupsManage()">管理分组</button>
-      </div>
-      <div class="btn-row" id="wf-filters">
-        <button class="btn filter-btn active" data-f="all">全部</button>
-        <button class="btn filter-btn" data-f="owned">已归属</button>
-        <button class="btn filter-btn" data-f="orphan">未归属</button>
-        <button class="btn filter-btn" data-f="dupe">重复</button>
-        <button class="btn filter-btn" data-f="favorite">收藏</button>
-        <!-- 壁纸夹路径与扫描信息跟筛选按钮同一行, 靠右 -->
-        <span class="wf-location-row"><span id="wf-dir" class="status-line"></span><span id="wf-scan-tip" class="status-line"></span></span>
-      </div>
+      <div id="wf-extra-tools" class="wf-row wf-row-filters">
+        <div class="lib-menu-wrap wf-filter-wrap">
+          <button id="wf-filter-btn" type="button" class="btn ghost wf-filter-btn"
+                  aria-haspopup="menu" aria-expanded="false" aria-controls="wf-filters"
+                  aria-label="筛选">筛选<span class="wf-filter-detail"><span
+            class="wf-filter-colon">：</span><span id="wf-filter-label">全部</span></span><span
+            id="wf-filter-count" hidden></span><span class="wf-caret" aria-hidden="true">▾</span></button>
+          <div id="wf-filters" class="lib-menu wf-filter-menu" role="menu" aria-label="筛选" hidden>
+            <button type="button" role="menuitemradio" data-f="all" aria-checked="true"><span class="wf-check" aria-hidden="true">✓</span>全部</button>
+            <button type="button" role="menuitemradio" data-f="owned" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>已归属</button>
+            <button type="button" role="menuitemradio" data-f="orphan" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>未归属</button>
+            <button type="button" role="menuitemradio" data-f="dupe" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>重复图片</button>
+            <button type="button" role="menuitemradio" data-f="favorite" aria-checked="false"><span class="wf-check" aria-hidden="true"></span>收藏</button>
+          </div>
         </div>
+        <select id="wf-work-filter" aria-label="按作品筛选"><option value="">作品：全部</option></select>
+        <select id="wf-group-filter" aria-label="按分组筛选（仅壁纸夹）"><option value="">分组：全部（仅壁纸夹）</option></select>
+        <button id="wf-clear-filters" type="button" class="btn ghost" onclick="wallClearFilters()" hidden>清除筛选</button>
+        <span class="wf-tool-menus wf-tool-menus-desktop">
+          <span class="lib-menu-wrap">
+            <button id="wf-scan-menu-btn" type="button" class="btn ghost"
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="wf-scan-menu">扫描 ▾</button>
+            <span id="wf-scan-menu" class="lib-menu" role="menu" aria-label="扫描" hidden>
+              <button id="wf-scan-btn" type="button" role="menuitem" onclick="wallFilesScan(false)">🔍 扫描归属</button>
+              <button id="wf-scan-deep-btn" type="button" role="menuitem" onclick="wallFilesScan(true)"
+                      title="用图像特征识别手动裁剪/另存出来的壁纸（首次较慢，之后只扫新增和改动的文件）">✨ 深度扫描</button>
+            </span>
+          </span>
+          <span class="lib-menu-wrap">
+            <button id="wf-organize-menu-btn" type="button" class="btn ghost"
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="wf-organize-menu">整理 ▾</button>
+            <span id="wf-organize-menu" class="lib-menu" role="menu" aria-label="整理" hidden>
+              <button type="button" role="menuitem" onclick="wallDupesOpen()"
+                      title="与图库字节一致的壁纸副本，勾选后移进电脑回收站">🧹 清理副本</button>
+              <button type="button" role="menuitem" onclick="wallGroupsManage()">管理分组</button>
+            </span>
+          </span>
+        </span>
+        <select id="wf-sort" class="wf-sort-native" aria-hidden="true" tabindex="-1" hidden>
+          <option value="name">文件名</option><option value="new">最近修改</option><option value="size">文件大小</option>
+        </select>
       </div>
-      <div class="management-selection" hidden>
-      <div class="wf-selection-row">
+      <div id="wf-selection-row" class="wf-row wf-row-selection" hidden>
         <span id="wf-sel-count" class="status-line">未选择</span>
-        <div class="btn-row">
-          <button class="btn ghost" onclick="wallSelectResults()">全选结果</button>
-          <button class="btn ghost" onclick="wallClearSelection()">取消选择</button>
+        <span class="wf-selection-actions">
+          <button type="button" class="btn ghost" onclick="wallClearSelection()">取消选择</button>
+          <button type="button" class="btn ghost" onclick="wallSelectionInfo()">查看信息</button>
+          <span class="lib-menu-wrap">
+            <button id="wf-batch-btn" type="button" class="btn"
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="wf-batch-menu">操作 ▾</button>
+            <span id="wf-batch-menu" class="lib-menu wf-batch-menu" role="menu" aria-label="所选壁纸操作" hidden>
+              <button type="button" role="menuitem" onclick="wallAction('desktop')">桌面壁纸</button>
+              <div class="wf-menu-sep" role="separator"></div>
+              <button type="button" role="menuitem" onclick="wallAction('owner')">改归属</button>
+              <button type="button" role="menuitem" onclick="wallAction('group')">移动分组</button>
+              <div class="wf-menu-sep" role="separator"></div>
+              <button id="wf-rename" type="button" role="menuitem" onclick="wallAction('rename')">重命名</button>
+              <button type="button" role="menuitem" onclick="wallAction('favorite')">收藏</button>
+              <button type="button" role="menuitem" onclick="wallAction('unfavorite')">取消收藏</button>
+              <button type="button" role="menuitem" onclick="wallAction('labels')">标记</button>
+              <div class="wf-menu-sep" role="separator"></div>
+              <button type="button" role="menuitem" onclick="wallAction('trash')">移出壁纸库</button>
+              <div class="wf-menu-sep danger" role="separator"></div>
+              <button id="wf-recycle" type="button" role="menuitem" onclick="wallAction('delete')">删除…</button>
+            </span>
+          </span>
+        </span>
+      </div>
         </div>
-      </div>
-      <div id="wf-batch" class="wf-batch">
-        <div class="wf-action-group"><span>设置</span><button class="btn" onclick="wallAction('desktop')">桌面壁纸</button></div>
-        <div class="wf-action-group"><span>归属</span><button class="btn" onclick="wallAction('owner')">改归属</button><button class="btn" onclick="wallAction('group')">移动分组</button></div>
-        <div class="wf-action-group"><span>信息</span><button class="btn" onclick="wallSelectionInfo()">详情</button></div>
-        <div class="wf-action-group"><span>整理</span><button id="wf-rename" class="btn" onclick="wallAction('rename')" title="选择单张壁纸时可重命名">重命名</button><button class="btn" onclick="wallAction('favorite')">收藏</button><button class="btn" onclick="wallAction('unfavorite')">取消收藏</button><button class="btn" onclick="wallAction('labels')">标记</button><button class="btn" onclick="wallAction('trash')">移出壁纸库</button></div>
-        <button id="wf-recycle" class="btn danger" onclick="wallAction('delete')">删除…</button>
-      </div>
       </div>
       </div>
       </div>
       <!-- 以下随列表滚走 -->
+      <div class="wf-info-row">
+        <span id="wf-dir" class="status-line"></span>
+        <span id="wf-scan-tip" class="status-line"></span>
+      </div>
       <div id="wf-stats" class="stats-grid"></div>
       <div id="wall-card" class="wall-card hidden">
         <div class="wall-head">
@@ -686,6 +796,14 @@
             <div class="hint" style="margin-top:8px">当前状态：<span id="safemode-state">读取中…</span>（保存到 <code>config/user.json</code>，重启后生效）</div>
           </div>
           <div class="card mini">
+            <h3>🖼️ 入库格式</h3>
+            <div class="hint">开启后，下载、上传、导入与同步登记的新静态图片统一转为 PNG；GIF/多帧 WebP 等动图保留原格式，转换失败保留原格式并说明原因。关闭时保留原始格式与原始字节。只影响之后入库的新图。</div>
+            <div class="btn-row" style="margin-top:10px">
+              <button id="ingest-auto-png-toggle" class="btn ghost">🖼️ 开启</button>
+            </div>
+            <div class="hint" style="margin-top:8px">当前状态：<span id="ingest-auto-png-state">读取中…</span>（保存到 <code>config/user.json</code>，下一次入库生效）</div>
+          </div>
+          <div class="card mini">
             <h3>♡ 下载后自动收藏</h3>
             <div class="hint">单个作品下载成功后自动收藏（已收藏的跳过）；画师批量不自动收藏，R18 一律非公开收藏。</div>
             <div class="btn-row" style="margin-top:10px">
@@ -851,7 +969,7 @@
      onmousedown="window._libModalDownOnMask = (event.target === this)"
      onclick="if(event.target===this && window._libModalDownOnMask)closeLibModal()">
   <div class="modal-box">
-    <div class="modal-head"><h3 id="lib-modal-title"></h3><button class="btn ghost" onclick="closeLibModal()">✕</button></div>
+    <div class="modal-head"><h3 id="lib-modal-title" aria-live="polite" aria-atomic="true"></h3><button class="btn ghost" onclick="closeLibModal()">✕</button></div>
     <div id="lib-modal-body"></div>
   </div>
 </div>
@@ -866,10 +984,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261123e"></script>
-<script src="/static/wallpaper-admin.js?v=20261123e"></script>
-<script src="/static/management-drawer-state.js?v=20261123e"></script>
-<script src="/static/management-toolbar.js?v=20261123e"></script>
+<script src="/static/app.js?v=20261127b"></script>
+<script src="/static/wallpaper-admin.js?v=20261127b"></script>
+<script src="/static/management-drawer-state.js?v=20261127b"></script>
+<script src="/static/management-toolbar.js?v=20261127b"></script>
 </body>
 </html>
 

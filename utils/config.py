@@ -34,6 +34,14 @@ AI_DEFAULTS = {
     "timeout": 25,
 }
 
+# 📥 入库格式: 「入库时自动转为 PNG」总开关。
+# 默认关闭; 旧 user.json 缺这一节/缺这一键都按关闭, 全新安装同样关闭。
+# 覆盖下载、网页上传、文件/文件夹导入、反搜收件箱入库、反搜自动归档与手动磁盘同步
+# 实际登记的新图片; 仅扫描/预览/匹配已有记录时不改写文件。
+INGEST_DEFAULTS = {
+    "auto_png": False,
+}
+
 
 def _deep_merge(base: dict, override: dict) -> dict:
     """override 覆盖 base,递归合并嵌套 dict。"""
@@ -59,7 +67,8 @@ def _canonicalize(cfg: dict) -> dict:
     # ---- 保证顶层节存在 ----
     for top_key in ('browser', 'crawler', 'reverse_search', 'local_search',
                     'paths', 'cookies', 'logging', 'web', 'safemode',
-                    'pixiv_actions', 'activity_log', 'launcher', 'ai_text'):
+                    'pixiv_actions', 'activity_log', 'launcher', 'ai_text',
+                    'ingest'):
         cfg.setdefault(top_key, {})
 
     # ---- pixiv_actions 账号写操作: 下载后自动收藏(♡)/公开或非公开 ----
@@ -174,7 +183,26 @@ def _canonicalize(cfg: dict) -> dict:
     sm = cfg['safemode']
     sm.setdefault('enabled', False)
     sm.setdefault('blur_mode', True)   # True=模糊打码; 保留字段便于将来改「完全隐藏」
+
+    # ---- 入库格式默认 (2026-11-26 · 入库时自动转为 PNG, 默认关闭) ----
+    ing = cfg['ingest']
+    for _k, _v in INGEST_DEFAULTS.items():
+        ing.setdefault(_k, _v)
     return cfg
+
+
+def ingest_auto_png(cfg: "dict | None" = None) -> bool:
+    """入库时是否自动把静态图片转为 PNG。
+
+    默认关闭: 缺节、缺键、非 True 一律 False。每次入库都重新读 load_config(),
+    保证设置页保存后「下一次入库」立即生效 (不用启动时的配置快照)。
+    """
+    try:
+        data = cfg if isinstance(cfg, dict) else load_config()
+        v = (data.get("ingest") or {}).get("auto_png", False)
+        return v is True or v == 1
+    except Exception:
+        return False
 
 
 def load_config() -> dict:

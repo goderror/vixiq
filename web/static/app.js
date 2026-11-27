@@ -27,7 +27,7 @@ window.switchTab = function (name) {
   else if (name === 'stats') loadStatsPage();
   else if (name === 'reverse') loadReverseStatus();
   else if (name === 'tasks') refreshCart();
-  else if (name === 'settings') { loadThumbsStats(); loadOperations(); paintSelfCheckCard(); loadActivityStats(); loadPixivActions(); loadLauncher(); loadWallDir(); loadWallLib(); loadAiText(); loadPaths(); loadTunnel(); }
+  else if (name === 'settings') { loadThumbsStats(); loadOperations(); paintSelfCheckCard(); loadActivityStats(); loadPixivActions(); loadLauncher(); loadWallDir(); loadWallLib(); loadAiText(); loadPaths(); loadTunnel(); loadIngestFormat(); }
 };
 
 // ============ 卡片密度: 收起只显示标题, 悬停浮层展开 ============
@@ -666,7 +666,8 @@ function wallWatch() {
 // 数据来自 wallpaper_files 索引: 打开页面读一次, 扫描时轮询进度。
 // 扫描只读; 删副本必须勾选, 且只进 Windows 电脑回收站 (图库与数据库都不碰)。
 let WFD = null;                 // /api/wallpaper/files 的最近结果
-let WF_FILTER = 'all';
+let WF_FILTER = 'all';          // 壁纸夹内的状态筛选: all/owned/orphan/dupe/favorite
+let WF_SCOPE = 'wall';          // 范围: wall=壁纸夹 / library=壁纸库(含图库原图)
 const WF_SEL = new Set();        // 勾选的文件名
 let wfTimer = null;
 
@@ -1154,9 +1155,24 @@ function toast(msg, type = '') {
 // ============ 👤 作者管理页 ============
 const AUTHORS_PAGE_SIZE = 50;
 let authorsPage = 1, authorsPages = 1, authorsTotal = 0, authorsSort = 'count', authorsOrder = 'desc';
+const AUTHORS_SORT_LABELS = { name: '画师', id: '作者 ID', count: '作品数', last_updated: '最后更新' };
+const AUTHORS_SORT_DEFAULT_ORDER = { name: 'asc', id: 'asc', count: 'desc', last_updated: 'desc' };
+
+// 首次改选字段: 画师/ID 升序, 作品数/最后更新降序; 同字段保持当前方向。
+function authorsNextSort(field, currentSort, currentOrder) {
+  const f = AUTHORS_SORT_LABELS[field] ? field : 'count';
+  if (f === currentSort) return { sort: f, order: currentOrder };
+  return { sort: f, order: AUTHORS_SORT_DEFAULT_ORDER[f] };
+}
+
+function authorsFilterCount(status, source) {
+  return (status ? 1 : 0) + (source ? 1 : 0);
+}
 
 async function loadAuthors(opts = {}) {
   if (opts.resetPage !== false) authorsPage = 1;
+  authorsSyncSortUI();
+  authorsSyncFiltersUI();
   const q = $('#authors-search-input').value.trim();
   const status = $('#authors-f-status').value;
   const source = $('#authors-f-source').value;
@@ -1218,14 +1234,248 @@ function goAuthorsPageFromInput(input) {
 }
 
 function sortAuthors(sort) {
+  // 表头与工具栏共用同一套状态: 同字段切方向, 新字段用该字段默认方向
+  if (!AUTHORS_SORT_LABELS[sort]) return;
   if (authorsSort === sort) authorsOrder = authorsOrder === 'asc' ? 'desc' : 'asc';
-  else { authorsSort = sort; authorsOrder = 'desc'; }
+  else { authorsSort = sort; authorsOrder = AUTHORS_SORT_DEFAULT_ORDER[sort] || 'desc'; }
+  authorsPage = 1;
+  authorsSyncSortUI();
   loadAuthors();
 }
 
 function authorsSortArrow(key) {
   if (authorsSort !== key) return '';
   return authorsOrder === 'asc' ? ' ↑' : ' ↓';
+}
+
+function authorsSyncSortUI() {
+  const field = AUTHORS_SORT_LABELS[authorsSort] ? authorsSort : 'count';
+  const order = authorsOrder === 'asc' ? 'asc' : 'desc';
+  const btn = $('#authors-sort-btn');
+  if (btn) {
+    const fEl = $('#authors-sort-field');
+    const wEl = $('#authors-sort-word');
+    const aEl = btn.querySelector('.au-sort-arrow');
+    if (fEl) fEl.textContent = AUTHORS_SORT_LABELS[field];
+    if (wEl) wEl.textContent = ' ' + (order === 'asc' ? '升序' : '降序');
+    if (aEl) aEl.textContent = order === 'asc' ? '↑' : '↓';
+    btn.setAttribute('aria-label',
+      `排序，${AUTHORS_SORT_LABELS[field]}，${order === 'asc' ? '升序' : '降序'}`);
+  }
+  $$('#authors-sort-menu [data-au-sort]').forEach(b => {
+    const on = b.dataset.auSort === field;
+    b.classList.toggle('is-checked', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    const chk = b.querySelector('.wf-check');
+    if (chk) chk.textContent = on ? '✓' : '';
+  });
+  $$('#authors-sort-menu [data-au-order]').forEach(b => {
+    const on = b.dataset.auOrder === order;
+    b.classList.toggle('is-checked', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    const chk = b.querySelector('.wf-check');
+    if (chk) chk.textContent = on ? '✓' : '';
+  });
+}
+
+function authorsSetSortField(field) {
+  const next = authorsNextSort(field, authorsSort, authorsOrder);
+  const trigger = _auMenuTrigger;
+  authorsSort = next.sort;
+  authorsOrder = next.order;
+  authorsPage = 1;
+  auCloseMenus();
+  authorsSyncSortUI();
+  loadAuthors();
+  if (trigger && trigger.getClientRects().length) trigger.focus();
+}
+
+function authorsSetSortOrder(order) {
+  const trigger = _auMenuTrigger;
+  authorsOrder = order === 'asc' ? 'asc' : 'desc';
+  authorsPage = 1;
+  auCloseMenus();
+  authorsSyncSortUI();
+  loadAuthors();
+  if (trigger && trigger.getClientRects().length) trigger.focus();
+}
+
+function authorsSyncFiltersUI() {
+  const status = $('#authors-f-status')?.value || '';
+  const source = $('#authors-f-source')?.value || '';
+  const n = authorsFilterCount(status, source);
+  const clear = $('#authors-clear-filters');
+  if (clear) clear.hidden = n === 0;
+  const btn = $('#authors-filter-btn');
+  if (btn) {
+    btn.dataset.count = String(n);
+    btn.setAttribute('aria-label', n ? `筛选，已启用 ${n} 项` : '筛选');
+  }
+  const count = $('#authors-filter-count');
+  if (count) {
+    count.textContent = n ? ` ${n}` : '';
+    count.hidden = n === 0;
+  }
+}
+
+window.authorsClearFilters = function () {
+  const status = $('#authors-f-status');
+  const source = $('#authors-f-source');
+  if (status) status.value = '';
+  if (source) source.value = '';
+  authorsPage = 1;
+  auCloseMenus();
+  authorsSyncFiltersUI();
+  loadAuthors();
+};
+
+// ---- 作者页下拉: 与壁纸同一套交互 (点外部/Esc 关闭, 焦点回入口) ----
+const AU_MENUS = ['authors-sort-menu', 'authors-more-menu', 'authors-filter-menu'];
+let _auMenuTrigger = null;
+
+function auCloseMenus(exceptId) {
+  let closedTrigger = null;
+  AU_MENUS.forEach(id => {
+    if (id === exceptId) return;
+    const menu = document.getElementById(id);
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    const btn = document.querySelector(`[data-au-menu="${id}"]`);
+    if (btn) {
+      btn.setAttribute('aria-expanded', 'false');
+      if (!closedTrigger) closedTrigger = btn;
+    }
+  });
+  if (!exceptId) _auMenuTrigger = null;
+  return closedTrigger;
+}
+
+function auToggleMenu(btn, menuId) {
+  const menu = document.getElementById(menuId);
+  if (!menu) return;
+  const open = menu.hidden;
+  auCloseMenus(menuId);
+  menu.hidden = !open;
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  _auMenuTrigger = open ? btn : null;
+  if (open && menuId === 'authors-more-menu') authorsPaintMoreToggle();
+  if (open) {
+    const first = menu.querySelector('button:not([disabled])');
+    if (first) first.focus();
+  }
+}
+
+function authorsPaintMoreToggle() {
+  const btn = $('#authors-more-toggle');
+  if (!btn) return;
+  const main = document.querySelector('main');
+  btn.textContent = main && main.classList.contains('management-compact') ? '展开菜单' : '收起菜单';
+}
+
+window.authorsMoreToggle = function () {
+  auCloseMenus();
+  const btn = document.querySelector('#tab-authors .management-primary .management-toggle');
+  if (btn) btn.click();
+};
+
+function initAuthorsToolbarLayout() {
+  const bar = document.querySelector('#tab-authors .management-toolbar');
+  if (!bar || bar.dataset.auLayout === '1') return;
+  bar.dataset.auLayout = '1';
+  const primary = bar.querySelector('.management-primary');
+  const filters = document.getElementById('authors-filters');
+  const sortWrap = bar.querySelector('.au-sort-wrap');
+  const moreWrap = bar.querySelector('.au-more-wrap');
+  const moreBtn = document.getElementById('authors-more-btn');
+  const collapseBtn = bar.querySelector('.management-toggle');
+  const filterBtn = document.getElementById('authors-filter-btn');
+  const filterMenu = document.getElementById('authors-filter-menu');
+  const filterWrap = bar.querySelector('.au-filter-wrap');
+  const spacer = bar.querySelector('.au-filter-spacer');
+  const status = document.getElementById('authors-f-status');
+  const source = document.getElementById('authors-f-source');
+  const clearBtn = document.getElementById('authors-clear-filters');
+  const dupesBtn = document.getElementById('authors-dupes-btn');
+  const moreMenu = document.getElementById('authors-more-menu');
+  if (!primary || !filters || !sortWrap || !moreWrap || !moreBtn || !collapseBtn
+      || !filterBtn || !filterMenu || !filterWrap || !spacer || !status || !source
+      || !clearBtn || !dupesBtn || !moreMenu) return;
+
+  const mq = window.matchMedia('(max-width: 980px)');
+  function apply(compact) {
+    auCloseMenus();
+    if (compact) {
+      filters.insertBefore(sortWrap, filters.firstChild);
+      filterMenu.append(status, source, clearBtn);
+      moreMenu.insertBefore(dupesBtn, moreMenu.firstChild);
+      moreBtn.hidden = false;
+      collapseBtn.hidden = true;
+      filterBtn.hidden = false;
+      filterWrap.hidden = false;
+      spacer.hidden = true;
+    } else {
+      primary.insertBefore(sortWrap, collapseBtn);
+      filters.insertBefore(status, spacer);
+      filters.insertBefore(source, spacer);
+      filters.insertBefore(clearBtn, spacer);
+      filters.append(dupesBtn);
+      moreBtn.hidden = true;
+      collapseBtn.hidden = false;
+      filterBtn.hidden = true;
+      filterWrap.hidden = true;
+      spacer.hidden = false;
+    }
+    authorsSyncSortUI();
+    authorsSyncFiltersUI();
+  }
+  mq.addEventListener('change', e => apply(e.matches));
+  apply(mq.matches);
+
+  [['authors-sort-btn', 'authors-sort-menu'], ['authors-more-btn', 'authors-more-menu'],
+   ['authors-filter-btn', 'authors-filter-menu']].forEach(([btnId, menuId]) => {
+    const b = document.getElementById(btnId);
+    if (b) b.dataset.auMenu = menuId;
+  });
+
+  const root = document.getElementById('tab-authors');
+  root.addEventListener('click', e => {
+    const trigger = e.target.closest('[data-au-menu]');
+    if (trigger) {
+      e.preventDefault();
+      auToggleMenu(trigger, trigger.dataset.auMenu);
+      return;
+    }
+    const sortField = e.target.closest('[data-au-sort]');
+    if (sortField) { authorsSetSortField(sortField.dataset.auSort); return; }
+    const sortOrder = e.target.closest('[data-au-order]');
+    if (sortOrder) { authorsSetSortOrder(sortOrder.dataset.auOrder); return; }
+    if (e.target.closest('.lib-menu button')) auCloseMenus();
+  });
+  root.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const open = AU_MENUS.some(id => {
+      const m = document.getElementById(id);
+      return m && !m.hidden;
+    });
+    if (!open) return;
+    const trigger = _auMenuTrigger;
+    auCloseMenus();
+    if (trigger && trigger.getClientRects().length) trigger.focus();
+    e.stopPropagation();
+  });
+  document.addEventListener('click', e => {
+    if (e.target.closest('[data-au-menu]') || e.target.closest('.lib-menu')) return;
+    const open = AU_MENUS.some(id => {
+      const m = document.getElementById(id);
+      return m && !m.hidden;
+    });
+    if (!open) return;
+    const trigger = _auMenuTrigger;
+    auCloseMenus();
+    const focusable = e.target.closest(
+      'input, select, textarea, button, a, [contenteditable="true"]');
+    if (!focusable && trigger && trigger.getClientRects().length) trigger.focus();
+  });
 }
 
 function renderAuthors(items) {
@@ -2602,6 +2852,49 @@ async function toggleSafemode() {
   finally { if (btn) btn.disabled = false; }
 }
 
+// 入库格式: 「入库时自动转为 PNG」开关 (默认关闭, 写回 config/user.json)
+async function loadIngestFormat() {
+  try {
+    const r = await api('/api/ingest');
+    ingestAutoPng = !!r.auto_png;
+  } catch (e) { ingestAutoPng = false; }
+  paintIngestFormat();
+  return ingestAutoPng;
+}
+
+function paintIngestFormat() {
+  const st = $('#ingest-auto-png-state');
+  const btn = $('#ingest-auto-png-toggle');
+  if (btn) {
+    btn.textContent = ingestAutoPng ? '🖼️ 关闭' : '🖼️ 开启';
+    btn.classList.toggle('danger', ingestAutoPng);
+  }
+  if (st) {
+    st.textContent = ingestAutoPng
+      ? '已开启（新入库静态图片转为 PNG，动图保留原格式）'
+      : '未开启（保留原始格式与原始字节）';
+  }
+}
+
+async function toggleIngestFormat() {
+  const btn = $('#ingest-auto-png-toggle');
+  if (btn && btn.disabled) return;
+  if (btn) btn.disabled = true;
+  const next = !ingestAutoPng;
+  try {
+    const r = await api('/api/ingest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto_png: next }),
+    });
+    if (r && r.ok === false) throw new Error(r.error || '保存失败');
+    ingestAutoPng = next;
+    paintIngestFormat();
+    toast(next ? '🖼️ 已开启：之后入库的静态图片将转为 PNG'
+               : '已关闭：之后入库保留原始格式与原始字节', 'ok');
+  } catch (e) { toast('设置失败: ' + (e.message || e), 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+
 // ===== 下载后自动收藏: 设置页开关 + 公开/非公开 =====
 let autoBookmark = false;
 
@@ -3731,6 +4024,7 @@ let libTotal = 0, libPages = 0;  // 当前筛选下的总条数/总页数 (供�
 let libOnlyAid = null;           // 当前正在单独查看的作品 ID (null=未启用)
 let libOnlyPrev = null;          // 启用前的快照 (筛选/视图/页码/搜索词/滚动位置), 撤销时还原
 let safemode = false;            // 安全模式: R18 缩略图模糊打码 + Lightbox 需解锁 (从 /api/safemode 加载)
+let ingestAutoPng = false;       // 入库时自动转为 PNG (从 /api/ingest 加载, 默认关闭)
 
 // 非 pixiv 来源的显示名 (source 存英文键, 界面显示中文/站点名)。
 // 「未知来源」固定排最后: 图库/作者管理筛选下拉重建时也保持它在底部。
@@ -4054,7 +4348,9 @@ async function libSync(showToast = false, periodic = false) {
     const normN = (h && h.normalize_pending) ? h.normalize_pending.length : 0;
     if (h && h.new_pages_linked > 0) {
       toast(`📥 发现 ${h.new_pages_linked} 张新图片，已登记入库，正在联网补全标题/标签…`
-        + (normN ? ` · 另有 ${normN} 张待转为 PNG` : ''), 'ok');
+        + (h.auto_png_converted ? ` · 自动转 PNG ${h.auto_png_converted} 张` : '')
+        + (h.auto_png_failed ? ` · ${h.auto_png_failed} 张转换失败已保留原格式` : '')
+        + (normN ? ` · 另有 ${normN} 张可转为 PNG` : ''), 'ok');
       loadLibrary(); loadStats(); loadLibFacets();
       // 元数据后台补全后再刷一次, 标题/作者即时出现
       setTimeout(() => { loadLibrary(); loadStats(); loadLibFacets(); }, 15000);
@@ -4065,12 +4361,14 @@ async function libSync(showToast = false, periodic = false) {
         loadLibrary(); loadStats(); loadLibFacets();
         const miss = h && (h.missing_ids || []).length;
         const norm = (h && h.normalize_pending) ? h.normalize_pending.length : 0;
+        const autoN = h && h.auto_png_converted ? ` · 自动转 PNG ${h.auto_png_converted} 张` : '';
+        const autoBad = h && h.auto_png_failed ? ` · ${h.auto_png_failed} 张转换失败已保留原格式` : '';
         toast(miss
           ? `已与磁盘同步 ✓ · ${miss} 个文件缺失（本页已刷新标红）`
-            + (norm ? ` · ${norm} 张待转为 PNG` : '')
+            + autoN + autoBad + (norm ? ` · ${norm} 张可转为 PNG` : '')
           : (norm
-            ? `已与磁盘同步 ✓ · ${norm} 张待转为 PNG（点同步结果预览确认）`
-            : '已与磁盘同步 ✓'), (miss || norm) ? 'err' : 'ok');
+            ? `已与磁盘同步 ✓ · ${norm} 张可转为 PNG（点同步结果预览确认）` + autoN + autoBad
+            : '已与磁盘同步 ✓' + autoN + autoBad), (miss || norm || autoBad) ? 'err' : 'ok');
       }
     }
     return h;
@@ -4085,8 +4383,29 @@ async function libSync(showToast = false, periodic = false) {
 //   选文件夹  → 递归其内所有图片
 //   选多张图片 → 只导选中的那几张
 // 流程: 弹系统选择框(由本地服务端调起, 已带父窗口, 不会再跑到浏览器后面)
-//       → dry-run 预览 → 确认 → 执行。
+//       → 扫描(流动条) → 确认总数 → 后台任务逐张计数 → 结果弹窗四类汇总。
+// 进度 (2026-11-24 第二批): 等待系统选择框期间不显示任务进度; 拿到已确认总数后
+// 改用「已处理 X／N 张」计数条; 成功/复用/待确认/失败/转换失败都算已处理。
+// 关闭弹窗或切页后任务继续, 从原入口回来可接回进度与结果。
+let _importRun = null;        // 当前/最近一次导入任务 {id,state,...}; 重开入口接回
+let _importScanSeq = 0;       // 扫描令牌: 用户关闭扫描弹窗后, 迟到的扫描结果不再弹确认
+let _importPendingBatch = null; // 被「另一批正在执行」挡下的本批参数; 保留重试入口
+let _importBusyInfo = null;   // 迟到/当前忙响应的原因与来源
+let _importStart = null;      // 启动请求等待器 {seq}: 重开入口绑定同一次启动等待
+
 async function importLocalImages(mode) {
+  // 重新进入入口: 等待任务号 / 运行中 / 已结束 分别接回
+  if (_importRun) {
+    if (_importRun.state === 'running') {
+      if (_importRun.id) importResumeRun(_importRun.id);
+      else importResumeStarting();       // 启动尚未返回任务号, 不查 undefined
+      return;
+    }
+    importShowResult(_importRun);
+    return;
+  }
+  if (_importPendingBatch) { importShowBusyPending(); return; }   // 迟到的忙响应
+  _importPendingBatch = null;     // 重新选文件 = 放弃上一批的待重试状态
   const isFolder = mode === 'folder';
   let pick;
   try {
@@ -4097,56 +4416,415 @@ async function importLocalImages(mode) {
   const body = isFolder ? { path: pick.path } : { paths: pick.paths };
   if (isFolder ? !pick.path : !(pick.paths || []).length) return;   // 用户取消: 静默返回
 
+  // 系统选择框已返回 → 才显示扫描进度 (等待选择期间不显示任务进度)
+  const seq = ++_importScanSeq;
+  openLibModal('📁 导入图片', importScanProgressHtml(isFolder), { lg: true });
+  opClaimModal('import-scan');
+  opProgressPaint('imp-scan-progress', {
+    mode: 'flow', stage: `正在扫描所选${isFolder ? '文件夹' : '图片'}` });
+
   let pre;
   try {
     pre = await api('/api/library/import-from-path', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...body, dry_run: true }),
     });
-  } catch (e) { toast('扫描失败: ' + e.message, 'err'); return; }
-  if (!pre || pre.error) { toast((pre && pre.error) || '扫描失败', 'err'); return; }
-  if (!pre.total) { toast('这里没有可导入的图片', 'info'); return; }
+  } catch (e) {
+    if (seq !== _importScanSeq || !importScanStillOpen()) return;  // 用户已关闭弹窗
+    importScanFailed('扫描失败: ' + e.message); return;
+  }
+  if (seq !== _importScanSeq || !importScanStillOpen()) return;    // 用户已关闭弹窗
+  if (!pre || pre.error) { importScanFailed((pre && pre.error) || '扫描失败'); return; }
+  if (!pre.total) {
+    openLibModal('📁 导入图片',
+      '<div class="hint">这里没有可导入的图片。</div>' +
+      '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+      { lg: true });
+    opClaimModal('import-scan');
+    return;
+  }
 
   // 导入前先判定: 含作品ID 的直接入库, 不用问;
   // 只有"不是标准 P 站作品"的那部分才需要选择 —— 转反搜 还是 建自定义作品。
   const nonPixiv = pre.without_id || 0;
   let makeCustom = false;
   if (nonPixiv > 0) {
-    const mode = await _askImportMode(pre);
-    if (mode === null) return;              // 用户取消
-    makeCustom = (mode === 'custom');
+    const choice = await _askImportMode(pre);
+    if (choice === null) { closeLibModal(); return; }   // 用户取消
+    makeCustom = (choice === 'custom');
   } else {
     const lines = [
       `将从以下位置导入 ${pre.total} 张图片：`,
       pre.path, '',
       `· 全部含作品ID ${pre.with_id} 张 → 直接入库（自动补全标题/标签并归入作者文件夹）`,
-      '· 静态图片统一转为 PNG（图库只保留 PNG，原 JPG 不归档）',
+      (ingestAutoPng ? '· 静态图片将转为 PNG（图库只保留 PNG，原 JPG 不归档）'
+                     : '· 保留原始格式入库（不转 PNG，原始字节不变）'),
     ];
     if (pre.conflicts) lines.push(`· 其中 ${pre.conflicts} 张目标已存在，将按来源指纹/像素核对复用或列为待确认`);
     lines.push('', '源文件全程保持原位（不会被移走或删除），确定继续？');
-    if (!confirm(lines.join('\n'))) return;
+    if (!confirm(lines.join('\n'))) { closeLibModal(); return; }
   }
 
-  try {
-    const r = await api('/api/library/import-from-path', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...body, make_custom_artworks: makeCustom }),
+  await importStartRun(body, makeCustom, pre.total, isFolder ? 'folder' : 'files',
+                       pre.scan_token, pre.path);
+}
+
+function importScanProgressHtml(isFolder) {
+  return opProgressHtml('imp-scan-progress', {
+      mode: 'flow', text: `正在扫描所选${isFolder ? '文件夹' : '图片'}…` }) +
+    `<div class="hint">扫描只读取文件名，不移动、不改动源文件。</div>
+     <div class="modal-actions"><button class="btn ghost" onclick="importCancelScan()">取消</button></div>`;
+}
+
+// 扫描结果回来时确认用户还停留在本次扫描弹窗 (✕/遮罩关闭、或换成了别的弹窗 → 静默丢弃)
+function importScanStillOpen() {
+  const modal = $('#lib-modal');
+  return !!(modal && modal.style.display !== 'none'
+            && modal.dataset.opOwner === 'import-scan'
+            && document.getElementById('imp-scan-progress'));
+}
+
+window.importCancelScan = function () {
+  // 扫描请求无法中途取消, 但用户已经关闭弹窗 → 迟到的结果不再弹出确认
+  _importScanSeq += 1;
+  closeLibModal();
+};
+
+function importScanFailed(msg) {
+  openLibModal('📁 导入图片',
+    `<div class="hint err-text">${esc(msg)}</div>` +
+    '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+    { lg: true });
+  opClaimModal('import-scan');
+}
+
+function importRunProgressHtml() {
+  return opProgressHtml('imp-run-flow', {
+      mode: 'flow', text: '正在识别图片…' }) +
+    opProgressHtml('imp-run-count', {
+      mode: 'count', label: '导入图片', text: '已处理 0／0 张', hidden: true,
+      textId: 'imp-run-text', fillId: 'imp-run-fill' }) +
+    `<div class="hint" id="imp-run-src"></div>
+     <div class="op-note" id="imp-run-note">正在核对要导入的文件…</div>
+     <div class="modal-actions"><button class="btn ghost" disabled>导入中…</button></div>`;
+}
+
+function importPaintRun(job) {
+  const total = Number(job.total || 0);
+  const prepared = job.state !== 'error' && !!job.prepared && total > 0;
+  if (prepared) {
+    opProgressPaint('imp-run-flow', { mode: 'flow', hidden: true });
+    const done = job.state === 'done' ? total : Math.min(Number(job.done || 0), total);
+    opProgressPaint('imp-run-count', {
+      mode: 'count', hidden: false, done, total,
+      label: '导入图片', stage: '逐张导入', text: `已处理 ${done}／${total} 张`,
+      textId: 'imp-run-text', fillId: 'imp-run-fill',
     });
-    if (!r || r.error) { toast((r && r.error) || '导入失败', 'err'); return; }
-    const parts = [];
-    if (r.imported && r.imported.length) parts.push(`📥 入库 ${r.imported.length} 张`);
-    if (r.custom_created && r.custom_created.length) parts.push(`🖼️ 建自定义作品 ${r.custom_created.length} 个`);
-    if (r.redirected && r.redirected.length) parts.push(`🔍 ${r.redirected.length} 张无作品ID已转反搜收件箱`);
-    if (r.reused && r.reused.length) parts.push(`♻ ${r.reused.length} 张重复导入已复用`);
-    if (r.pending && r.pending.length) parts.push(`❓️ ${r.pending.length} 张待确认（${(r.pending[0] || {}).reason || '内容无法确认'}）`);
-    if (r.convert_failed && r.convert_failed.length) parts.push(`⚠ ${r.convert_failed.length} 张转 PNG 失败，已保留原格式`);
-    if (r.skipped && r.skipped.length) parts.push(`⏭ ${r.skipped.length} 张已存在，列为待确认/跳过`);
-    if (r.failed && r.failed.length) parts.push(`✖ ${r.failed.length} 张复制失败`);
-    if (parts.length) parts.push('源文件保持原位');
-    toast(parts.join(' · ') || '没有需要导入的文件',
-          (r.imported && r.imported.length) ? 'ok' : 'info');
-    await libSync(); loadLibrary(); loadStats(); loadLibFacets();
-  } catch (e) { toast('导入失败: ' + e.message, 'err'); }
+  } else {
+    opProgressPaint('imp-run-flow', {
+      mode: 'flow', hidden: false, stage: '正在识别图片',
+      text: job.state === 'error' ? '导入失败' : '正在识别图片…',
+    });
+    opProgressPaint('imp-run-count', { mode: 'count', hidden: true,
+                                       textId: 'imp-run-text' });
+  }
+  const src = $('#imp-run-src');
+  if (src) src.textContent = job.source ? `来源：${job.source}` : '';
+  const note = $('#imp-run-note');
+  if (note) {
+    note.textContent = job.pollError
+      ? `查询中断：${job.pollError}（保留最后进度，可继续查询）`
+      : job.state === 'error' ? (job.error || '导入失败')
+      : !prepared ? '正在扫描所选内容并确认可导入的图片…'
+      : job.state === 'done' ? '导入完成，正在汇总结果…'
+      : (ingestAutoPng ? '正在逐张处理：复制、转为 PNG 并登记入库…'
+                       : '正在逐张处理：复制、登记入库…');
+  }
+}
+
+function importPollJob(jobId, onState) {
+  // 共用轮询: 导入只提供任务地址与错误文案
+  return opPollJobStatus('/api/library/import-from-path/job', jobId, onState,
+                         { errorText: '导入失败', timeoutText: '导入超时' });
+}
+
+function importRunWatch(jobId) {
+  const owner = 'import:' + jobId;
+  return opTrackJob('import', jobId, {
+    url: '/api/library/import-from-path/job',
+    errorText: '导入失败',
+    timeoutText: '导入超时',
+    onState: j => {
+      if (!_importRun || _importRun.id !== jobId) return;
+      _importRun = { ...j, mode: _importRun.mode,
+                     source: j.source || _importRun.source || '' };
+      if (opModalMatches(owner)) importPaintRun(_importRun);
+    },
+    onDone: async job => {
+      if (!_importRun || _importRun.id !== jobId) return;
+      _importRun = { ...job, mode: _importRun.mode,
+                     source: job.source || _importRun.source || '' };
+      if (opModalMatches(owner)) importPaintRun(_importRun);
+      await new Promise(r => setTimeout(r, 350));
+      // 延时后再次确认归属: 用户可能已切到别的弹窗
+      if (opModalMatches(owner)) {
+        closeLibModal();
+        importShowResult(_importRun);
+      } else {
+        _importRun._refreshed = true;
+        libSync(); loadLibrary(); loadStats(); loadLibFacets();
+      }
+    },
+    onError: e => {
+      if (!_importRun || _importRun.id !== jobId) return;
+      if (e.job) {
+        // 任务本身失败: 状态先保存, 只在归属匹配时展示
+        _importRun = { ...e.job, state: 'error', mode: _importRun.mode,
+                       source: _importRun.source || '' };
+        if (opModalMatches(owner)) {
+          importPaintRun(_importRun);
+          importShowResult(_importRun);
+        } else {
+          _importRun._refreshed = true;
+        }
+        return;
+      }
+      // 查询中断: 状态先保存, 只在归属匹配时提示继续查询
+      _importRun = { ..._importRun, pollError: e.message };
+      if (opModalMatches(owner)) {
+        importPaintRun(_importRun);
+        importShowPollError(jobId, e);
+      }
+    },
+  });
+}
+
+function importShowPollError(jobId, e) {
+  // 只在当前弹窗属于这个任务时调用 (importRunWatch 已核对归属)
+  const msg = `查询中断：${esc(e.message)}（已保留最后进度，可继续查询）`;
+  const note = $('#imp-run-note');
+  if (note) note.textContent = msg;
+  const actions = document.querySelector('#lib-modal .modal-actions');
+  if (actions) actions.innerHTML =
+    `<button class="btn accent" onclick="importResumeRun('${jobId}')">🔄 继续查询</button>` +
+    '<button class="btn ghost" onclick="closeLibModal()">关闭</button>';
+}
+
+// 迟到的忙响应: 本批未受理, 保留参数与原因, 从导入原入口可见并可重试
+function importShowBusyPending() {
+  const p = _importPendingBatch;
+  if (!p) return;
+  const info = _importBusyInfo || {};
+  openLibModal('⚠ 另有导入正在执行',
+    `<div class="hint err-text">${esc(info.message || '已有另一批导入正在执行')}</div>` +
+    `<div class="hint">本批来源：${esc(p.source || '当前选择')}，尚未开始。` +
+    '等那一批完成后可点「重试本批」，不用重新选文件。</div>' +
+    '<div class="modal-actions">' +
+    '<button class="btn accent" onclick="importRetryPending()">🔄 重试本批</button>' +
+    '<button class="btn ghost" onclick="importResetAndPick()">重新选择</button></div>',
+    { lg: true });
+  opClaimModal('import-busy');
+}
+
+// 启动请求还在等待任务号: 重开入口接回同一次等待, 不发起 undefined 查询
+function importResumeStarting() {
+  openLibModal('📁 导入图片 · 导入中', importRunProgressHtml(), { lg: true });
+  opClaimModal('import-starting');
+  if (_importStart) _importStart.seq = opModalSeq();
+  importPaintRun(_importRun);
+}
+
+function importResumeRun(jobId) {
+  if (!_importRun || _importRun.id !== jobId) {
+    _importRun = { id: jobId, state: 'running', prepared: true,
+                   done: 0, total: 0, source: '' };
+  }
+  if (_importRun.pollError) _importRun = { ..._importRun, pollError: '' };
+  openLibModal('📁 导入图片 · 导入中', importRunProgressHtml(), { lg: true });
+  opClaimModal('import:' + jobId);
+  importPaintRun(_importRun);
+  if (_importRun.state === 'running') importRunWatch(jobId);
+  else importShowResult(_importRun);
+}
+
+function importShowResult(job) {
+  const r = job.result || {};
+  if (job.state === 'error') {
+    openLibModal('⚠ 导入失败',
+      `<div class="hint err-text">${esc(job.error || '导入失败')}</div>` +
+      '<div class="modal-actions">' +
+      '<button class="btn accent" onclick="importResetAndPick()">🔄 重新选择</button>' +
+      '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+      { lg: true });
+    opClaimModal('import-result:' + (job.id || ''));
+    return;
+  }
+  if (!job._refreshed) {
+    job._refreshed = true;
+    libSync(); loadLibrary(); loadStats(); loadLibFacets();
+  }
+  const nPixiv = (r.imported || []).length;
+  const nRedirect = (r.redirected || []).length;
+  const nCustom = (r.custom_created || []).length;
+  const nInLibrary = nPixiv + nCustom;
+  const nReused = (r.reused || []).length;
+  const nPending = (r.pending || []).length;
+  const nFailed = (r.failed || []).length;
+  const nConv = (r.convert_failed || []).length;
+  const nChanged = (r.source_changed || []).length;
+  if (!nInLibrary && !nRedirect && !nReused && !nPending && !nFailed && !nChanged) {
+    openLibModal('📁 导入完成',
+      '<div class="hint">没有需要导入的文件。</div>' +
+      '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+      { lg: true });
+    opClaimModal('import-result:' + (job.id || ''));
+    return;
+  }
+  const partial = !!(nPending || nFailed || nChanged);
+  const pendingRows = (r.pending || []).map(x =>
+    `<li>${esc(x.name)}<span class="hint">（${esc(x.reason || '内容无法确认')}）</span></li>`).join('');
+  const failedRows = (r.failed || []).map(x => `<li>${esc(x)}</li>`).join('');
+  const changedRows = (r.source_changed || []).map(x =>
+    `<li>${esc(x.name)}<span class="hint">（${esc(x.reason || '源文件已变化')}）</span></li>`).join('');
+  const convRows = (r.convert_failed || []).map(x =>
+    `<li>${esc(x.name)}<span class="hint">（${esc(x.reason || '已按原格式保留')}）</span></li>`).join('');
+  const html =
+    `<div class="hint">已入库 <b>${nInLibrary}</b> 张` +
+    (nInLibrary ? `（Pixiv 作品 <b>${nPixiv}</b> · 自定义作品 <b>${nCustom}</b>）` : '') +
+    ` · 已复用 <b>${nReused}</b> 张 · 待确认 <b>${nPending}</b> 张` +
+    (nFailed ? ` · <span class="err-text">失败 <b>${nFailed}</b> 张</span>`
+             : ` · 失败 <b>0</b> 张`) +
+    (nChanged ? ` · 源文件变化未导入 <b>${nChanged}</b> 张` : '') +
+    (nRedirect ? `<div class="hint">另有 ${nRedirect} 张无作品ID，已转反搜收件箱。</div>` : '') +
+    (nConv ? `<div class="hint">另有 ${nConv} 张未能转为 PNG，已按原格式保留。</div>` : '') +
+    `<div class="hint">源文件保持原位，不会被移走或删除。</div>` +
+    `</div>` +
+    (nPending ? `<div class="doc-title">待确认（${nPending} 张）</div><ul class="lib-health-detail">${pendingRows}</ul>` : '') +
+    (nFailed ? `<div class="doc-title">失败（${nFailed} 张）</div><ul class="lib-health-detail">${failedRows}</ul>` : '') +
+    (nChanged ? `<div class="doc-title">源文件已变化或消失，未导入（${nChanged} 张）</div><ul class="lib-health-detail">${changedRows}</ul>` : '') +
+    (nConv ? `<div class="doc-title">转换失败，已保留原格式（${nConv} 张）</div><ul class="lib-health-detail">${convRows}</ul>` : '') +
+    '<div class="modal-actions">' +
+    '<button class="btn accent" onclick="importResetAndPick()">🔄 再导入一批</button>' +
+    '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>';
+  openLibModal(partial ? '⚠ 导入完成，部分图片需要处理' : '✅ 导入完成', html, { lg: true });
+  opClaimModal('import-result:' + (job.id || ''));
+}
+
+window.importResetAndPick = function (mode) {
+  const m = mode || (_importRun && _importRun.mode)
+    || (_importPendingBatch && _importPendingBatch.mode) || 'folder';
+  _importRun = null;
+  _importPendingBatch = null;
+  _importBusyInfo = null;
+  importLocalImages(m);
+};
+
+// 「另一批正在执行」挡下的本批: 用原清单与处理方式重试, 不需要重新选文件
+window.importRetryPending = function () {
+  const p = _importPendingBatch;
+  if (!p) { importResetAndPick(); return; }
+  _importPendingBatch = null;
+  _importBusyInfo = null;
+  _importRun = null;
+  importStartRun(p.body, p.makeCustom, p.confirmTotal, p.mode, p.scanToken, p.source);
+};
+
+async function importStartRun(body, makeCustom, confirmTotal, mode, scanToken, source) {
+  source = source || '';
+  _importRun = { state: 'running', mode, source, prepared: false,
+                 starting: true, done: 0, total: Number(confirmTotal || 0) };
+  openLibModal('📁 导入图片 · 导入中', importRunProgressHtml(), { lg: true });
+  opClaimModal('import-starting');
+  const seq = opModalSeq();
+  const waiter = { seq: 0 };     // 重开入口会把当前弹窗实例号绑定到这里
+  _importStart = waiter;
+  importPaintRun(_importRun);
+  try {
+    const payload = { ...body, make_custom_artworks: makeCustom };
+    if (scanToken) payload.scan_token = scanToken;
+    const start = await api('/api/library/import-from-path/job', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (_importStart === waiter) _importStart = null;
+    const waitSeq = waiter.seq || seq;
+    if (!opModalSame(waitSeq)) {
+      // 迟到回包: 先按业务状态分类, 不能把别批的任务号当成自己的
+      if (start && start.busy) {
+        _importRun = null;
+        _importPendingBatch = { body, makeCustom, confirmTotal, mode, scanToken, source };
+        _importBusyInfo = { source: start.source || '',
+                            message: start.message || '已有另一批导入正在执行' };
+        return;
+      }
+      if (start && start.code) {
+        _importRun = { state: 'error', mode, source,
+                       error: start.message || '预览已失效，请重新扫描确认' };
+        return;
+      }
+      if (start && start.job_id) {
+        _importRun = { id: start.job_id, state: 'running', mode,
+                       source: start.source || source,
+                       prepared: Number(start.total || 0) > 0,
+                       done: 0, total: Number(start.total || confirmTotal || 0) };
+        importRunWatch(start.job_id);
+        return;
+      }
+      _importRun = { state: 'error', mode, source,
+                     error: (start && start.error) || '导入失败' };
+      return;
+    }
+    if (start && start.busy) {
+      // 另一批正在执行: 本批尚未开始, 保留参数与重试入口, 不打断正在跑的任务
+      _importRun = null;
+      _importPendingBatch = { body, makeCustom, confirmTotal, mode, scanToken, source };
+      _importBusyInfo = { source: start.source || '',
+                          message: start.message || '已有另一批导入正在执行' };
+      importShowBusyPending();
+      return;
+    }
+    if (start && start.code === 'preview_stale') {
+      _importRun = null;
+      const rows = (start.changed || []).map(x =>
+        `<li>${esc(x.name)}<span class="hint">（${esc(x.reason || '已变化')}）</span></li>`).join('');
+      openLibModal('⚠ 预览后源文件有变化',
+        '<div class="hint err-text">确认页之后源文件被移动、删除或修改，本批没有执行。</div>' +
+        (rows ? `<ul class="lib-health-detail">${rows}</ul>` : '') +
+        '<div class="hint">请重新扫描并确认，再开始导入。</div>' +
+        '<div class="modal-actions">' +
+        `<button class="btn accent" onclick="importResetAndPick('${mode}')">🔄 重新选择</button>` +
+        '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+        { lg: true });
+      opClaimModal('import-stale');
+      return;
+    }
+    if (start && start.code === 'preview_expired') {
+      _importRun = null;
+      openLibModal('⚠ 预览已失效',
+        `<div class="hint err-text">${esc(start.message || '预览已失效，请重新扫描确认')}</div>` +
+        '<div class="modal-actions">' +
+        `<button class="btn accent" onclick="importResetAndPick('${mode}')">🔄 重新选择</button>` +
+        '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+        { lg: true });
+      opClaimModal('import-expired');
+      return;
+    }
+    if (!start || start.error) throw new Error((start && start.error) || '导入失败');
+    if (!start.job_id) throw new Error('服务端没有返回任务号');
+    _importRun = { id: start.job_id, state: 'running', mode,
+                   source: start.source || source,
+                   prepared: Number(start.total || 0) > 0,
+                   done: 0, total: Number(start.total || confirmTotal || 0) };
+    opClaimModal('import:' + start.job_id);
+    if (document.getElementById('imp-run-text')) importPaintRun(_importRun);
+    importRunWatch(start.job_id);
+  } catch (e) {
+    if (_importStart === waiter) _importStart = null;   // 结束本次启动等待
+    _importRun = { state: 'error', error: e.message || '导入失败', mode, source };
+    // 与整理入口一致: 用等待器绑定的当前弹窗实例号判断, 重开后的弹窗直接显示失败
+    if (!opModalSame(waiter.seq || seq)) return;
+    importShowResult(_importRun);   // 「⚠ 导入失败」+ 重新选择 / 关闭
+  }
 }
 
 // 「不是标准 P 站作品」的那部分怎么处理? 弹窗二选一 ("导入前就判定")。
@@ -4169,12 +4847,13 @@ function _askImportMode(pre) {
         直接建自定义作品（标题=文件名 · 来源=其他来源）
       </label>
       ${pre.conflicts ? `<div class="hint" style="margin-top:8px">其中 ${pre.conflicts} 张目标已存在，会按来源指纹/像素核对复用或列为待确认（源文件不动）。</div>` : ''}
-      <div class="hint" style="margin-top:10px">静态图片统一转 PNG（图库只保留 PNG，原 JPG 不归档）。</div>
+      <div class="hint" style="margin-top:10px">${ingestAutoPng ? '静态图片将转为 PNG（图库只保留 PNG，原 JPG 不归档）。' : '保留原始格式入库（不转 PNG，原始字节不变）。'}</div>
       <div class="hint" style="margin-top:10px">外部源文件全程保持原位，不会被移走或删除。</div>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn accent" id="imp-ok">开始导入</button>
         <button class="btn ghost" id="imp-cancel">取消</button>
       </div>`);
+    opClaimModal('import-choose');
     const okBtn = $('#imp-ok'), cancelBtn = $('#imp-cancel');
     if (okBtn) okBtn.onclick = () => {
       const v = document.querySelector('input[name="imp-mode"]:checked');
@@ -4302,7 +4981,7 @@ function paintLibHealth(flash = false) {
     (incomplete ? `<span class="lib-sync-line" title="这些目录/文件本次读不了，其中的作品暂不判缺失">⚠ 扫描不完整：${(h.unreadable_dirs || []).length} 项不可读 · 缺失判定已暂缓</span>` : '') +
     (miss ? `<button type="button" class="health-badge miss" title="点击查看具体是哪些作品" onclick="showLibHealthDetail('missing')">⚠ 文件缺失 ${miss}</button>` : '') +
     (pend ? `<button type="button" class="health-badge miss" title="点击查看多候选移动 / 同名不同内容" onclick="showLibHealthDetail('pending')">❓️ 待确认 ${pend}</button>` : '') +
-    (norm ? `<button type="button" class="health-badge miss" title="点击预览并确认转为 PNG" onclick="openNormalizePreview()">🖼️ 待转为 PNG ${norm}</button>` : '') +
+    (norm ? `<button type="button" class="health-badge miss" title="点击预览并确认转为 PNG" onclick="openNormalizePreview()">🖼️ 可转为 PNG ${norm}</button>` : '') +
     (empty ? `<button type="button" class="health-badge empty" title="点击查看具体是哪些空文件夹" onclick="showLibHealthDetail('empty')">📁 空目录 ${empty}</button>` : '') +
     (bad ? `<button type="button" class="health-badge bad" title="点击查看具体是哪些损坏文件" onclick="showLibHealthDetail('corrupt')">💥 损坏 ${bad}</button>` : '') +
     (csLine || `<button class="btn ghost" onclick="startLibraryCheck()">🔍 检查全部</button>`) +
@@ -4488,6 +5167,9 @@ window.showSyncResult = function () {
   const norm = (r.normalize_pending || []).length;
   const unread = (r.unreadable_dirs || []).length;
   const writeSkip = r.write_skipped || '';
+  const autoN = Number(r.auto_png_converted) || 0;
+  const autoErr = (r.auto_png_errors || []);
+  const autoBad = autoErr.length ? `自动转换失败 ${autoErr.length} 张（${esc(autoErr[0].reason || '原因未知')}）` : '';
   const cell = (n, label) => `<div><b style="font-size:18px">${n}</b><div class="hint">${label}</div></div>`;
   const pendRows = [
     ...((r.pending || []).map(x => `<li><b>多候选移动</b> <code>${esc(x.path)}</code>` +
@@ -4503,13 +5185,14 @@ window.showSyncResult = function () {
       ${cell(r.new_pages_linked || 0, '新增')}
       ${cell(r.pages_relinked || 0, '重新关联')}
       ${cell(miss, '缺失')}
-      ${cell(norm, '待转 PNG')}
+      ${cell(norm, '可转 PNG')}
       ${cell(pend, '待确认')}
       ${cell(writeSkip ? 1 : 0, '写库失败')}
     </div>
     ${writeSkip ? `<div class="hint">⚠ 写库被跳过：${esc(writeSkip)}（本次只完成了读取与对账）</div>` : ''}
     ${unread ? `<div class="hint">不可读 ${unread} 项：<code>${esc((r.unreadable_dirs || []).slice(0, 8).join('、'))}</code></div>` : ''}
-    ${norm ? `<div class="hint" style="margin-top:10px">待转为 PNG（同步只识别并报告，确认后才转换）：</div><ul>${(r.normalize_pending || []).map(x => `<li><b>${x.conflict ? '同页已有 PNG' : '待转为 PNG'}</b> <code>${esc(x.path || '')}</code><div class="hint">${x.conflict ? '图库当前使用：' + esc(x.registered || '（无）') + ' · 磁盘另有一份' : '当前格式 ' + esc(String(x.format || '').toUpperCase())}</div></li>`).join('')}</ul>
+    ${autoN || autoBad ? `<div class="hint" style="margin-top:10px">${autoN ? `本次同步已自动转为 PNG ${autoN} 张。` : ''}${autoBad ? `<span class="err-text">${autoBad}</span>` : ''}</div>` : ''}
+    ${norm ? `<div class="hint" style="margin-top:10px">以下为可手动转为 PNG 的图片（确认后才会转换）：</div><ul>${(r.normalize_pending || []).map(x => `<li><b>${x.conflict ? '同页已有 PNG' : '可转为 PNG'}</b> <code>${esc(x.path || '')}</code><div class="hint">${x.conflict ? '图库当前使用：' + esc(x.registered || '（无）') + ' · 磁盘另有一份' : '当前格式 ' + esc(String(x.format || '').toUpperCase())}</div></li>`).join('')}</ul>
       <div class="btn-row"><button class="btn accent" onclick="closeLibModal();openNormalizePreview()">预览并转为 PNG（${norm}）</button></div>` : ''}
     ${pend ? `<div class="hint" style="margin-top:10px">待确认（自动对账不会改动这些条目）：</div><ul>${pendRows}</ul>` : ''}
     ${miss ? `<div class="btn-row"><button class="btn danger" onclick="closeLibModal();openMissingCleanup()">预览并清理缺失（${miss}）</button></div>` : ''}
@@ -4559,10 +5242,12 @@ window.openNormalizePreview = async function () {
   const totalBefore = Number(r.total_size) || 0;
   const totalAfter = Number(r.total_png_size) || 0;
   const totalSaved = Number(r.saved_bytes) || 0;
+  const _autoN = Number((window._syncResult || {}).auto_png_converted) || 0;
+  const _autoErr = ((window._syncResult || {}).auto_png_errors || []);
   openLibModal('🖼️ 转为 PNG', `
-    <div class="hint">同步只识别并报告，下面这些手动放入的静态图片要确认后才会转换；同页已有 PNG 的条目不会自动替换。</div>
+    <div class="hint">${_autoN ? `本次同步已自动转为 PNG ${_autoN} 张；` : ''}以下为可手动转为 PNG 的静态图片，确认后才会转换；同页已有 PNG 的条目不会自动替换。${_autoErr.length ? ` 另有 ${_autoErr.length} 张自动转换失败（${esc(_autoErr[0].reason || '原因未知')}），已保留原格式。` : ''}</div>
     ${ready.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin:12px 0;text-align:center">
-      <div><b style="font-size:18px">${ready.length}</b><div class="hint">待转 PNG</div></div>
+      <div><b style="font-size:18px">${ready.length}</b><div class="hint">可转 PNG</div></div>
       <div><b style="font-size:18px">${fmtSize(totalBefore)}</b><div class="hint">当前大小</div></div>
       <div><b style="font-size:18px">${fmtSize(totalAfter)}</b><div class="hint">PNG 预计</div></div>
       <div><b style="font-size:18px">${totalSaved >= 0 ? '节省 ' : '变大 '}${fmtSize(Math.abs(totalSaved))}</b><div class="hint">预计空间变化</div></div>
@@ -7884,6 +8569,10 @@ window.saveBatchEdit = async function () {
 };
 
 // ---- 弹窗: 编辑作品 / 编辑标签 ----
+// 每次打开弹窗递增实例号: 异步请求回包时据此判断"还是不是发起时的那个弹窗",
+// 迟到回包不会覆盖用户后来打开的另一业务或同一业务的新弹窗。
+let _opModalSeq = 0;
+
 function openLibModal(title, bodyHtml, opts) {
   // 大号弹窗 (opts.lg): 一键整理预览/来源管理等表格类内容用, 更宽更高好读
   const box = $('#lib-modal .modal-box');
@@ -7893,7 +8582,12 @@ function openLibModal(title, bodyHtml, opts) {
   }
   $('#lib-modal-title').textContent = title;
   $('#lib-modal-body').innerHTML = bodyHtml;
+  // 新弹窗默认无任务归属; 由打开它的业务调用 opClaimModal() 认领。
+  // 后台任务回调只更新「可见且归属匹配」的弹窗, 不会关掉/覆盖别的操作。
+  $('#lib-modal').dataset.opOwner = '';
+  $('#lib-modal').dataset.opSeq = String(++_opModalSeq);
   $('#lib-modal').style.display = 'flex';
+  opRevealProgressIn($('#lib-modal-body'));   // 进度控件约 300ms 出现阈值
 }
 function closeLibModal() {
   if ($('#lib-modal').dataset.wallBusy === '1') return;
@@ -7904,35 +8598,220 @@ function closeLibModal() {
 // ============ 💾 备份与恢复 (2026-09-16 合并原「一键备份」+「备份管理」) ============
 //   一个入口两件事: 上半是数据库备份(zip, 可对比/恢复/另存), 下半是原图旧版本
 //   (重下修复留下的 .bak + 每次切换前自动保留的 .bak-<时间>, 可对比/切换/删除)。
-async function openBackupCenter() {
-  let dbk = { items: [], dir: '' }, bk = { items: [] };
+//   2026-11-24: 耗时操作改成服务端任务 + 轮询, 按设计稿显示计数/流动/分段充能条。
+const BK_PROGRESS_DELAY = 300;      // 短任务不闪进度条
+const BK_POLL_MS = 250;
+const BK_BACKUP_STAGES = ['生成数据库副本', '压缩备份', '校验并保存'];
+const BK_RESTORE_STAGES = ['校验备份', '等待图库写入结束', '保存恢复前快照', '恢复并检查'];
+const BK_ROLLBACK_TEXT = '正在回滚';
+const BK_POLL_RETRY_MAX = 6;
+
+let _backupView = { mode: 'center', name: '', highlight: '' };
+let _backupCenter = { seq: 0, db: null, img: null, dbDone: false, imgDone: false,
+                      dbErr: '', imgErr: '', timer: null };
+let _backupJobs = { backup: null, compare: null, restore: null, saveAs: null, image: null };
+
+function bkStageIndex(stages, stage) {
+  const i = (stages || []).indexOf(stage);
+  return i;
+}
+
+function bkProgressHTML(o) {
+  o = o || {};
+  const stages = o.stages || [];
+  const idx = Number.isInteger(o.stageIndex) ? o.stageIndex : -1;
+  const failed = Number.isInteger(o.failedIndex) && o.failedIndex >= 0
+    ? o.failedIndex : -1;
+  const doneCount = failed >= 0 ? failed : idx;
+  const running = o.running !== false && failed < 0;
+  let body = '';
+  if (o.mode === 'segments') {
+    const segs = stages.map((s, i) => {
+      const cls = [];
+      if (i < doneCount) cls.push('done');
+      if (i === failed) cls.push('failed');
+      if (running && i === idx) cls.push('active');
+      return `<div class="op-seg ${cls.join(' ')}" title="${esc(s)}"></div>`;
+    }).join('');
+    const labels = stages.map((s, i) =>
+      `<span class="${i === idx ? 'on' : ''}${i === failed ? ' bad' : ''}">${esc(s)}</span>`).join('');
+    body = `<div class="op-segments">${segs}</div><div class="op-labels">${labels}</div>`;
+    if (o.rollback) {
+      body += '<div class="op-rollback"><div class="op-track flow"><div class="op-fill"></div></div></div>';
+    }
+  } else if (o.mode === 'count') {
+    const pct = o.total ? Math.max(0, Math.min(100, Math.round((o.done || 0) / o.total * 100))) : 0;
+    body = `<div class="op-track"><div class="op-fill" style="width:${pct}%"></div></div>`;
+  } else if (o.mode === 'none') {
+    body = '';
+  } else {
+    body = '<div class="op-track flow"><div class="op-fill"></div></div>';
+  }
+  const note = o.note ? `<div class="op-note">${esc(o.note)}</div>` : '';
+  const actions = o.actions ? `<div class="op-actions">${o.actions}</div>` : '';
+  return `<div class="op-progress ${o.kind || ''}">
+    <div class="op-head"><span class="op-stage" role="status" aria-live="polite">${esc(o.text || '')}</span>
+      <span class="op-count" aria-hidden="true">${esc(o.countText || '')}</span></div>
+    ${body}${note}${actions}</div>`;
+}
+
+function bkRenderProgress(host, o) {
+  if (!host) return;
+  const sig = JSON.stringify([o.mode || 'flow', o.stages || [], o.kind || '',
+    o.actions || '', o.note || '', o.rollback ? 1 : 0, o.running === false ? 0 : 1]);
+  if (host.dataset.sig !== sig) {
+    host.innerHTML = bkProgressHTML(o);
+    host.dataset.sig = sig;
+  }
+  const stageEl = host.querySelector('.op-stage');
+  const countEl = host.querySelector('.op-count');
+  if (stageEl && stageEl.textContent !== (o.text || '')) stageEl.textContent = o.text || '';
+  if (countEl) countEl.textContent = o.countText || '';
+  const idx = Number.isInteger(o.stageIndex) ? o.stageIndex : -1;
+  const failed = Number.isInteger(o.failedIndex) && o.failedIndex >= 0
+    ? o.failedIndex : -1;
+  const doneCount = failed >= 0 ? failed : idx;
+  const running = o.running !== false && failed < 0;
+  host.querySelectorAll('.op-seg').forEach((el, i) => {
+    el.classList.toggle('done', i < doneCount);
+    el.classList.toggle('failed', i === failed);
+    el.classList.toggle('active', running && i === idx);
+  });
+  host.querySelectorAll('.op-labels span').forEach((el, i) => {
+    el.classList.toggle('on', i === idx);
+    el.classList.toggle('bad', i === failed);
+  });
+  const noteEl = host.querySelector('.op-note');
+  if (noteEl && noteEl.textContent !== (o.note || '')) noteEl.textContent = o.note || '';
+  const fill = host.querySelector('.op-fill');
+  if (fill && o.mode === 'count') {
+    const pct = o.total ? Math.max(0, Math.min(100, Math.round((o.done || 0) / o.total * 100))) : 0;
+    fill.style.width = pct + '%';
+  }
+}
+
+async function bkStartJob(action, extra) {
+  const r = await api('/api/library/db-backup/job', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ action }, extra || {})),
+  });
+  if (!r || r.status !== 'ok' || !r.job_id) throw new Error((r && r.error) || '任务启动失败');
+  return r.job_id;
+}
+
+function bkSleep(ms) {
+  return new Promise(res => setTimeout(res, ms));
+}
+
+async function bkPollJob(jobId, onState, onTransient) {
+  let failures = 0;
+  while (true) {
+    let r = null;
+    let err = null;
+    try {
+      r = await api('/api/library/db-backup/job/' + encodeURIComponent(jobId));
+    } catch (e) {
+      err = e.message || '任务状态读取失败';
+    }
+    if (!err && (!r || r.status !== 'ok' || !r.job)) {
+      err = (r && r.error) || '任务状态读取失败';
+    }
+    if (err) {
+      failures += 1;
+      if (failures > BK_POLL_RETRY_MAX) {
+        if (onTransient) onTransient(null);
+        onState({ state: 'unknown', error: err });
+        return;
+      }
+      if (onTransient) onTransient({ attempt: failures, error: err });
+      await bkSleep(Math.min(4000, 500 * Math.pow(2, failures - 1)));
+      continue;
+    }
+    failures = 0;
+    if (onTransient) onTransient(null);
+    onState(r.job);
+    if (r.job.state !== 'running') return;
+    await bkSleep(BK_POLL_MS);
+  }
+}
+
+async function bkWatchJob(job, jid, onState, onTransient) {
+  if (job._polling) return;
+  job._polling = true;
   try {
-    const [a, b] = await Promise.all([
-      api('/api/library/db-backups').catch(() => ({ items: [], dir: '' })),
-      api('/api/library/backups').catch(() => ({ items: [] })),
-    ]);
-    dbk = a || dbk; bk = b || bk;
-  } catch (e) { /* 单项失败不影响另一块 */ }
-  const dbItems = dbk.items || [];
-  const cover = (m) => (m && m.artworks != null)
+    await bkPollJob(jid, onState, onTransient);
+  } finally {
+    job._polling = false;
+  }
+}
+
+function bkJobActive(job) {
+  return !!job && (job.state === 'running' || job.state === 'retrying'
+                   || job.state === 'unknown');
+}
+
+function bkTransientNote(job) {
+  if (!job) return '';
+  if (job.state === 'unknown') {
+    return '状态未知：暂时无法读取任务状态，结果以服务端为准';
+  }
+  if (job.transient) return '连接暂时中断，正在重新查看状态…';
+  return '';
+}
+
+function bkUnknownActions(kind) {
+  return `<button class="btn ghost" onclick="bkResumeJob('${kind}')">🔄 查询状态</button>`;
+}
+
+window.bkResumeJob = function (kind) {
+  const j = _backupJobs[kind];
+  if (!j || !j._resume) return;
+  if (j.state === 'unknown' || j.state === 'retrying') {
+    j.state = 'running';
+    j.transient = null;
+  }
+  j._resume();
+};
+
+function bkCover(m) {
+  return (m && m.artworks != null)
     ? `${m.artworks} 作品 / ${m.pages_done ?? 0} 图 / ${m.authors ?? 0} 作者`
     : '—';
-  const dbRows = dbItems.map(it => `<tr>
+}
+
+function bkDbTableHTML() {
+  const dbk = _backupCenter.db || {};
+  const items = dbk.items || [];
+  if (!items.length) {
+    return '<div class="hint">还没有数据库备份。点上面「立即备份数据库」生成第一个。</div>';
+  }
+  const rows = items.map((it, idx) => {
+    const hi = _backupView.highlight && _backupView.highlight === it.name;
+    return `<tr id="dbk-row-${idx}" class="${hi ? 'op-highlight' : ''}">
       <td class="mono" title="${esc(it.name)}">${esc(it.name)}${it.kind === 'pre_restore'
         ? ' <span class="op-badge">恢复前快照</span>' : ''}</td>
       <td style="white-space:nowrap">${fmtSize(it.size)}</td>
       <td style="white-space:nowrap">${it.mtime ? new Date(it.mtime * 1000).toLocaleString('zh-CN') : ''}</td>
-      <td>${it.valid ? cover(it.counts) + (it.manifest_matches === false
+      <td>${it.valid ? bkCover(it.counts) + (it.manifest_matches === false
         ? ' <span class="hint">⚠ 清单计数不一致，以库内实数为准</span>' : '')
         : `<span class="hint">⚠ ${esc(it.error || '无法读取')}</span>`}</td>
       <td style="white-space:nowrap">
         <button class="btn ghost" ${it.valid ? '' : 'disabled'} onclick="compareDbBackup('${esc(it.name)}')">🔀 对比/恢复</button>
-        <button class="btn ghost" onclick="saveAsDbBackup('${esc(it.name)}')">📤 另存为</button>
+        <button class="btn ghost" id="dbk-save-${idx}" onclick="saveAsDbBackup('${esc(it.name)}')">📤 另存为</button>
         <button class="btn danger" onclick="deleteDbBackup('${esc(it.name)}')">🗑️ 删除</button>
       </td>
-    </tr>`).join('');
-  const bakItems = bk.items || [];
-  const bakRows = bakItems.map(it => `
+    </tr>
+    <tr id="dbk-row-op-${idx}" class="op-row" style="display:none"><td colspan="5"></td></tr>`;
+  }).join('');
+  return `<table class="table"><thead><tr><th>备份文件</th><th>大小</th><th>备份时间</th>
+    <th>覆盖范围</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function bkImgTableHTML() {
+  const bk = _backupCenter.img || {};
+  const items = bk.items || [];
+  if (!items.length) return '<div class="hint">暂无原图旧版本。</div>';
+  const rows = items.map(it => `
       <tr>
         <td style="white-space:nowrap">${esc(it.artwork_id || '?')}${it.page_num != null ? '_p' + it.page_num : ''}</td>
         <td class="w-path" title="${esc(it.orig_rel)}">${esc(it.orig_name)}</td>
@@ -7946,23 +8825,237 @@ async function openBackupCenter() {
           <button class="btn danger" onclick="deleteBackup('${esc(it.rel)}')">🗑️ 删除</button>
         </td>
       </tr>`).join('');
-  openLibModal('💾 备份与恢复', `
-    <h4>🗄 图库数据库备份（pixiv.db + 反搜特征库）</h4>
-    <div class="hint">保存位置：<code>${esc(dbk.dir || 'data/backup/')}</code>。
+  return `<table class="table"><thead><tr><th>作品/页</th><th>原文件</th><th>类型</th>
+    <th>大小</th><th>时间</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function bkDbSectionHTML() {
+  const bj = _backupJobs.backup;
+  const running = bkJobActive(bj);
+  const busyText = bj && bj.state === 'unknown' ? '状态未知' : '备份中…';
+  return `<h4>🗄 图库数据库备份（pixiv.db + 反搜特征库）</h4>
+    <div class="hint">保存位置：<code>${esc((_backupCenter.db || {}).dir || 'data/backup/')}</code>。
       恢复前会验证压缩包、清单和 SQLite 完整性；确认后先保存一份唯一命名的「恢复前快照」（会出现在本列表），再恢复数据库。</div>
     <div class="btn-row" style="margin:8px 0">
-      <button class="btn accent" onclick="doBackup()">💾 立即备份数据库</button>
+      <button class="btn accent" id="dbk-backup-btn" onclick="doBackup()"
+        ${running ? 'disabled' : ''}>${running ? busyText : '💾 立即备份数据库'}</button>
     </div>
-    ${dbItems.length
-      ? `<table class="table"><thead><tr><th>备份文件</th><th>大小</th><th>备份时间</th><th>覆盖范围</th><th>操作</th></tr></thead><tbody>${dbRows}</tbody></table>`
-      : '<div class="hint">还没有数据库备份。点上面「立即备份数据库」生成第一个。</div>'}
-    <h4 style="margin-top:18px">🕒 原图旧版本</h4>
+    <div id="dbk-backup-progress"></div>
+    ${bkDbTableHTML()}`;
+}
+
+function bkImgSectionHTML() {
+  return `<h4 style="margin-top:18px">🕒 原图旧版本</h4>
     <div class="hint">「♻ 重下修复」覆盖前留下的 <code>.bak</code>，以及每次切换旧版本前自动保存的
       <code>.bak-时间</code>。切换会先把当前版本存成新的可返回版本，再换成所选旧版本；不会丢当前图。</div>
-    ${bakItems.length
-      ? `<table class="table"><thead><tr><th>作品/页</th><th>原文件</th><th>类型</th><th>大小</th><th>时间</th><th>操作</th></tr></thead><tbody>${bakRows}</tbody></table>`
-      : '<div class="hint">暂无原图旧版本。</div>'}
-    <div class="btn-row"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>`, { lg: true });
+    ${bkImgTableHTML()}`;
+}
+
+function bkRenderDbSection() {
+  const host = $('#dbk-db-section');
+  if (!host || !_backupCenter.dbDone) return;
+  if (_backupCenter.dbErr) {
+    host.innerHTML = `<h4>🗄 图库数据库备份</h4>
+      <div class="hint">读取失败：${esc(_backupCenter.dbErr)}
+        <button class="btn ghost" onclick="openBackupCenter()">重试</button></div>`;
+    return;
+  }
+  host.innerHTML = bkDbSectionHTML();
+  bkRenderBackupProgress();
+  bkRenderSaveAsProgress();
+  if (_backupView.highlight) {
+    const el = host.querySelector('.op-highlight');
+    if (el) setTimeout(() => el.scrollIntoView({ block: 'nearest' }), 30);
+  }
+}
+
+function bkRenderImgSection() {
+  const host = $('#dbk-img-section');
+  if (!host || !_backupCenter.imgDone) return;
+  if (_backupCenter.imgErr) {
+    host.innerHTML = `<h4 style="margin-top:18px">🕒 原图旧版本</h4>
+      <div class="hint">读取失败：${esc(_backupCenter.imgErr)}
+        <button class="btn ghost" onclick="openBackupCenter()">重试</button></div>`;
+    return;
+  }
+  host.innerHTML = bkImgSectionHTML();
+}
+
+function bkRenderBackupProgress() {
+  const host = $('#dbk-backup-progress');
+  if (!host) return;
+  const j = _backupJobs.backup;
+  if (!j) { host.innerHTML = ''; host.dataset.sig = ''; return; }
+  const stages = j.stages || BK_BACKUP_STAGES;
+  const idx = Number.isInteger(j.stage_index) ? j.stage_index
+    : (bkStageIndex(stages, j.stage) >= 0 ? bkStageIndex(stages, j.stage) : 0);
+  const note = bkTransientNote(j);
+  if (j.state === 'running' || j.state === 'retrying' || j.state === 'unknown') {
+    if (j.state === 'unknown') {
+      bkRenderProgress(host, { mode: 'segments', stages, stageIndex: idx,
+        running: false, text: '备份状态未知', note,
+        actions: bkUnknownActions('backup') });
+    } else {
+      bkRenderProgress(host, { mode: 'segments', stages, stageIndex: idx,
+        text: j.stage || '正在备份数据库', note });
+    }
+  } else if (j.state === 'ok') {
+    const r = j.result || {};
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: stages.length,
+      kind: 'ok', text: `备份完成：${r.name || ''}`,
+      countText: r.size ? fmtSize(r.size) : '',
+      actions: '<button class="btn ghost" onclick="bkReloadDbList()">刷新备份列表</button>' });
+  } else {
+    const fidx = Number.isInteger(j.failed_index) ? j.failed_index : idx;
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: fidx,
+      failedIndex: fidx, running: false, kind: 'err',
+      text: `备份失败${j.error_stage ? '（' + j.error_stage + '）' : ''}：${j.error || '未知错误'}`,
+      actions: '<button class="btn ghost" onclick="doBackup()">重试</button>' });
+  }
+}
+
+function bkRenderSaveAsProgress() {
+  const j = _backupJobs.saveAs;
+  if (!j) return;
+  const items = (_backupCenter.db || {}).items || [];
+  const idx = items.findIndex(x => x.name === j.name);
+  if (idx < 0) return;
+  const row = $('#dbk-row-op-' + idx);
+  if (!row) return;
+  const cell = row.querySelector('td');
+  row.style.display = '';
+  let slot = cell.querySelector('.op-slot');
+  if (!slot) {
+    cell.innerHTML = '<div class="op-slot"></div>';
+    slot = cell.querySelector('.op-slot');
+  }
+  const running = j.state === 'running' || j.state === 'retrying';
+  const unknown = j.state === 'unknown';
+  const count = j.total ? `已复制 ${fmtSize(j.done || 0)} / ${fmtSize(j.total)}` : '';
+  let text;
+  if (unknown) text = '另存状态未知';
+  else if (running) text = j.stage || '正在复制备份';
+  else text = j.state === 'ok' ? '另存完成' : `另存失败：${j.error || ''}`;
+  bkRenderProgress(slot, {
+    mode: running && j.total ? 'count' : (running ? 'flow' : 'none'),
+    kind: running ? '' : (j.state === 'ok' ? 'ok' : 'err'),
+    text, countText: count, done: j.done, total: j.total,
+    note: bkTransientNote(j),
+    actions: `<span class="hint">→ ${esc(j.dest || '')}</span>`
+      + (unknown ? bkUnknownActions('saveAs') : ''),
+  });
+}
+
+function bkRenderRestoreBanner() {
+  const host = $('#dbk-restore-banner');
+  if (!host) return;
+  const j = _backupJobs.restore;
+  if (!j) { host.innerHTML = ''; host.dataset.sig = ''; return; }
+  const stages = j.stages || BK_RESTORE_STAGES;
+  const idx = Number.isInteger(j.stage_index) ? j.stage_index
+    : (bkStageIndex(stages, j.stage) >= 0 ? bkStageIndex(stages, j.stage) : 0);
+  const snap = j.snapshot || (j.result || {}).snapshot;
+  const note = bkTransientNote(j);
+  if (j.state === 'running' || j.state === 'retrying') {
+    const rollback = /回滚/.test(j.stage || '');
+    const rbText = ['已回滚', '回滚失败'].includes(j.stage) ? j.stage : BK_ROLLBACK_TEXT;
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: idx,
+      failedIndex: rollback ? idx : -1, running: !rollback,
+      kind: rollback ? (j.stage === '已回滚' ? 'ok' : 'err') : '',
+      rollback: j.stage === BK_ROLLBACK_TEXT,
+      text: rollback ? rbText : `数据库恢复：${j.stage || '进行中'}`,
+      note,
+      actions: snap ? `<button class="btn ghost" onclick="bkLocateSnapshot('${esc(snap)}')">定位恢复前快照</button>` : '' });
+  } else if (j.state === 'unknown') {
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: idx,
+      running: false, text: '数据库恢复状态未知', note,
+      actions: bkUnknownActions('restore') });
+  } else if (j.state === 'ok') {
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: stages.length,
+      kind: 'ok', text: '上次数据库恢复已完成',
+      actions: snap ? `<button class="btn ghost" onclick="bkLocateSnapshot('${esc(snap)}')">定位恢复前快照</button>` : '' });
+  } else {
+    const rolled = j.rolled_back;
+    const fidx = Number.isInteger(j.failed_index) ? j.failed_index : idx;
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: fidx,
+      failedIndex: fidx, running: false, kind: 'err',
+      text: rolled ? '上次数据库恢复失败，已回滚'
+        : `上次数据库恢复未完成（${j.error_stage || j.stage || '失败'}）：${j.error || ''}`,
+      note,
+      actions: snap
+        ? `<button class="btn ghost" onclick="bkLocateSnapshot('${esc(snap)}')">查看恢复前快照</button>` : '' });
+  }
+}
+
+function bkAfterCenterLoad() {
+  const c = _backupCenter;
+  if (c.dbDone && c.imgDone) {
+    clearTimeout(c.timer);
+    const p = $('#dbk-open-progress');
+    if (p) { p.innerHTML = ''; p.dataset.sig = ''; }
+  }
+  bkRenderDbSection();
+  bkRenderImgSection();
+  bkRenderRestoreBanner();
+}
+
+window.bkLocateSnapshot = function (name) {
+  if (!name) { openBackupCenter(); return; }
+  openBackupCenter({ highlight: name });
+};
+
+window.bkReloadDbList = async function () {
+  if (_backupView.mode !== 'center') return;
+  try {
+    _backupCenter.db = await api('/api/library/db-backups') || {};
+    _backupCenter.dbErr = '';
+  } catch (e) {
+    _backupCenter.dbErr = e.message || '读取失败';
+  }
+  _backupCenter.dbDone = true;
+  bkRenderDbSection();
+};
+
+async function openBackupCenter(opts) {
+  opts = opts || {};
+  const seq = ++_backupCenter.seq;
+  _backupView = { mode: 'center', name: '',
+                  highlight: opts.highlight != null ? opts.highlight : '' };
+  _backupCenter = { seq, db: null, img: null, dbDone: false, imgDone: false,
+                    dbErr: '', imgErr: '', timer: null };
+  openLibModal('💾 备份与恢复', `
+    <div id="dbk-open-progress"></div>
+    <div id="dbk-restore-banner"></div>
+    <div id="dbk-db-section"><div class="hint">正在读取数据库备份…</div></div>
+    <div id="dbk-img-section"><div class="hint">正在读取原图旧版本…</div></div>
+    <div class="btn-row"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>`,
+    { lg: true });
+  bkRenderRestoreBanner();
+  _backupCenter.timer = setTimeout(() => {
+    if (seq !== _backupCenter.seq) return;
+    if (!_backupCenter.dbDone || !_backupCenter.imgDone) {
+      bkRenderProgress($('#dbk-open-progress'),
+        { mode: 'flow', text: '正在读取数据库备份与旧图版本' });
+    }
+  }, BK_PROGRESS_DELAY);
+  const load = async (path, prefix) => {
+    try {
+      const r = await api(path);
+      if (seq !== _backupCenter.seq) return;
+      _backupCenter[prefix] = r || {};
+    } catch (e) {
+      if (seq !== _backupCenter.seq) return;
+      _backupCenter[prefix + 'Err'] = e.message || '读取失败';
+    } finally {
+      if (seq !== _backupCenter.seq) return;
+      _backupCenter[prefix + 'Done'] = true;
+      bkAfterCenterLoad();
+    }
+  };
+  await Promise.all([
+    load('/api/library/db-backups', 'db'),
+    load('/api/library/backups', 'img'),
+  ]);
 }
 
 function fmtBakVersion(v) {
@@ -7984,16 +9077,138 @@ function showBackupError(title, r, backFn, retryFn) {
     </div>`);
 }
 
+window.doBackup = async function () {
+  const old = _backupJobs.backup;
+  if (bkJobActive(old)) { bkResumeJob('backup'); return; }
+  const btn = $('#dbk-backup-btn');
+  const host = $('#dbk-backup-progress');
+  const job = { state: 'running', stage: BK_BACKUP_STAGES[0],
+                stages: BK_BACKUP_STAGES, stage_index: 0,
+                result: null, error: null, error_stage: null, transient: null,
+                startedAt: Date.now(), shown: false };
+  _backupJobs.backup = job;
+  if (btn) { btn.disabled = true; btn.textContent = '备份中…'; }
+  if (host) { host.style.display = 'none'; host.dataset.sig = ''; }
+  const showTimer = setTimeout(() => {
+    job.shown = true;
+    if (host) { host.style.display = ''; bkRenderBackupProgress(); }
+  }, BK_PROGRESS_DELAY);
+  try {
+    const jid = await bkStartJob('backup', {});
+    job.id = jid;
+    const onState = st => {
+      Object.assign(job, st);
+      job.stages = st.stages || BK_BACKUP_STAGES;
+      if ((st.state === 'running' || st.state === 'unknown') && job.shown) {
+        bkRenderBackupProgress();
+      }
+    };
+    const onTransient = t => {
+      job.transient = t;
+      if (job.shown) bkRenderBackupProgress();
+    };
+    job._resume = () => bkWatchJob(job, jid, onState, onTransient);
+    await job._resume();
+  } catch (e) {
+    job.state = 'error';
+    job.error = e.message || '备份失败';
+  }
+  clearTimeout(showTimer);
+  if (host && (job.shown || job.state !== 'ok')) {
+    host.style.display = ''; bkRenderBackupProgress();
+  }
+  if (btn) {
+    if (job.state === 'unknown') {
+      btn.disabled = true; btn.textContent = '状态未知';
+    } else {
+      btn.disabled = false; btn.textContent = '💾 立即备份数据库';
+    }
+  }
+  if (job.state === 'ok') {
+    const r = job.result || {};
+    toast('备份完成：' + (r.name || ''), 'ok');
+    if (_backupView.mode === 'center') await bkReloadDbList();
+  }
+};
+
 // DB 对比: 当前库 vs 备份 (同 ID 的页/信息/标签也计入); 确认令牌绑定预览状态
 window.compareDbBackup = async function (name) {
-  let r;
+  if (bkJobActive(_backupJobs.compare) && _backupJobs.compare.name === name) {
+    bkResumeJob('compare');
+    return;
+  }
+  const seq = ++_backupCenter.seq;
+  _backupView = { mode: 'compare', name, highlight: '' };
+  openLibModal('🔀 对比数据库备份 · ' + esc(name), `
+    <div id="dbk-compare-progress"></div>
+    <div id="dbk-compare-body"><div class="hint">所选备份：<code>${esc(name)}</code><br>
+      正在读取差异…</div></div>`, { lg: true });
+  const host = $('#dbk-compare-progress');
+  if (host) host.style.display = 'none';
+  const job = { name, state: 'running', stage: '校验备份',
+                stages: ['校验备份', '核对差异'], stage_index: 0,
+                transient: null, result: null, error: null, error_stage: null,
+                startedAt: Date.now(), shown: false };
+  _backupJobs.compare = job;
+  const showTimer = setTimeout(() => {
+    if (seq !== _backupCenter.seq || !host) return;
+    job.shown = true;
+    host.style.display = '';
+    bkRenderProgress(host, { mode: 'flow', text: job.stage || '校验备份' });
+  }, BK_PROGRESS_DELAY);
+  const hideHost = () => {
+    clearTimeout(showTimer);
+    if (host) { host.style.display = 'none'; host.innerHTML = ''; host.dataset.sig = ''; }
+  };
   try {
-    r = await api('/api/library/db-backup/compare', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-  } catch (e) { toast('对比失败: ' + e.message, 'err'); return; }
-  if (!r || r.status !== 'ok') { showBackupError('⚠ 备份无法恢复', r, 'openBackupCenter()'); return; }
+    const jid = await bkStartJob('compare', { name });
+    job.id = jid;
+    const onState = st => {
+      Object.assign(job, st);
+      if (seq !== _backupCenter.seq) return;
+      if (st.state === 'running' || st.state === 'retrying') {
+        if (host) {
+          job.shown = true;
+          host.style.display = '';
+          bkRenderProgress(host, { mode: 'flow', text: st.stage || '核对差异',
+            note: bkTransientNote(job) });
+        }
+        return;
+      }
+      if (st.state === 'unknown') {
+        job.shown = true;
+        if (host) {
+          host.style.display = '';
+          bkRenderProgress(host, { mode: 'none', text: '对比状态未知',
+            note: bkTransientNote(job), actions: bkUnknownActions('compare') });
+        }
+        return;
+      }
+      hideHost();
+      if (st.state === 'ok') bkRenderCompareResult(name, st.result || {});
+      else bkRenderCompareError(name, st);
+    };
+    const onTransient = t => {
+      job.transient = t;
+      if (seq !== _backupCenter.seq) return;
+      if (host) {
+        job.shown = true;
+        host.style.display = '';
+        bkRenderProgress(host, { mode: 'flow', text: job.stage || '核对差异',
+          note: bkTransientNote(job) });
+      }
+    };
+    job._resume = () => bkWatchJob(job, jid, onState, onTransient);
+    await job._resume();
+  } catch (e) {
+    hideHost();
+    if (seq === _backupCenter.seq) {
+      bkRenderCompareError(name, { state: 'error', error: e.message || '对比失败' });
+    }
+  }
+};
+
+function bkRenderCompareResult(name, r) {
   const d = r.diff || {};
   const list = (arr) => (arr || []).slice(0, 20).map(x => esc(x)).join('、') || '无';
   const loss = !!(r.will_overwrite_current || r.will_lose_current);
@@ -8001,8 +9216,7 @@ window.compareDbBackup = async function (name) {
     .filter(([, v]) => v && v.current !== v.backup)
     .map(([k, v]) => `${esc(k)}：当前 ${v.current == null ? '?' : v.current} → 备份 ${v.backup == null ? '?' : v.backup}`)
     .join('<br>');
-  openLibModal('🔀 对比数据库备份 · ' + esc(name), `
-    <div class="hint">当前：${r.current_counts.artworks} 作品 / ${r.current_counts.pages_done} 图 / ${r.current_counts.authors} 作者<br>
+  const body = `<div class="hint">当前：${r.current_counts.artworks} 作品 / ${r.current_counts.pages_done} 图 / ${r.current_counts.authors} 作者<br>
       备份实际：${r.counts.artworks} 作品 / ${r.counts.pages_done} 图 / ${r.counts.authors} 作者<br>
       清单时间：${esc((r.manifest || {}).created_at || '—')}
       ${r.manifest_matches === false ? '<br>⚠ 清单计数与备份库实际数量不一致，以上以备份库实数为准' : ''}</div>
@@ -8021,48 +9235,192 @@ window.compareDbBackup = async function (name) {
       当前独有（恢复后会被移除）：作者 ${list(d.current_only_authors)}；作品 ${list(d.current_only_artworks)}</div>
     ${loss ? `<label class="hint"><input type="checkbox" id="db-accept-loss">
       我已看清覆盖范围，接受覆盖当前独有数据并恢复</label>` : ''}
-    <div class="btn-row">
+    <div id="dbk-restore-progress"></div>
+    <div class="btn-row" id="dbk-restore-actions">
       <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份与恢复</button>
-      <button class="btn accent" onclick="restoreDbBackup('${esc(name)}', ${loss
+      <button class="btn accent" id="dbk-restore-btn" onclick="restoreDbBackup('${esc(name)}', ${loss
         ? "document.getElementById('db-accept-loss').checked" : 'false'}, '${esc(r.preview_token || '')}')">💾 确认恢复</button>
       <button class="btn ghost" onclick="closeLibModal()">关闭</button>
-    </div>`, { lg: true });
-};
+    </div>`;
+  const host = $('#dbk-compare-body');
+  if (host) host.innerHTML = body;
+}
+
+function bkRenderCompareError(name, st) {
+  const body = `<div class="hint">所选备份：<code>${esc(name)}</code><br>
+    失败阶段：${esc(st.error_stage || st.stage || '对比')}<br>
+    ${esc(st.error || '对比失败')}</div>
+    <div class="btn-row">
+      <button class="btn accent" onclick="compareDbBackup('${esc(name)}')">🔄 重新对比预览</button>
+      <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份与恢复</button>
+      <button class="btn ghost" onclick="closeLibModal()">关闭</button>
+    </div>`;
+  const host = $('#dbk-compare-body');
+  if (host) host.innerHTML = body;
+}
+
+function bkRenderRestoreProgress() {
+  const host = $('#dbk-restore-progress');
+  if (!host) return;
+  const j = _backupJobs.restore;
+  if (!j) { host.innerHTML = ''; host.dataset.sig = ''; return; }
+  const stages = j.stages || BK_RESTORE_STAGES;
+  const idx = Number.isInteger(j.stage_index) ? j.stage_index
+    : (bkStageIndex(stages, j.stage) >= 0 ? bkStageIndex(stages, j.stage) : 0);
+  const note = bkTransientNote(j);
+  if (j.state === 'running' || j.state === 'retrying') {
+    const rollback = /回滚/.test(j.stage || '');
+    const rbText = ['已回滚', '回滚失败'].includes(j.stage) ? j.stage : BK_ROLLBACK_TEXT;
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: idx,
+      failedIndex: rollback ? idx : -1, running: !rollback,
+      kind: rollback ? 'err' : '', rollback: j.stage === BK_ROLLBACK_TEXT,
+      text: rollback ? rbText : (j.stage || '正在恢复数据库'), note,
+      actions: j.snapshot
+        ? `<button class="btn ghost" onclick="bkLocateSnapshot('${esc(j.snapshot)}')">📍 定位恢复前快照</button>` : '' });
+  } else if (j.state === 'unknown') {
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: idx,
+      running: false, text: '数据库恢复状态未知', note,
+      actions: bkUnknownActions('restore') });
+  } else if (j.state === 'ok') {
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: stages.length,
+      kind: 'ok', text: '数据库恢复完成' });
+  } else {
+    const rolled = j.rolled_back;
+    const fidx = Number.isInteger(j.failed_index) ? j.failed_index : idx;
+    const snap = j.snapshot ? ` · 快照：${j.snapshot}` : '';
+    const err = j.error ? `：${j.error.split('\n')[0]}` : '';
+    bkRenderProgress(host, { mode: 'segments', stages, stageIndex: fidx,
+      failedIndex: fidx, running: false, kind: 'err',
+      text: rolled ? `恢复失败，已回滚${snap}`
+        : `恢复失败（${j.error_stage || j.stage || '失败'}）${err}${snap}`,
+      note,
+      actions: j.snapshot
+        ? `<button class="btn ghost" onclick="bkLocateSnapshot('${esc(j.snapshot)}')">📍 定位恢复前快照</button>` : '' });
+  }
+}
 
 window.restoreDbBackup = async function (name, acceptLoss, token) {
   if (!token) { await compareDbBackup(name); return; }
+  if (bkJobActive(_backupJobs.restore)) { bkResumeJob('restore'); return; }
   if (!confirm('确认恢复数据库？恢复前会自动保存一份唯一快照，可在备份列表里找到。')) return;
-  let r;
+  _backupView = { mode: 'restore', name, highlight: '' };
+  const btn = $('#dbk-restore-btn');
+  const host = $('#dbk-restore-progress');
+  const job = { state: 'running', stage: BK_RESTORE_STAGES[0],
+                stages: BK_RESTORE_STAGES, stage_index: 0,
+                result: null, error: null, error_stage: null, snapshot: null,
+                rolled_back: false, rollback_error: null, transient: null,
+                startedAt: Date.now(), shown: false };
+  _backupJobs.restore = job;
+  if (btn) { btn.disabled = true; btn.textContent = '恢复中…'; }
+  if (host) { host.style.display = 'none'; host.dataset.sig = ''; }
+  const showTimer = setTimeout(() => {
+    job.shown = true;
+    if (host) { host.style.display = ''; bkRenderRestoreProgress(); }
+  }, BK_PROGRESS_DELAY);
   try {
-    r = await api('/api/library/db-backup/restore', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, confirm_accept_loss: !!acceptLoss,
-                             preview_token: token }),
+    const jid = await bkStartJob('restore', {
+      name, confirm_accept_loss: !!acceptLoss, preview_token: token,
     });
-  } catch (e) { toast('恢复失败: ' + e.message, 'err'); return; }
-  if (!r || r.status !== 'ok') {
-    const retry = r && r.stage === '确认已失效'
-      ? `compareDbBackup('${esc(name)}')` : '';
-    showBackupError('⚠ 数据库恢复未完成', r, 'openBackupCenter()', retry);
-    return;
+    job.id = jid;
+    const onState = st => {
+      Object.assign(job, st);
+      job.stages = st.stages || BK_RESTORE_STAGES;
+      if ((st.state === 'running' || st.state === 'unknown') && job.shown) {
+        bkRenderRestoreProgress();
+      }
+    };
+    const onTransient = t => {
+      job.transient = t;
+      if (job.shown) bkRenderRestoreProgress();
+    };
+    job._resume = () => bkWatchJob(job, jid, onState, onTransient);
+    await job._resume();
+  } catch (e) {
+    job.state = 'error';
+    job.error = e.message || '恢复失败';
   }
-  toast('已恢复数据库；恢复前快照：' + (r.snapshot || '已保存'), 'ok');
-  loadStats(); loadLibrary(); loadLibFacets();
-  openBackupCenter();
+  clearTimeout(showTimer);
+  if (host && (job.shown || job.state !== 'ok')) {
+    host.style.display = ''; bkRenderRestoreProgress();
+  }
+  if (job.state === 'ok') {
+    const r = job.result || {};
+    loadStats(); loadLibrary(); loadLibFacets();
+    const actions = $('#dbk-restore-actions');
+    if (actions) {
+      actions.innerHTML = `<button class="btn ghost" onclick="bkLocateSnapshot('${esc(r.snapshot || '')}')">📍 定位恢复前快照</button>
+        <button class="btn ghost" onclick="closeLibModal()">关闭</button>`;
+    }
+    toast('已恢复数据库；恢复前快照：' + (r.snapshot || '已保存'), 'ok');
+  } else if (job.state === 'unknown') {
+    const actions = $('#dbk-restore-actions');
+    if (actions) {
+      actions.innerHTML = `<button class="btn accent" onclick="bkResumeJob('restore')">🔄 查询状态</button>
+        <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份与恢复</button>
+        <button class="btn ghost" onclick="closeLibModal()">关闭</button>`;
+    }
+  } else {
+    const actions = $('#dbk-restore-actions');
+    if (actions) {
+      const retry = job.error_stage === '确认已失效'
+        ? `<button class="btn accent" onclick="compareDbBackup('${esc(name)}')">🔄 重新对比预览</button>` : '';
+      actions.innerHTML = `${retry}
+        <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份与恢复</button>
+        <button class="btn ghost" onclick="closeLibModal()">关闭</button>`;
+    }
+    if (!host) toast('数据库恢复失败：' + (job.error || '未知错误'), 'err');
+  }
 };
 
 window.saveAsDbBackup = async function (name) {
+  if (bkJobActive(_backupJobs.saveAs)) { bkResumeJob('saveAs'); return; }
   const dir = prompt('另存到哪个文件夹？请输入绝对路径（例如 F:\\备份\\vixiq）', '');
   if (!dir || !dir.trim()) return;
-  let r;
+  const items = (_backupCenter.db || {}).items || [];
+  const idx = items.findIndex(x => x.name === name);
+  if (idx < 0) return;
+  const btn = $('#dbk-save-' + idx);
+  if (btn) btn.disabled = true;
+  const job = { name, dest: dir.trim(), state: 'running', stage: '正在复制备份',
+                done: 0, total: 0, startedAt: Date.now(), shown: false,
+                result: null, error: null, transient: null };
+  _backupJobs.saveAs = job;
+  const showTimer = setTimeout(() => {
+    job.shown = true;
+    bkRenderSaveAsProgress();
+  }, BK_PROGRESS_DELAY);
   try {
-    r = await api('/api/library/db-backup/save-as', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, dest_dir: dir.trim() }),
-    });
-  } catch (e) { toast('另存失败: ' + e.message, 'err'); return; }
-  if (!r || r.status !== 'ok') { toast('另存失败: ' + ((r && r.error) || '未知错误'), 'err'); return; }
-  toast('已另存到 ' + r.path, 'ok');
+    const jid = await bkStartJob('save-as', { name, dest_dir: job.dest });
+    job.id = jid;
+    const onState = st => {
+      Object.assign(job, st);
+      if ((st.state === 'running' || st.state === 'unknown') && job.shown) {
+        bkRenderSaveAsProgress();
+      }
+    };
+    const onTransient = t => {
+      job.transient = t;
+      if (job.shown) bkRenderSaveAsProgress();
+    };
+    job._resume = () => bkWatchJob(job, jid, onState, onTransient);
+    await job._resume();
+  } catch (e) {
+    job.state = 'error';
+    job.error = e.message || '另存失败';
+  }
+  clearTimeout(showTimer);
+  job.shown = true;
+  bkRenderSaveAsProgress();
+  if (btn) btn.disabled = false;
+  if (job.state === 'ok') {
+    const r = job.result || {};
+    toast('已另存到 ' + (r.path || job.dest), 'ok');
+  } else if (job.state === 'unknown') {
+    toast('另存状态未知，可点「查询状态」继续确认', 'err');
+  } else {
+    toast('另存失败: ' + (job.error || '未知错误'), 'err');
+  }
 };
 
 async function deleteDbBackup(name) {
@@ -8072,7 +9430,8 @@ async function deleteDbBackup(name) {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
     if (r.status !== 'ok') throw new Error(r.error || '失败');
     toast('备份已删除', 'ok');
-    openBackupCenter();
+    if (_backupView.mode === 'center') await bkReloadDbList();
+    else openBackupCenter();
   } catch (e) { toast('删除失败: ' + e.message, 'err'); }
 }
 window.deleteDbBackup = deleteDbBackup;
@@ -8098,28 +9457,87 @@ function compareBackup(it) {
        </div>
      </div>
      <div class="hint">${esc(it.orig_name)} · ${fmtSize(it.size)}${stamp ? ' · ' + stamp : ''}${masked ? ' · 安全模式：R18 或分级未知，已用占位图；文件名/大小/时间仍可查看。' : ''}</div>
-     <div class="btn-row">
+     <div id="bak-switch-progress"></div>
+     <div class="btn-row" id="bak-switch-actions">
        <button class="btn ghost" onclick="openBackupCenter()">‹ 返回备份与恢复</button>
-       <button class="btn accent" onclick="restoreBackup('${esc(it.rel)}')">↩ 切换到此版本</button>
+       <button class="btn accent" id="bak-switch-btn" onclick="restoreBackup('${esc(it.rel)}')">↩ 切换到此版本</button>
        <button class="btn danger" onclick="deleteBackup('${esc(it.rel)}')">🗑️ 删除此版本</button>
        <button class="btn ghost" onclick="closeLibModal()">关闭</button>
      </div>`);
 }
 
 async function restoreBackup(rel) {
+  if (bkJobActive(_backupJobs.image)) { bkResumeJob('image'); return; }
   if (!confirm('切换原图旧版本：会先把当前文件保存为可返回的版本，再用所选旧版本替换。确认切换？')) return;
-  let r;
+  const btn = $('#bak-switch-btn');
+  const host = $('#bak-switch-progress');
+  if (btn) { btn.disabled = true; btn.textContent = '切换中…'; }
+  if (host) { host.style.display = 'none'; host.dataset.sig = ''; }
+  const job = { state: 'running', stage: '保存当前版本',
+                stages: ['保存当前版本', '切换所选旧图'], stageIndex: 0,
+                result: null, error: null, error_stage: null, transient: null,
+                startedAt: Date.now(), shown: false };
+  _backupJobs.image = job;
+  const showTimer = setTimeout(() => {
+    job.shown = true;
+    if (host) {
+      host.style.display = '';
+      bkRenderProgress(host, { mode: 'flow', text: job.stage || '切换中' });
+    }
+  }, BK_PROGRESS_DELAY);
   try {
-    r = await api('/api/library/backup/restore', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rel }) });
-  } catch (e) { toast('切换失败: ' + e.message, 'err'); return; }
-  if (!r || r.status !== 'ok') {
-    showBackupError('⚠ 原图版本切换未完成', r, 'openBackupCenter()');
-    return;
+    const jid = await bkStartJob('restore-image', { rel });
+    job.id = jid;
+    const onState = st => {
+      Object.assign(job, st);
+      job.stages = st.stages || job.stages;
+      const idx = bkStageIndex(job.stages, st.stage);
+      if (idx >= 0) job.stageIndex = idx;
+      if ((st.state === 'running' || st.state === 'unknown') && job.shown && host) {
+        bkRenderProgress(host, { mode: st.state === 'unknown' ? 'none' : 'flow',
+          text: st.state === 'unknown' ? '切换状态未知' : (st.stage || '切换中'),
+          note: bkTransientNote(job),
+          actions: st.state === 'unknown' ? bkUnknownActions('image') : '' });
+      }
+    };
+    const onTransient = t => {
+      job.transient = t;
+      if (job.shown && host) {
+        bkRenderProgress(host, { mode: 'flow', text: job.stage || '切换中',
+          note: bkTransientNote(job) });
+      }
+    };
+    job._resume = () => bkWatchJob(job, jid, onState, onTransient);
+    await job._resume();
+  } catch (e) {
+    job.state = 'error';
+    job.error = e.message || '切换失败';
   }
-  toast('已切换旧版本；当前版本已保留，可随时切回', 'ok');
-  loadLibrary();
-  openBackupCenter();
+  clearTimeout(showTimer);
+  if (job.state === 'ok') {
+    if (host) { host.style.display = 'none'; }
+    toast('已切换旧版本；当前版本已保留，可随时切回', 'ok');
+    loadLibrary();
+    openBackupCenter();
+  } else if (job.state === 'unknown') {
+    if (host) {
+      host.style.display = '';
+      bkRenderProgress(host, { mode: 'none', text: '切换状态未知',
+        note: bkTransientNote(job), actions: bkUnknownActions('image') });
+    } else {
+      toast('切换状态未知，可回备份中心再次查询', 'err');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '↩ 切换到此版本'; }
+  } else {
+    if (host) {
+      host.style.display = '';
+      bkRenderProgress(host, { mode: 'none', kind: 'err',
+        text: `切换失败${job.error_stage ? '（' + job.error_stage + '）' : ''}：${job.error || ''}` });
+    } else {
+      toast('切换失败：' + (job.error || '未知错误'), 'err');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '↩ 切换到此版本'; }
+  }
 }
 
 async function deleteBackup(rel) {
@@ -8628,15 +10046,224 @@ async function loadLibraryRecent() {
   loadLibrary();
 }
 
-async function doBackup() {
+// ============ ⏳ 共用耗时任务进度控件与任务跟踪 (设计稿第五节, 2026-11-24) ============
+// 控件: 一个控件支持 flow=流动 / count=计数 / segments=分段充能, 可随阶段切换。
+// 跟踪: 同一页面同一任务只保留一套轮询; 单次查询有超时, 中断时保留最后进度;
+//       任务状态/结果先存业务记录, 只有「弹窗可见且归属匹配」才更新、关闭或替换。
+// 播报: 阶段文字进 aria-live=polite 的隐藏区域 (逐张计数不进), 结果由弹窗标题播报。
+const _opTracks = new Map();     // "业务:任务号" → 轮询 Promise
+
+// ---- 弹窗归属: 后台任务只碰自己的弹窗 ----
+function opClaimModal(owner) {
+  const m = document.getElementById('lib-modal');
+  if (m) m.dataset.opOwner = owner || '';
+}
+function opModalVisible() {
+  const m = document.getElementById('lib-modal');
+  return !!(m && m.style.display !== 'none');
+}
+function opModalMatches(owner) {
+  const m = document.getElementById('lib-modal');
+  return !!(m && m.style.display !== 'none'
+            && (!owner || m.dataset.opOwner === owner));
+}
+// 弹窗实例号: 发起异步请求时记下, 回包后判断是否还是那次打开操作的弹窗。
+function opModalSeq() {
+  const m = document.getElementById('lib-modal');
+  return Number((m && m.dataset.opSeq) || 0);
+}
+function opModalSame(seq) {
+  const m = document.getElementById('lib-modal');
+  return !!(m && m.style.display !== 'none'
+            && String(m.dataset.opSeq || '') === String(seq));
+}
+
+// ---- 进度控件约 300ms 出现阈值: 短任务直接出结果, 不闪进度条 ----
+function opRevealProgressIn(scope) {
+  if (!scope || !scope.querySelectorAll) return;
+  scope.querySelectorAll('.op-progress').forEach(el => {
+    if (el.dataset.opReveal === '1') return;
+    el.dataset.opReveal = '1';
+    el.classList.add('op-fade-in');
+    setTimeout(() => {
+      if (el.isConnected) el.classList.add('op-shown');
+    }, 300);
+  });
+}
+
+// ---- 单次状态请求超时: 服务端长时间无响应时也能进入「查询中断」 ----
+async function opFetchJson(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || 5000);
   try {
-    const r = await api('/api/library/backup', { method: 'POST' });
-    if (r.status !== 'ok') throw new Error(r.error || '失败');
-    toast('备份完成 ✓ ' + (r.path || ''), 'ok');
-    // 备份中心开着 → 刷新清单, 让用户马上看到刚生成的那份
-    const modal = $('#lib-modal');
-    if (modal && modal.style.display === 'flex') openBackupCenter();
-  } catch (e) { toast('备份失败: ' + e.message, 'err'); }
+    const resp = await fetch(url, { signal: ctrl.signal });
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch (e) {
+      // 响应头已到、响应体卡住/被中止: 必须抛「超时」, 不能吞成「任务查询失败」
+      if (e && (e.name === 'AbortError'
+                || /aborted|terminated/i.test(String(e.message || '')))) {
+        throw new Error('任务查询超时');
+      }
+      /* 非 JSON: 保持 null */
+    }
+    if (!resp.ok && !data) throw new Error('HTTP ' + resp.status);
+    return data;
+  } catch (e) {
+    // 已收到响应头、但响应体卡住时, abort 常表现为 terminated/aborted 而非 AbortError
+    if (e && (e.name === 'AbortError'
+              || /aborted|terminated/i.test(String(e.message || '')))) {
+      throw new Error('任务查询超时');
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 生成进度控件结构。wid 同时作为子元素 id 前缀; 可用 textId/fillId 覆盖
+// (兼容历史入口已有的 imp-run-text / imp-run-fill 等 id)。
+function opProgressHtml(wid, o) {
+  o = o || {};
+  const mode = o.mode || 'count';
+  const hidden = o.hidden ? ' hidden' : '';
+  const textId = o.textId || (wid + '-text');
+  const fillId = o.fillId || (wid + '-fill');
+  const liveId = o.liveId || (wid + '-live');
+  const live = `<span class="sr-only" id="${liveId}" role="status" aria-live="polite" aria-atomic="true"></span>`;
+  if (mode === 'flow') {
+    return `
+      <div class="op-progress${hidden}" id="${wid}">
+        <div class="op-track flow"><div class="op-fill"></div></div>
+        <div class="op-labels"><span id="${textId}">${esc(o.text || '')}</span></div>
+        ${live}
+      </div>`;
+  }
+  if (mode === 'segments') {
+    const stages = o.stages || [];
+    const segs = stages.map(() => '<div class="op-seg"></div>').join('');
+    const labels = stages.map(s => `<span>${esc(s)}</span>`).join('');
+    return `
+      <div class="op-progress${hidden}" id="${wid}">
+        <div class="op-segments" id="${wid}-segs">${segs}</div>
+        <div class="op-labels" id="${wid}-labels">${labels}</div>
+        ${live}
+      </div>`;
+  }
+  return `
+    <div class="op-progress${hidden}" id="${wid}">
+      <div class="op-track"><div class="op-fill" id="${fillId}"></div></div>
+      <div class="op-labels">${o.label ? `<span>${esc(o.label)}</span>` : ''}<span id="${textId}">${esc(o.text || '')}</span></div>
+      ${live}
+    </div>`;
+}
+
+// 更新进度控件。o: {mode, done, total, text, hidden, stage(读屏阶段),
+//                   stages, stageIndex, failedIndex, running(segments 用)}
+function opProgressPaint(wid, o) {
+  o = o || {};
+  const box = document.getElementById(wid);
+  if (!box) return;
+  if (o.hidden !== undefined) box.classList.toggle('hidden', !!o.hidden);
+  if (o.stage !== undefined) {
+    const live = document.getElementById(o.liveId || (wid + '-live'));
+    // 只在阶段变化时写入 → 读屏按阶段播报, 不被逐张计数打断
+    if (live && live.textContent !== String(o.stage || '')) {
+      live.textContent = String(o.stage || '');
+    }
+  }
+  if (o.mode === 'segments') {
+    const stages = o.stages || [];
+    const idx = Number.isInteger(o.stageIndex) ? o.stageIndex : -1;
+    const failed = Number.isInteger(o.failedIndex) && o.failedIndex >= 0
+      ? o.failedIndex : -1;
+    const doneCount = failed >= 0 ? failed : idx;
+    const running = o.running !== false && failed < 0;
+    const sbox = document.getElementById(wid + '-segs');
+    if (sbox) sbox.innerHTML = stages.map((s, i) => {
+      const cls = [];
+      if (i < doneCount) cls.push('done');
+      if (i === failed) cls.push('failed');
+      if (running && i === idx) cls.push('active');
+      return `<div class="op-seg ${cls.join(' ')}" title="${esc(s)}"></div>`;
+    }).join('');
+    const lbox = document.getElementById(wid + '-labels');
+    if (lbox) lbox.innerHTML = stages.map((s, i) =>
+      `<span class="${i === idx ? 'on' : ''}${i === failed ? ' bad' : ''}">${esc(s)}</span>`).join('');
+    return;
+  }
+  const txt = document.getElementById(o.textId || (wid + '-text'));
+  if (o.mode === 'flow') {
+    // 只更新阶段时保留原可见文案 (扫描文案不能被读屏 paint 清空)
+    if (txt && o.text !== undefined) txt.textContent = o.text;
+    return;
+  }
+  const total = Number(o.total || 0);
+  const done = Math.max(0, Math.min(Number(o.done || 0),
+    total || Number(o.done || 0)));
+  const fill = document.getElementById(o.fillId || (wid + '-fill'));
+  if (fill) fill.style.width =
+    Math.max(0, Math.min(100, total ? done / total * 100 : 0)).toFixed(1) + '%';
+  if (txt) txt.textContent = o.text || (total ? `已处理 ${done}／${total} 项` : '');
+}
+
+// 通用任务状态轮询: 单次请求超时 + 短暂错误自动重试, 连续失败或超时才抛错。
+// 任务自身报错时抛出的 Error 带 job 字段, 便于业务区分「任务失败」与「查询中断」。
+async function opPollJobStatus(url, jobId, onState, opts) {
+  const o = opts || {};
+  let errors = 0;
+  const deadline = Date.now() + (o.timeoutMs || 30 * 60 * 1000);
+  for (;;) {
+    let job = null;
+    let failMsg = '';
+    try {
+      job = await opFetchJson(`${url}/${jobId}`, o.requestTimeoutMs || 5000);
+    } catch (e) {
+      failMsg = e.message;
+    }
+    if (job && job.status === 'ok') {
+      errors = 0;
+      onState(job);
+      if (job.state !== 'running') {
+        if (job.state === 'error') {
+          const err = new Error(job.error || o.errorText || '任务失败');
+          err.job = job;
+          throw err;
+        }
+        return job;
+      }
+    } else {
+      // HTTP 5xx 等带 JSON 的错误响应也会走到这里 → 计入重试, 保留最后进度
+      failMsg = failMsg || (job && (job.error || job.message)) || '任务查询失败';
+      errors += 1;
+      if (errors >= (o.retries || 5) || Date.now() > deadline) {
+        throw new Error(failMsg);
+      }
+      await new Promise(r => setTimeout(r, 600));
+      continue;
+    }
+    if (Date.now() > deadline) throw new Error(o.timeoutText || '任务超时');
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
+// 按任务号跟踪: 同一业务同一任务只跑一套轮询 (重开入口/重复点击不会叠加请求)。
+function opTrackJob(key, jobId, o) {
+  const trackKey = key + ':' + jobId;
+  if (_opTracks.has(trackKey)) return _opTracks.get(trackKey);
+  const p = (async () => {
+    try {
+      const job = await opPollJobStatus(o.url, jobId, o.onState, o);
+      await (o.onDone ? o.onDone(job) : null);
+    } catch (e) {
+      if (o.onError) o.onError(e);
+    } finally {
+      _opTracks.delete(trackKey);
+    }
+  })();
+  _opTracks.set(trackKey, p);
+  return p;
 }
 
 // ============ 一键整理 (预览后执行) ============
@@ -8649,7 +10276,31 @@ window.tidyHelpToggle = function (btn) {
 };
 
 // ============ 一键整理 (预览后执行) ============
+let _tidyRun = null;        // 当前/最近一次整理任务 {id,state,...}; 重开入口接回
+let _tidyStart = null;      // 启动请求等待器 {seq}: 重开入口绑定同一次启动等待
+
 async function openTidyPreview() {
+  // 重新进入入口: 等待任务号 / 运行中 / 已结束 分别接回
+  if (_tidyRun) {
+    if (_tidyRun.state === 'running') {
+      if (_tidyRun.id) tidyResumeRun(_tidyRun.id);
+      else tidyResumeStarting();      // 启动尚未返回任务号, 不查 undefined
+      return;
+    }
+    tidyShowResult(_tidyRun);
+    return;
+  }
+  // 先立即可见: 扫描目录与检查冲突可能耗时, 不能等接口回来才开弹窗
+  openLibModal('🧹 整理文件夹',
+    opProgressHtml('tidy-preview-progress', {
+      mode: 'flow', text: '正在扫描目录与检查冲突…' }) +
+    `<div class="hint">预览只生成计划，不移动任何文件。</div>
+     <div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">取消</button></div>`,
+    { lg: true });
+  opClaimModal('tidy-preview');
+  opProgressPaint('tidy-preview-progress', {
+    mode: 'flow', stage: '正在扫描目录与检查冲突' });
+  const seq = opModalSeq();
   try {
     // 「🪄 认领散落 pixiv 页」并入一键整理 (去掉独立按钮):
     // 离线认领扫描与整理预览并行, 弹窗里认领分区在上、文件归位表格在下, 各自独立执行。
@@ -8657,6 +10308,7 @@ async function openTidyPreview() {
       api('/api/library/tidy/preview', { method: 'POST' }),
       api('/api/library/claim-scan', { method: 'POST' }).catch(() => null),
     ]);
+    if (!opModalSame(seq)) return;   // 迟到预览: 用户已离开本次预览弹窗
     const counts = r.counts || {};
     const claimHtml = claimSectionHtml(scan);
     if (!counts.total) {
@@ -8664,6 +10316,7 @@ async function openTidyPreview() {
         (claimHtml || '<div class="hint">图库摆放已经全部规范：没有需要规范、认领或待确认的内容 ✓</div>') +
         '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
         { lg: true });
+      opClaimModal('tidy-preview');
       return;
     }
     // 类型徽标 (emoji 一律补 U+FE0F 变体选择符 —— 🏷/❓ 缺了会渲染成黑白方框; 鼠标悬停出说明)
@@ -8754,6 +10407,7 @@ async function openTidyPreview() {
         <button class="btn accent" onclick="applyTidySel()">✅ 执行整理 (<span id="tidy-sel-n">${counts.auto}</span> 项)</button>
         <button class="btn ghost" onclick="closeLibModal()">取消</button>
       </div>`, { lg: true });
+    opClaimModal('tidy-preview');
     // 全选联动 (顶部表头 + 底部按钮旁两个开关)
     const syncSel = () => {
       const all = Array.from(document.querySelectorAll('.tidy-chk')).filter(cb => !cb.disabled);
@@ -8777,8 +10431,10 @@ async function openTidyPreview() {
     document.querySelectorAll('.tidy-chk').forEach(cb =>
       cb.addEventListener('change', syncSel));
   } catch (e) {
+    if (!opModalSame(seq)) return;   // 迟到预览失败不碰当前弹窗
     openLibModal('🧹 整理文件夹', `<div class="hint err-text">预览失败: ${esc(e.message)}</div>` +
       '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>');
+    opClaimModal('tidy-preview');
   }
 }
 
@@ -8820,6 +10476,185 @@ function applyTidySel() {
   applyTidy(ids);
 }
 
+function tidyPollJob(jobId, onState) {
+  // 共用轮询: 整理只提供任务地址与错误文案
+  return opPollJobStatus('/api/library/tidy/apply/job', jobId, onState,
+                         { errorText: '整理失败', timeoutText: '整理超时' });
+}
+
+function tidyRunProgressHtml() {
+  return opProgressHtml('tidy-run-exec', {
+      mode: 'count', label: '执行整理', text: '正在核对整理计划…' }) +
+    opProgressHtml('tidy-run-rmdir', {
+      mode: 'count', label: '清理空目录', text: '正在确定目录候选…', hidden: true }) +
+    `<div class="op-note" id="tidy-run-note">正在核对预览中的计划…</div>
+     <div class="modal-actions"><button class="btn ghost" disabled>执行中…</button></div>`;
+}
+
+function tidyPaintRun(job) {
+  const planned = !!job.planned || job.state === 'done';
+  const total = Number(job.total || 0);
+  const execDone = job.state === 'done'
+    ? total : Math.min(Number(job.done || 0), total || Number(job.done || 0));
+  opProgressPaint('tidy-run-exec', {
+    mode: 'count',
+    done: planned ? execDone : 0,
+    total: planned ? total : 0,
+    label: '执行整理',
+    stage: planned ? '执行整理' : '正在核对整理计划',
+    text: planned && total > 0 ? `已处理 ${execDone}／${total} 项`
+      : planned ? (job.state === 'done' ? '无整理项需要执行' : '没有需要移动或改名的项目')
+      : '正在核对整理计划…',
+  });
+  const rtotal = Number(job.rmdir_total || 0);
+  if (rtotal > 0) {
+    const rdone = job.state === 'done'
+      ? rtotal : Math.min(Number(job.rmdir_done || 0), rtotal);
+    opProgressPaint('tidy-run-rmdir', {
+      mode: 'count', hidden: false, done: rdone, total: rtotal,
+      label: '清理空目录', stage: '清理空目录',
+      text: `已处理 ${rdone}／${rtotal} 个目录`,
+    });
+  } else {
+    opProgressPaint('tidy-run-rmdir', { mode: 'count', hidden: true });
+  }
+  const note = $('#tidy-run-note');
+  if (note) {
+    note.textContent = job.pollError
+      ? `查询中断：${job.pollError}（保留最后进度，可继续查询）`
+      : job.state === 'error' ? (job.error || '执行失败')
+      : !planned ? '正在核对预览中的计划…'
+      : job.stage === '清理空目录' ? '整理计划已处理完，正在清理本轮搬空的目录…'
+      : total === 0 ? '没有需要移动或改名的项目，正在收尾…'
+      : '正在执行预览中勾选的整理计划…';
+  }
+}
+
+function tidyRunWatch(jobId) {
+  const owner = 'tidy:' + jobId;
+  return opTrackJob('tidy', jobId, {
+    url: '/api/library/tidy/apply/job',
+    errorText: '整理失败',
+    timeoutText: '整理超时',
+    onState: j => {
+      if (!_tidyRun || _tidyRun.id !== jobId) return;
+      _tidyRun = { ...j };
+      if (opModalMatches(owner)) tidyPaintRun(_tidyRun);
+    },
+    onDone: async job => {
+      if (!_tidyRun || _tidyRun.id !== jobId) return;
+      _tidyRun = { ...job, state: job.state || 'done' };
+      if (opModalMatches(owner)) tidyPaintRun(_tidyRun);
+      await new Promise(r => setTimeout(r, 350));
+      // 延时后再次确认归属: 用户可能已切到别的弹窗
+      if (opModalMatches(owner)) {
+        closeLibModal();
+        tidyShowResult(_tidyRun);
+      } else {
+        _tidyRun._refreshed = true;
+        loadLibrary(); libSync(); loadStats();
+      }
+    },
+    onError: e => {
+      if (!_tidyRun || _tidyRun.id !== jobId) return;
+      if (e.job) {
+        // 任务本身失败: 状态先保存, 只在归属匹配时展示
+        _tidyRun = { ...e.job, state: 'error' };
+        if (opModalMatches(owner)) {
+          tidyPaintRun(_tidyRun);
+          tidyShowResult(_tidyRun);
+        } else {
+          _tidyRun._refreshed = true;
+        }
+        return;
+      }
+      // 查询中断: 状态先保存, 只在归属匹配时提示继续查询
+      _tidyRun = { ..._tidyRun, pollError: e.message };
+      if (opModalMatches(owner)) {
+        tidyPaintRun(_tidyRun);
+        tidyShowPollError(jobId, e);
+      }
+    },
+  });
+}
+
+function tidyShowPollError(jobId, e) {
+  // 只在当前弹窗属于这个任务时调用 (tidyRunWatch 已核对归属)
+  const msg = `查询中断：${esc(e.message)}（已保留最后进度，可继续查询）`;
+  const note = $('#tidy-run-note');
+  if (note) note.textContent = msg;
+  const actions = document.querySelector('#lib-modal .modal-actions');
+  if (actions) actions.innerHTML =
+    `<button class="btn accent" onclick="tidyResumeRun('${jobId}')">🔄 继续查询</button>` +
+    '<button class="btn ghost" onclick="closeLibModal()">关闭</button>';
+}
+
+function tidyResumeStarting() {
+  // 启动请求还在等待任务号: 接回同一次等待, 不发起 undefined 查询
+  openLibModal('🧹 整理文件夹 · 执行中', tidyRunProgressHtml(), { lg: true });
+  opClaimModal('tidy-starting');
+  if (_tidyStart) _tidyStart.seq = opModalSeq();
+  tidyPaintRun(_tidyRun);
+}
+
+function tidyResumeRun(jobId) {
+  if (!_tidyRun || _tidyRun.id !== jobId) {
+    _tidyRun = { id: jobId, state: 'running', planned: false };
+  }
+  if (_tidyRun.pollError) _tidyRun = { ..._tidyRun, pollError: '' };
+  openLibModal('🧹 整理文件夹 · 执行中', tidyRunProgressHtml(), { lg: true });
+  opClaimModal('tidy:' + jobId);
+  tidyPaintRun(_tidyRun);
+  if (_tidyRun.state === 'running') tidyRunWatch(jobId);
+  else tidyShowResult(_tidyRun);
+}
+
+function tidyShowResult(job) {
+  const r = job.result || {};
+  if (job.state === 'error') {
+    openLibModal('⚠ 整理失败',
+      `<div class="hint err-text">${esc(job.error || '执行失败')}</div>` +
+      '<div class="modal-actions">' +
+      '<button class="btn accent" onclick="tidyResetAndPreview()">🔄 重新预览</button>' +
+      '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+      { lg: true });
+    opClaimModal('tidy-result:' + (job.id || ''));
+    return;
+  }
+  if (!job._refreshed) {
+    job._refreshed = true;
+    loadLibrary(); libSync(); loadStats();
+  }
+  const fail = (r.failed || []).length;
+  const stale = (r.stale || []).length;
+  const dbf = (r.db_failed || []).length;
+  const partial = !!(fail || stale || dbf);
+  const failRows = (r.failed || []).map(x => `<li>${esc(x)}</li>`).join('');
+  const staleRows = (r.stale || []).map(x => `<li>${esc(x)}</li>`).join('');
+  const dbfRows = (r.db_failed || []).map(x =>
+    `<li><code>${esc(x.old)}</code> → <code>${esc(x.new)}</code>` +
+    `<span class="hint">（${esc(x.stage)}${x.error ? ': ' + esc(x.error) : ''}）</span></li>`).join('');
+  const title = partial ? '⚠ 整理完成，部分项目需要处理' : '✅ 整理完成';
+  const html =
+    `<div class="hint">目录规范 <b>${r.renamed || 0}</b> · 位置规范 <b>${r.moved || 0}</b>` +
+    ` · 命名规范 <b>${r.filenamed || 0}</b> · 清理空夹 <b>${r.rmdirs || 0}</b>` +
+    (partial ? ` · <span class="err-text">失败 ${fail} · 跳过 ${stale} · 写库待处理 ${dbf}</span>` : '') +
+    `</div>` +
+    (fail ? `<div class="doc-title">失败（${fail} 项）</div><ul class="lib-health-detail">${failRows}</ul>` : '') +
+    (stale ? `<div class="doc-title">跳过 / 状态已变化（${stale} 项）</div><ul class="lib-health-detail">${staleRows}</ul>` : '') +
+    (dbf ? `<div class="doc-title">写库待处理（${dbf} 项）</div><ul class="lib-health-detail">${dbfRows}</ul>` : '') +
+    '<div class="modal-actions">' +
+    '<button class="btn accent" onclick="tidyResetAndPreview()">🔄 重新预览</button>' +
+    '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>';
+  openLibModal(title, html, { lg: true });
+  opClaimModal('tidy-result:' + (job.id || ''));
+}
+
+window.tidyResetAndPreview = function () {
+  _tidyRun = null;
+  openTidyPreview();
+};
+
 async function applyTidy(ids) {
   // 带上预览快照: 执行时后端按内容核对, 计划消失/内容变化的不执行, 避免 id 漂移后误动
   const wanted = new Set(ids.map(Number));
@@ -8827,37 +10662,40 @@ async function applyTidy(ids) {
     .filter(p => wanted.has(Number(p.id)))
     .map(p => ({ id: p.id, key: p.key || '', type: p.type, from: p.from, to: p.to,
                  files: p.files || [], sources: p.sources || [] }));
+  _tidyRun = { state: 'running', planned: false, starting: true };
+  openLibModal('🧹 整理文件夹 · 执行中', tidyRunProgressHtml(), { lg: true });
+  opClaimModal('tidy-starting');
+  const seq = opModalSeq();
+  const waiter = { seq: 0 };     // 重开入口会把当前弹窗实例号绑定到这里
+  _tidyStart = waiter;
   try {
-    const r = await api('/api/library/tidy/apply', { method: 'POST',
+    const start = await api('/api/library/tidy/apply/job', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ plans: ids, expected }) });
-    closeLibModal();
-    const fail = (r.failed || []).length;
-    const stale = (r.stale || []).length;
-    const dbf = (r.db_failed || []).length;
-    toast(`整理完成 ✓ 目录规范 ${r.renamed} · 位置规范 ${r.moved} · 命名规范 ${r.filenamed || 0} · 清理空夹 ${r.rmdirs || 0}`
-      + (fail ? ` · ${fail} 项失败` : '')
-      + (stale ? ` · ${stale} 项状态已变化，请重新预览` : '')
-      + (dbf ? ` · ${dbf} 个文件已移动但索引未更新` : ''),
-      (fail || stale || dbf) ? 'warn' : 'ok');
-    loadLibrary(); libSync(); loadStats();
-    if (stale || dbf) {
-      const staleRows = (r.stale || []).map(x => `<li>${esc(x)}</li>`).join('');
-      const dbfRows = (r.db_failed || []).map(x =>
-        `<li><code>${esc(x.old)}</code> → <code>${esc(x.new)}</code>` +
-        `<span class="hint">（${esc(x.stage)}${x.error ? ': ' + esc(x.error) : ''}）</span></li>`).join('');
-      openLibModal('⚠ 整理完成，有需要重新预览的项目',
-        (stale ? `<div class="doc-title">预览后状态发生变化，本次未执行</div>` +
-          `<ul class="lib-health-detail">${staleRows}</ul>` : '') +
-        (dbf ? `<div class="doc-title">文件已移动，但数据库索引未更新</div>` +
-          `<ul class="lib-health-detail">${dbfRows}</ul>` +
-          `<div class="hint">可先点「🔄 同步磁盘」，或重新打开整理预览核对。</div>` : '') +
-        '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
-        { lg: true });
+    if (_tidyStart === waiter) _tidyStart = null;
+    const waitSeq = waiter.seq || seq;
+    if (!opModalSame(waitSeq)) {
+      // 迟到回包: 只保存任务状态并按任务号跟踪, 不接管当前弹窗
+      if (start && start.job_id) {
+        _tidyRun = { id: start.job_id, state: 'running', planned: false };
+        tidyRunWatch(start.job_id);
+      } else {
+        _tidyRun = { state: 'error', error: (start && start.error) || '整理失败' };
+      }
+      return;
     }
+    if (!start || !start.job_id) throw new Error('服务端没有返回任务号');
+    _tidyRun = { id: start.job_id, state: 'running', planned: false };
+    opClaimModal('tidy:' + start.job_id);
+    tidyRunWatch(start.job_id);
   } catch (e) {
-    toast('整理失败: ' + e.message, 'err');
-    closeLibModal();
+    _tidyRun = { state: 'error', error: e.message };
+    if (!opModalSame(waiter.seq || seq)) return;   // 迟到异常不碰当前弹窗
+    tidyPaintRun(_tidyRun);
+    const actions = document.querySelector('#lib-modal .modal-actions');
+    if (actions) actions.innerHTML =
+      '<button class="btn ghost" onclick="closeLibModal()">关闭</button>';
+    else toast('整理失败: ' + e.message, 'err');
   }
 }
 
@@ -9155,6 +10993,7 @@ window.revAdopt = async function (files) {
     const parts = [`📥 已入库 ${r.imported.length} 张`];
     if ((r.skipped || []).length) parts.push(`⏭ 跳过 ${r.skipped.length} 张（${r.skipped[0].reason}）`);
     if ((r.failed || []).length) parts.push(`✖ 失败 ${r.failed.length} 张（${r.failed[0].reason}）`);
+    if ((r.convert_failed || []).length) parts.push(`⚠ ${r.convert_failed.length} 张转换失败已保留原格式（${r.convert_failed[0].reason}）`);
     if (r.over_limit) parts.push(`⚠ 单次最多 500 张，另有 ${r.over_limit} 张未处理（请再点一次）`);
     toast(parts.join(' · '), r.imported.length ? 'ok' : 'info');
     // 收走的这几张不该再挂在「本次任务」里 (否则失败行一直显示, 用户以为没生效)
@@ -9929,6 +11768,7 @@ function bind() {
   });
 
   // 作者管理页
+  initAuthorsToolbarLayout();
   $('#authors-search-btn').addEventListener('click', () => loadAuthors());
   $('#authors-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadAuthors(); });
   // 作者搜索框小叉叉: 清空文本后重新加载 (状态/来源筛选保留)
@@ -9985,6 +11825,9 @@ function bind() {
   $('#thumbs-clear-btn').addEventListener('click', clearThumbs);
   // 安全模式 (设置页): R18 打码开关
   $('#safemode-toggle').addEventListener('click', toggleSafemode);
+  // 入库格式 (设置页): 入库时自动转为 PNG
+  const _ingestToggle = $('#ingest-auto-png-toggle');
+  if (_ingestToggle) _ingestToggle.addEventListener('click', toggleIngestFormat);
   // 下载后自动收藏 (设置页): 开关 + 公开/非公开
   $('#autobook-toggle').addEventListener('click', toggleAutoBookmark);
   $('#autobook-vis').addEventListener('change', function () {
@@ -11536,6 +13379,7 @@ loadReverseStatus();
 // 安全模式状态 (R18 打码), 影响图库/搜索渲染。链一个推荐区加载: 得等打码状态到位
 // 再画推荐, 否则那批卡的 R18 打码用的是过期状态 (2026-09-20 加推荐区时接上的)。
 loadSafemode().then(() => loadFeed());
+loadIngestFormat();   // 入库时自动转为 PNG (默认关闭), 导入确认文案据此显示
 loadLastSelfCheck();   // 载入上次体检报告: 页面刷新/服务重启后仍能点「📋 查看详情」看明细
 loadInterruptedTasks();  // 上次被拦腰砍断的任务 → 提示是否从断点继续
 loadVersionInfo();     // ℹ️ 版本与构建时间 (确认当前跑的是不是最新打包版)
@@ -11569,11 +13413,15 @@ const SCOPE_REFRESH = {
       .forEach(b => { delete b.dataset.dec; });
     return decorateCartButtons(box);
   },
-  settings: () => loadSafemode(),                  // R18 开关 (图库重画由 artworks 域负责)
+  settings: () => { loadSafemode(); loadIngestFormat(); },   // R18 开关 + 入库格式
   auth: () => refreshAuth(),                       // 登录/退出 → 头像与登录态
   thumbs: () => { if (isTabActive('settings')) loadThumbsStats(); },
-  backups: () => { const m = $('#lib-modal');
-                   if (m && m.style.display === 'flex') openBackupCenter(); },
+  backups: () => {
+    // 差异预览/恢复进行中不能被列表刷新盖掉; 只在备份中心打开时原位刷新列表
+    if (_backupView.mode !== 'center') return;
+    const m = $('#lib-modal');
+    if (m && m.style.display === 'flex') bkReloadDbList();
+  },
   ops: () => { if (isTabActive('settings')) loadOperations(); },
 };
 const SCOPE_LABEL = { artworks: '图库', pages: '图片', authors: '作者', facets: '筛选项',

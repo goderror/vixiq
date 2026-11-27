@@ -159,10 +159,23 @@ class RestoreDiff:
 class BackupRestoreError(RuntimeError):
     """数据库恢复失败: 带上失败阶段与恢复前快照名, 供界面如实展示。"""
 
-    def __init__(self, stage: str, message: str, snapshot: "str | None" = None):
+    def __init__(self, stage: str, message: str, snapshot: "str | None" = None,
+                 rolled_back: bool = False, rollback_error: "str | None" = None):
         self.stage = stage
         self.snapshot = snapshot
+        self.rolled_back = bool(rolled_back)
+        self.rollback_error = rollback_error
         super().__init__(message)
+
+
+def _notify_stage(stage_cb, name: str) -> None:
+    """向进度回调报告阶段; 回调异常绝不能影响真实任务。"""
+    if stage_cb is None:
+        return
+    try:
+        stage_cb(name)
+    except Exception:
+        pass
 
 
 # =============================================================
@@ -178,6 +191,16 @@ def now_stamp() -> str:
     merge_author_into 等 6 处曾仍在写 isoformat。
     """
     return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+
+_R18_TAG_KEYS = {"r18", "r-18", "r18g", "r-18g"}
+
+
+def is_r18_tag_key(name: str) -> str:
+    """R18 类标签的归一化键 (大小写/全半角/空格/下划线无关); 非 R18 返回空串。"""
+    s = unicodedata.normalize("NFKC", str(name or "")).strip().lower()
+    s = re.sub(r"[\s_]+", "", s)
+    return s if s in _R18_TAG_KEYS else ""
 
 
 def normalize_ts(value: str) -> "str | None":
@@ -905,7 +928,8 @@ class PixivDatabase:
                           clear_pending: bool = False,
                           pending_recycle: "str | None" = None,
                           pending_recycle_md5: "str | None" = None,
-                          pending_recycle_size: "int | None" = None) -> None:
+                          pending_recycle_size: "int | None" = None,
+                          expect_unregistered: bool = False) -> None:
         """在一个事务内提交「页当前文件 + 转换来源」(4B-1 正式切换返修)。
 
         文件替换与登记必须一起成功: 任何一步失败 (`local_path` 触发器、来源列触发器、
@@ -924,9 +948,29 @@ class PixivDatabase:
              md5=COALESCE(excluded.md5, pages.md5),
              file_size_bytes=COALESCE(excluded.file_size_bytes, pages.file_size_bytes)
         """
+        if expect_unregistered:
+            # 条件写入: 该页已有 current 文件时不再覆盖。另一个连接可能在候选检查
+            # 之后抢先登记同页图片; 这里用原子条件更新把「先到者」保留下来。
+            sql_cond = """
+            INSERT INTO pages (artwork_id, page_num, status, local_path, md5, width,
+                               height, file_size_bytes, origin)
+                 VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'web')
+            ON CONFLICT(artwork_id, page_num) DO UPDATE SET
+                 status=excluded.status,
+                 local_path=excluded.local_path,
+                 md5=excluded.md5,
+                 file_size_bytes=excluded.file_size_bytes
+            WHERE pages.local_path IS NULL OR pages.local_path=''
+            """
         with self.conn:
-            self.conn.execute(
-                sql, (aid, page, PSt.DONE, local_path, md5, file_size_bytes))
+            if expect_unregistered:
+                cur = self.conn.execute(
+                    sql_cond, (aid, page, PSt.DONE, local_path, md5, file_size_bytes))
+                if cur.rowcount == 0:
+                    raise RuntimeError("page_already_registered")
+            else:
+                self.conn.execute(
+                    sql, (aid, page, PSt.DONE, local_path, md5, file_size_bytes))
             self.conn.execute("UPDATE artworks SET updated_at=? WHERE artwork_id=?",
                               (now_stamp(), aid))
             if conversion is not None:
@@ -1020,6 +1064,9 @@ class PixivDatabase:
         # ---- 同步 tags / artwork_tags 关联 (若传入 tags) ----
         if tags is not None:
             self._sync_artwork_tags(aid, tags)
+        # 字段为准: R18 字段变化时同步 R18 标签 (含下载/元数据补全路径)
+        if is_r18 is not None:
+            self.sync_r18_tag(aid, is_r18)
 
     def update_pages_from_output(self, save_path: Path):
         """同步本地已下载文件到 pages 表。
@@ -1319,6 +1366,38 @@ class PixivDatabase:
                      str(aid), int(page)))
         except sqlite3.Error as e:
             self.reporter.error(f"DB error: {e}\n{traceback.format_exc()}")
+
+    def clear_pending_recycle_if(self, aid, page, rel: str,
+                                 md5: "str | None" = None,
+                                 expected_local: "str | None" = None) -> int:
+        """只清除仍属于同一待处理任务的记录, 避免误清后来任务的状态。
+
+        expected_local 给出时还要求当前页仍指向该文件; 归属已变的页不清状态。
+        """
+        rel = str(rel).replace("\\", "/")
+        exp_local = (str(expected_local).replace("\\", "/")
+                     if expected_local is not None else None)
+        try:
+            with self.conn:
+                if exp_local is None:
+                    cur = self.conn.execute(
+                        "UPDATE pages SET pending_recycle=NULL, "
+                        "pending_recycle_md5=NULL, pending_recycle_size=NULL "
+                        "WHERE artwork_id=? AND page_num=? AND pending_recycle=? "
+                        "AND COALESCE(pending_recycle_md5,'')=COALESCE(?,'')",
+                        (str(aid), int(page), rel, md5))
+                else:
+                    cur = self.conn.execute(
+                        "UPDATE pages SET pending_recycle=NULL, "
+                        "pending_recycle_md5=NULL, pending_recycle_size=NULL "
+                        "WHERE artwork_id=? AND page_num=? AND pending_recycle=? "
+                        "AND COALESCE(pending_recycle_md5,'')=COALESCE(?,'') "
+                        "AND COALESCE(local_path,'')=?",
+                        (str(aid), int(page), rel, md5, exp_local))
+                return int(cur.rowcount or 0)
+        except sqlite3.Error as e:
+            self.reporter.error(f"DB error: {e}")
+            return 0
 
     def find_page_by_source_md5(self, md5: str) -> "dict | None":
         """凭「转换前原始指纹」找回同一页 (重复导入同一 JPG 时复用已有登记)。"""
@@ -1860,7 +1939,11 @@ class PixivDatabase:
     # ==================================================================
     # 其他来源 (danbooru/推特/GGAC/贴吧等无 pixiv ID 文件) 登记
     # ==================================================================
-    def register_foreign_file(self, rel: str) -> "str | None":
+    def register_foreign_file(self, rel: str,
+                              *, conversion: "dict | None" = None,
+                              md5: "str | None" = None,
+                              file_size: "int | None" = None,
+                              expect_new: bool = False) -> "str | None":
         """把无 pixiv ID 的图库文件登记为「其他来源」占位作品, 纳入图库统一管理。
         ext ID = md5('ext|'+相对路径) 稳定键; source 由 guess_foreign_source 按
         路径启发式判定 (bilibili/twitter/ggac/danbooru/other)。
@@ -1874,9 +1957,13 @@ class PixivDatabase:
         if pixiv_natural_key(Path(rel).name):
             return None
         ext_id = "ext_" + _hl.md5(f"ext|{rel}".encode("utf-8")).hexdigest()[:16]
+        # 身份保护 (20261127b): 该 ext 键已有页时一律不改写。
+        # 页面在回收 / 格式转换 / 指纹重指后可能已指向新图, 旧路径上的残留文件会被
+        # foreign 扫描再次发现; 若只按「同路径才跳过」放行, 下面的 ON CONFLICT 会把
+        # 页无条件改回旧图, 导致当前图失去登记、下次同步把当前图当遗留原件回收。
         if self.conn.execute(
-                "SELECT 1 FROM pages WHERE artwork_id=? AND local_path=?",
-                (ext_id, rel)).fetchone():
+                "SELECT 1 FROM pages WHERE artwork_id=? AND page_num=0",
+                (ext_id,)).fetchone():
             return None
         p = Path(rel)
         stem = p.stem
@@ -1889,34 +1976,95 @@ class PixivDatabase:
         # (旧实现用本地时间的 isoformat() → 既差 8 小时又带 'T', 与其它作品混排时
         #  「按入库排序」错乱; 2026-09-16 回填取证时发现 99 条此类历史数据)
         now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        self.conn.execute(
-            """INSERT OR IGNORE INTO artworks (artwork_id, title, tags_json, thumb_url,
-                                             created_at, updated_at, source, source_author)
-               VALUES (?, ?, '[]', '', ?, ?, ?, ?)""",
-            (ext_id, title, now, now, source, source_author))
-        self.conn.execute(
-            """INSERT INTO pages (artwork_id, page_num, status, local_path)
-               VALUES (?, 0, ?, ?)
-               ON CONFLICT(artwork_id, page_num) DO UPDATE SET local_path=excluded.local_path""",
-            (ext_id, PSt.DONE, rel))
-        # 只增不覆盖: 已有 source_author 值绝不动, 只补空值
-        if source_author:
+        try:
             self.conn.execute(
-                "UPDATE artworks SET source_author=? WHERE artwork_id=? "
-                "AND (source_author IS NULL OR source_author='')",
-                (source_author, ext_id))
-        # 必须自己提交 (2026-09-17 踩坑): with _db() 退出只 close 不 commit, 未提交的写会被
-        # SQLite 回滚 —— 调用方拿到 ext_id 以为登记成功, 库里其实什么都没有。与项目规则
-        # 「写库必须提交」一致 (批量版 register_foreign_files 也在末尾提交)。
-        self.conn.commit()
+                """INSERT OR IGNORE INTO artworks (artwork_id, title, tags_json, thumb_url,
+                                                 created_at, updated_at, source, source_author)
+                   VALUES (?, ?, '[]', '', ?, ?, ?, ?)""",
+                (ext_id, title, now, now, source, source_author))
+            if expect_new:
+                # 条件登记: 另一个连接可能已先登记同页; 冲突时整笔回滚, 先到者保留
+                self.conn.execute(
+                    "INSERT INTO pages (artwork_id, page_num, status, local_path, "
+                    "md5, file_size_bytes) VALUES (?, 0, ?, ?, ?, ?)",
+                    (ext_id, PSt.DONE, rel, md5, file_size))
+            else:
+                cur = self.conn.execute(
+                    """INSERT INTO pages (artwork_id, page_num, status, local_path,
+                                          md5, file_size_bytes)
+                       VALUES (?, 0, ?, ?, ?, ?)
+                       ON CONFLICT(artwork_id, page_num) DO UPDATE SET
+                           local_path=excluded.local_path,
+                           md5=COALESCE(excluded.md5, pages.md5),
+                           file_size_bytes=COALESCE(excluded.file_size_bytes,
+                                                    pages.file_size_bytes)
+                       WHERE pages.local_path = excluded.local_path""",
+                    (ext_id, PSt.DONE, rel, md5, file_size))
+                if cur.rowcount == 0:
+                    # 并发兜底: 另一连接刚把页指向别的文件, 本次不登记, 也不留空壳作品
+                    self.conn.execute(
+                        "DELETE FROM artworks WHERE artwork_id=? AND NOT EXISTS ("
+                        "SELECT 1 FROM pages WHERE artwork_id=?)", (ext_id, ext_id))
+                    self.conn.commit()
+                    return None
+            # 只增不覆盖: 已有 source_author 值绝不动, 只补空值
+            if source_author:
+                self.conn.execute(
+                    "UPDATE artworks SET source_author=? WHERE artwork_id=? "
+                    "AND (source_author IS NULL OR source_author='')",
+                    (source_author, ext_id))
+            # 当前路径与转换来源记录必须同一事务提交: 任一步失败整页回滚, 不留
+            # 「PNG 已登记但没有来源」或「来源写了但页指向别处」的半成品。
+            if conversion is not None:
+                self.conn.execute(
+                    "UPDATE pages SET source_format=?, source_file_size=?, "
+                    "source_md5=?, converted_at=?, current_format=?, convert_note=? "
+                    "WHERE artwork_id=? AND page_num=0",
+                    (conversion.get("source_format"),
+                     conversion.get("source_file_size"),
+                     conversion.get("source_md5"),
+                     conversion.get("converted_at"),
+                     conversion.get("current_format"),
+                     (conversion.get("note") or None),
+                     ext_id))
+            # 必须自己提交 (2026-09-17 踩坑): with _db() 退出只 close 不 commit, 未提交的写会被
+            # SQLite 回滚 —— 调用方拿到 ext_id 以为登记成功, 库里其实什么都没有。与项目规则
+            # 「写库必须提交」一致 (批量版 register_foreign_files 也在末尾提交)。
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return None
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
         return ext_id
 
-    def register_foreign_files(self, rels: "list[str]") -> int:
-        """批量登记其他来源文件, 返回新登记个数 (供自检/同步把无 pixiv ID 的文件纳入图库)。"""
+    def register_foreign_files(self, rels: "list[str]",
+                               *, img_root: "Path | None" = None) -> int:
+        """批量登记其他来源文件, 返回新登记个数 (供自检/同步把无 pixiv ID 的文件纳入图库)。
+
+        img_root 给出时顺带写入内容指纹/大小, 后续文件被移动/改名可凭指纹重指,
+        不会被自动转 PNG 当成全新图片重编码。
+        """
         n = 0
         for rel in rels:
             try:
-                if self.register_foreign_file(rel):
+                md5 = size = None
+                if img_root is not None:
+                    try:
+                        from utils.hashutil import md5_of
+                        fp = Path(img_root) / str(rel)
+                        md5 = md5_of(str(fp))
+                        size = fp.stat().st_size
+                    except Exception:
+                        md5 = size = None
+                if self.register_foreign_file(rel, md5=md5, file_size=size):
                     n += 1
             except Exception:
                 continue
@@ -3239,7 +3387,8 @@ class PixivDatabase:
             return False
 
     def reconcile_output(self, img_root: "Path", *, verify_corrupt: bool = False,
-                         write: bool = True) -> ReconcileReport:
+                         write: bool = True,
+                         skip_rels: "list[str] | None" = None) -> ReconcileReport:
         """图库 ↔ 磁盘实时对账 (磁盘为路径真源, 双重身份识别)。
 
         身份识别:
@@ -3276,6 +3425,10 @@ class PixivDatabase:
         disk_rels: "set[str]" = set()
         disk_by_aid: "dict[str, set[int]]" = {}
         unreadable: "list[str]" = []
+        # 本次明确暂不用于「登记/转换」的文件 (如自动转 PNG 失败待重试、待确认冲突):
+        # 它们仍算磁盘存在, 只是不进入新页补登记/转换候选; 否则写对账会把正在保护
+        # 的当前页误判为路径丢失并重指到别的文件 (2026-11-27 复验返修)。
+        _skip_rels = {str(x).replace("\\", "/") for x in (skip_rels or [])}
 
         def _walk_error(err):
             p = getattr(err, "filename", "") or ""
@@ -3293,8 +3446,15 @@ class PixivDatabase:
                     unreadable.append(str(p))
                     continue
                 rel = str(p.relative_to(img_root)).replace("\\", "/")
-                scan_files.append((p, rel, sz))
                 disk_rels.add(rel)
+                if rel in _skip_rels:
+                    # 只排除登记/转换, 不排除「磁盘存在」: 当前页仍指向它时不能重指,
+                    # 缺失判定也不能据此判无文件
+                    key = pixiv_natural_key(p.name)
+                    if key:
+                        disk_by_aid.setdefault(key[0], set()).add(key[1])
+                    continue
+                scan_files.append((p, rel, sz))
                 key = pixiv_natural_key(p.name)
                 if key:
                     disk_by_aid.setdefault(key[0], set()).add(key[1])
@@ -3354,6 +3514,9 @@ class PixivDatabase:
         new_pages = 0
         relinked = 0
         conflicts: "list[dict]" = []
+        # 本轮新登记的页键 → 首次落盘路径: 同一轮里同页不同内容的后到文件
+        # 只能报冲突, 绝不能再用 mark_page_status 顶掉刚登记的页 (2026-11-26 返修)
+        new_page_paths: "dict[tuple, str]" = {}
         pending: "list[dict]" = []
         relinked_keys: "set[tuple[str, int]]" = set()
         md5_of_disk: "dict[str, str]" = {}   # rel -> md5 (本次算过或从 DB 复用)
@@ -3421,6 +3584,14 @@ class PixivDatabase:
             elif nkey:
                 cand = page_by_key.get(nkey)
                 if cand is None:
+                    prev_rel = new_page_paths.get(nkey)
+                    if prev_rel is not None:
+                        # 同一轮里同页已有另一份不同内容的文件 → 只报冲突, 不改登记
+                        conflicts.append({
+                            "artwork_id": nkey[0], "page": nkey[1],
+                            "registered": prev_rel, "path": rel,
+                        })
+                        continue
                     # 真正的全新页补登记 (含单页裸ID/大写_P0: pixiv 图, 建正式作品壳)
                     if write:
                         self.mark_page_status(nkey[0], nkey[1], PSt.DONE,
@@ -3428,6 +3599,7 @@ class PixivDatabase:
                         # 外置图片导入: 文件在「作者名_作者ID/」文件夹里 → 本地已有信息,
                         # 当场回填作者 (不联网); 不覆盖 DB 已知作者
                         self._adopt_author_from_rel(nkey[0], rel)
+                    new_page_paths[nkey] = rel
                     new_pages += 1
                 else:
                     # 用户主动转 JPG 后的旧派生 PNG: 不报同页冲突/待确认副本
@@ -3502,6 +3674,7 @@ class PixivDatabase:
                     "kind": "normalize_png",
                     "path": rel,
                     "name": Path(rel).name,
+                    "md5": md5_of_disk.get(rel),
                     "format": fmt or ext.lstrip("."),
                     "size": sz,
                     "mtime_ns": str(p.stat().st_mtime_ns),
@@ -3554,6 +3727,8 @@ class PixivDatabase:
         for aid in downloaded_ids:
             if aid in disk_by_aid:
                 continue
+            if any(rel0 in disk_rels for rel0 in db_rels_by_aid.get(aid, ())):
+                continue  # 登记路径仍在磁盘 (含本轮 skip_rels) → 不是缺失
             page_md5s = [r['md5'] for r in self.conn.execute(
                 "SELECT DISTINCT md5 FROM pages WHERE artwork_id=? AND trashed_at IS NULL "
                 "AND md5 IS NOT NULL AND md5 != ''", (aid,)).fetchall()]
@@ -4486,6 +4661,11 @@ class PixivDatabase:
                 self.conn.execute(
                     "UPDATE artworks SET total_pages = COALESCE(total_pages, ?), "
                     "updated_at=datetime('now') WHERE artwork_id=?", (cnt, tid))
+        # 新建的合并作品继承了 R18 字段, 标签按字段补齐 (字段为准)
+        if is_new:
+            row = self.conn.execute(
+                "SELECT is_r18 FROM artworks WHERE artwork_id=?", (tid,)).fetchone()
+            self.sync_r18_tag(tid, 1 if (row and row[0]) else 0)
         # 被搬空的源作品(排除目标自身) → 级联删除
         emptied = [aid for aid in src_aids if aid != tid and self.conn.execute(
             "SELECT COUNT(*) FROM pages WHERE artwork_id=?", (aid,)).fetchone()[0] == 0]
@@ -4844,6 +5024,12 @@ class PixivDatabase:
             "SELECT COUNT(*) FROM pages WHERE artwork_id=?", (a,)).fetchone()[0] == 0]
         if emptied:
             self.delete_artworks(emptied)
+        # 拆出的新作品继承了 is_r18, 标签按字段补齐 (只补 R18, 不碰其他标签)
+        for nid in created:
+            row = self.conn.execute(
+                "SELECT is_r18 FROM artworks WHERE artwork_id=?", (nid,)).fetchone()
+            if row and row[0]:
+                self.sync_r18_tag(nid, 1)
         return {"created": created, "pages_moved": len(created),
                 "artworks_removed": emptied, "rel_moves": []}
 
@@ -5158,12 +5344,89 @@ class PixivDatabase:
             )
         self._cleanup_orphan_tags()
 
+    R18_TAG_NAME = "R18"
+
+    def sync_r18_tag(self, artwork_id: str, is_r18) -> bool:
+        """R18 字段 → 标签的单向同步 (字段为准)。
+
+        is_r18=1 时分别检查 `tags_json` 与标签关联表, 只补缺失的一侧
+        (R18 / R-18 / R-18G 任一即可, 已有等价写法就沿用); is_r18=0 时两侧都移除。
+        其他标签原样保留。返回是否改动。
+        """
+        if is_r18 is None:
+            return False
+        want = bool(is_r18)
+        row = self.conn.execute(
+            "SELECT tags_json FROM artworks WHERE artwork_id=?", (artwork_id,)).fetchone()
+        if row is None:
+            return False
+        json_names: list[str] = []
+        if row[0]:
+            try:
+                data = json.loads(row[0])
+                if isinstance(data, list):
+                    json_names = [str(x) for x in data if str(x or "").strip()]
+            except Exception:
+                json_names = []
+        assoc = self.conn.execute(
+            "SELECT t.tag_id, t.tag_name FROM artwork_tags at "
+            "JOIN tags t ON t.tag_id=at.tag_id WHERE at.artwork_id=?",
+            (artwork_id,)).fetchall()
+        json_hits = [n for n in json_names if is_r18_tag_key(n)]
+        assoc_hits = [(int(r[0]), str(r[1])) for r in assoc if is_r18_tag_key(r[1])]
+        if not want:
+            if not json_hits and not assoc_hits:
+                return False
+            new_json = [n for n in json_names if not is_r18_tag_key(n)]
+            with self.conn:
+                for tid, _name in assoc_hits:
+                    self.conn.execute(
+                        "DELETE FROM artwork_tags WHERE artwork_id=? AND tag_id=?",
+                        (artwork_id, tid))
+                self.conn.execute(
+                    "UPDATE artworks SET tags_json=?, updated_at=? WHERE artwork_id=?",
+                    (json.dumps(new_json, ensure_ascii=False), now_stamp(), artwork_id))
+            return True
+        # 关联表里的写法最可靠 (一定存在于 tags 表), 其次沿用 JSON 里的等价写法
+        target = ([n for _tid, n in assoc_hits] or json_hits or [self.R18_TAG_NAME])[0]
+        need_json = not json_hits
+        need_assoc = not assoc_hits
+        if not need_json and not need_assoc:
+            return False
+        with self.conn:
+            if need_assoc:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO tags(tag_name) VALUES (?)", (target,))
+                tid = self.conn.execute(
+                    "SELECT tag_id FROM tags WHERE tag_name=?", (target,)).fetchone()[0]
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO artwork_tags(artwork_id, tag_id) VALUES (?, ?)",
+                    (artwork_id, tid))
+            if need_json:
+                self.conn.execute(
+                    "UPDATE artworks SET tags_json=?, updated_at=? WHERE artwork_id=?",
+                    (json.dumps(json_names + [target], ensure_ascii=False),
+                     now_stamp(), artwork_id))
+        return True
+
+    def backfill_r18_tags(self) -> int:
+        """为 is_r18=1 但缺 R18 类标签的未删除作品补齐 (幂等, 一次性修复用)。"""
+        rows = self.conn.execute(
+            "SELECT artwork_id FROM artworks WHERE is_r18=1 AND deleted_at IS NULL"
+        ).fetchall()
+        n = 0
+        for (aid,) in rows:
+            if self.sync_r18_tag(str(aid), True):
+                n += 1
+        return n
+
     def update_artwork(self, artwork_id: str, **fields) -> None:
         """编辑作品元数据: 可改 title/author_id/illust_type/is_r18/publish_date/bookmark_count/thumb_url/tags。
         tags 传 list 时走 set_artwork_tags 同步关联表。"""
         tags = fields.pop('tags', None)
         if tags is not None:
             self.set_artwork_tags(artwork_id, tags)
+        r18_value = fields.get('is_r18')
         if not fields:
             return
         allowed = {'title', 'author_id', 'illust_type', 'is_r18', 'source',
@@ -5178,6 +5441,9 @@ class PixivDatabase:
                 f"UPDATE artworks SET {sets}, updated_at=? WHERE artwork_id=?",
                 (*params, now_stamp(), artwork_id),
             )
+        # 字段为准: 编辑 R18 时同步标签 (标签只是跟随, 不反向改字段)
+        if r18_value is not None:
+            self.sync_r18_tag(artwork_id, r18_value)
 
     def list_sections(self) -> list[dict]:
         """图库分类列表（section_id / 显示名 / 磁盘目录名 / 规则 / 默认）。"""
@@ -6266,7 +6532,8 @@ class PixivDatabase:
             zip_path.touch(exist_ok=False)
         return zip_path
 
-    def _write_backup_zip(self, zip_path: Path, conn: sqlite3.Connection) -> Path:
+    def _write_backup_zip(self, zip_path: Path, conn: sqlite3.Connection,
+                          stage_cb=None) -> Path:
         """把 conn 指向的库 + feature_db 写成已占位的 zip; 失败清理占位与半成品。"""
         zip_path = Path(zip_path)
         zip_tmp = zip_path.with_name(zip_path.name + f".tmp-{uuid.uuid4().hex}")
@@ -6274,7 +6541,9 @@ class PixivDatabase:
         tmp_db.unlink(missing_ok=True)
         published = False
         try:
+            _notify_stage(stage_cb, "生成数据库副本")
             conn.execute(f"VACUUM INTO '{self._escape_path(str(tmp_db))}'")
+            _notify_stage(stage_cb, "压缩备份")
             with zipfile.ZipFile(zip_tmp, 'w', zipfile.ZIP_DEFLATED) as zf:
                 zf.write(tmp_db, arcname='pixiv.db')
                 # feature_db 目录 (若存在)
@@ -6296,6 +6565,7 @@ class PixivDatabase:
                 }
                 zf.writestr('backup_manifest.json',
                             json.dumps(summary, ensure_ascii=False, indent=2))
+            _notify_stage(stage_cb, "校验并保存")
             if not zipfile.is_zipfile(zip_tmp) or zip_tmp.stat().st_size <= 0:
                 raise RuntimeError("备份 zip 写入后校验失败")
             os.replace(zip_tmp, zip_path)
@@ -6311,13 +6581,16 @@ class PixivDatabase:
             tmp_db.unlink(missing_ok=True)
             zip_tmp.unlink(missing_ok=True)
 
-    def backup_to_zip(self, custom_path: Optional[Path] = None) -> Path:
+    def backup_to_zip(self, custom_path: Optional[Path] = None,
+                      stage_cb=None) -> Path:
         """备份 pixiv.db + feature_db/ 到一个**唯一** zip, 返回实际路径。
 
         普通备份与恢复前快照都不覆盖已有文件: 同一秒多次/并发请求会追加 _2/_3;
         先写同目录临时 zip, 完整写完后再 os.replace 发布, 失败清理半成品。
+        stage_cb 用于界面分段进度: 生成数据库副本 → 压缩备份 → 校验并保存。
         """
-        return self._write_backup_zip(self._reserve_backup_path(custom_path), self.conn)
+        return self._write_backup_zip(self._reserve_backup_path(custom_path),
+                                      self.conn, stage_cb=stage_cb)
 
     # --- 2. 从备份恢复 (先验证 zip/清单/SQLite, 对比差异后再确认) ---
     def _inspect_backup_file(self, zip_path: Path, workdir: Path) -> dict:
@@ -6396,8 +6669,9 @@ class PixivDatabase:
         """当前库指纹: 作品/页/作者/标签内容 + 其他用户表计数。"""
         return _snapshot_fingerprint(_db_snapshot(self.conn))
 
-    def preview_backup(self, zip_path: Path) -> dict:
+    def preview_backup(self, zip_path: Path, stage_cb=None) -> dict:
         """对比预览 + 绑定令牌: 预览和恢复都使用同一份私有暂存内容。"""
+        _notify_stage(stage_cb, "校验备份")
         with tempfile.TemporaryDirectory(prefix='.preview_', dir=self.backup_dir) as td:
             workdir = Path(td)
             staged_zip = workdir / 'source.zip'
@@ -6411,6 +6685,7 @@ class PixivDatabase:
                 self._rw_held = bool(_DB_RW_LOCK.acquire_read(timeout=30.0))
                 raise RuntimeError("图库正在被其他任务使用，请稍后再对比")
             try:
+                _notify_stage(stage_cb, "核对差异")
                 diff = self.compare_backup(staged_zip, info=info)
                 fingerprint = self.database_fingerprint()
                 token = backup_preview_token(staged_zip, fingerprint)
@@ -6451,7 +6726,8 @@ class PixivDatabase:
         return guard
 
     def restore_from_zip(self, zip_path: Path, confirm_accept_loss: bool = False,
-                         preview_token: "str | None" = None) -> dict:
+                         preview_token: "str | None" = None,
+                         stage_cb=None) -> dict:
         """从 zip 恢复当前 DB (私有暂存 + 独占窗口 + 快照 + 失败回滚)。
 
         阶段: 校验暂存备份 → 确认预览未失效 → 对比差异 → 关闭连接并取得 SQLite
@@ -6459,8 +6735,10 @@ class PixivDatabase:
         所选 ZIP 先复制到私有临时目录, 校验/令牌/差异/切换全部基于这份副本;
         恢复期间原 ZIP 被替换或删除都不会影响已确认内容, 也不会被换成别的库。
         独占锁覆盖快照到迁移全程, 外部 SQLite 连接的写入会被推迟或拒绝。
+        stage_cb 用于界面分区进度: 校验备份 / 等待图库写入结束 / 保存恢复前快照 / 恢复并检查。
         """
         zip_path = Path(zip_path)
+        _notify_stage(stage_cb, "校验备份")
         self._release_read()
         if not _DB_RW_LOCK.acquire_write(timeout=3.0):
             self._rw_held = bool(_DB_RW_LOCK.acquire_read(timeout=30.0))
@@ -6483,6 +6761,7 @@ class PixivDatabase:
                 raise ValueError(f"备份文件无法读取: {e}") from e
             staged_db = workdir / 'pixiv.db'
             info = self._inspect_backup_file(staged_zip, workdir)
+            _notify_stage(stage_cb, "等待图库写入结束")
             stage = "关闭当前连接"
             self.close()
             conn_closed = True
@@ -6514,6 +6793,7 @@ class PixivDatabase:
                     f"{diff.tags_removed_by_restore} 条标签关联会被覆盖或移除。"
                     f"确需接受时, 请勾选【接受覆盖并恢复】后重试。")
             stage = "保存恢复前快照"
+            _notify_stage(stage_cb, "保存恢复前快照")
             snapshot = self._reserve_backup_path(self._unique_backup_path())
             self._write_backup_zip(snapshot, guard)
             snapshot_done = True
@@ -6523,6 +6803,7 @@ class PixivDatabase:
                 except Exception:
                     pass
             stage = "恢复数据库内容"
+            _notify_stage(stage_cb, "恢复并检查")
             # 只用已校验的私有暂存库覆盖当前库; 不再按原路径重开 zip
             copy_started = True
             staged_conn = sqlite3.connect(str(staged_db), timeout=30.0)
@@ -6542,6 +6823,7 @@ class PixivDatabase:
             rollback_error = None
             rollback_ok = False
             if copy_started and snapshot_done and guard is not None:
+                _notify_stage(stage_cb, "正在回滚")
                 try:
                     rb_dir = workdir / "rollback"
                     rb_dir.mkdir(parents=True, exist_ok=True)
@@ -6556,8 +6838,10 @@ class PixivDatabase:
                     if integrity != 'ok':
                         raise RuntimeError(f"回滚后完整性检查失败: {integrity}")
                     rollback_ok = True
+                    _notify_stage(stage_cb, "已回滚")
                 except Exception as re:
                     rollback_error = str(re).splitlines()[0]
+                    _notify_stage(stage_cb, "回滚失败")
             msg = f"恢复失败（{stage}）：{str(e).splitlines()[0]}"
             if not snapshot_done:
                 msg += "；原库未受影响，且尚未产生完整快照"
@@ -6568,7 +6852,9 @@ class PixivDatabase:
             else:
                 msg += f"；原库未受影响，快照：{snapshot.name}"
             raise BackupRestoreError(stage, msg,
-                                     snapshot.name if snapshot_done else None) from e
+                                     snapshot.name if snapshot_done else None,
+                                     rolled_back=rollback_ok,
+                                     rollback_error=rollback_error) from e
         finally:
             if guard is not None:
                 try:

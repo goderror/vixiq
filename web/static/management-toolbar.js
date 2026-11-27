@@ -403,7 +403,12 @@
 
   function onKeydown(e) {
     if (!active) return;
-    if (e.key === 'Escape' && main.classList.contains('management-peek')) { peekClose(); return; }
+    if (e.key === 'Escape' && main.classList.contains('management-peek')) {
+      // 先把焦点还给叠三角（focus 事件可能再次打开浮层）, 再关闭简化菜单
+      if (peekBtn) peekBtn.focus();
+      peekClose();
+      return;
+    }
     if (isEditable(document.activeElement)) return;
     var k = e.key;
     var dir = 0;

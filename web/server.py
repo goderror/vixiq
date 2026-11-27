@@ -25,6 +25,7 @@ import shutil
 import sqlite3
 import threading
 import time
+import uuid
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -205,6 +206,28 @@ def _dirty_snapshot(since: int = 0) -> dict:
     return {"rev": rev, "scopes": scopes}
 
 
+def _backup_job_expired(job: dict, now: float, ttl: float) -> bool:
+    """任务过期回收: 只回收已结束任务, 从 finished_at 起算。
+
+    正在运行的任务无论多久都不能被清掉; 旧实现按 updated_at 回收会让
+    仍在压缩/恢复的任务在 15 分钟后查询 404, 前端误以为任务消失。
+    """
+    if not isinstance(job, dict) or job.get("state") == "running":
+        return False
+    finished = job.get("finished_at")
+    if finished is None:
+        return False
+    try:
+        return (float(now) - float(finished)) > float(ttl)
+    except (TypeError, ValueError):
+        return False
+
+
+# 测试钩子: 另存副本校验完成、正式发布前调用 (src, target, dest); 生产为 None
+_BACKUP_COPY_HOOK = None
+
+
+
 def _scopes_for_request(path: str, method: str, body: "dict | None",
                         query: "dict | None" = None) -> "tuple[tuple, list]":
     """一次写请求影响哪些数据域 (按 HTTP 语义映射, 不依赖各接口自觉申报)。
@@ -256,6 +279,9 @@ def _scopes_for_request(path: str, method: str, body: "dict | None",
             or p.startswith("/api/tasks/") or p.startswith("/api/library/complement") \
             or p.startswith("/api/library/metadata-fill"):
         return ("check", "artworks", "authors", "facets", "stats", "search", "ops"), ids
+    if p.startswith("/api/library/db-backup/job"):
+        # 任务启动/轮询本身不改数据; 完成时由任务线程按真实结果登记数据域
+        return (), ids
     if p.startswith("/api/library/backup") or p.startswith("/api/library/db-backup"):
         # 备份/恢复/删除只影响备份清单; 恢复是"用旧文件覆盖当前图" → 图库那几张也要重画
         if "/restore" in p:
@@ -905,22 +931,35 @@ def _reset_search_client() -> None:
 # (api_library_items force) 和手动同步/导入才强制重扫, 保证那些入口结果即时准确。
 _RECONCILE_TTL = 300.0
 _reconcile_state = {"ts": 0.0, "rep": None}
+# 定时轮询专用只读对账缓存: 只报告差异, 绝不登记/改写; 与写缓存分开, 避免
+# 冷缓存 periodic 抢先登记新图 (2026-11-26 返修)。
+_reconcile_ro_state = {"ts": 0.0, "rep": None, "root": None}
 # 对账锁: 全盘扫描期间并发调用 (15s 轮询/同步/导入/自检) 可能同时看到 rep=None 各自开扫,
 # 造成重复扫描 + 日志重复。加锁后同一时刻只有一个扫描, 其余等待复用结果。
 _reconcile_lock = threading.Lock()
 
 
-def _cached_reconcile(force: bool = False):
+def _cached_reconcile(force: bool = False, write: bool = True,
+                      skip_rels: "list[str] | None" = None):
     """返回最近一次(≤ TTL)的磁盘对账结果; force=True 强制重扫(前端刷新/同步)。
+
+    write=False: 只读扫描 (不登记/不改写), 供定时轮询; 使用独立的只读缓存,
+    并以图库根目录为键, 避免换库/测试临时目录时复用旧报告。
     结果用于图库的 file_missing 标记与清理缺失。
 
     2026-11-21 第 4 项: 扫描前先确认图库根目录可访问。外接盘没接上时既不能 500,
     也不能拿一次空扫描把全部作品判成「缺失」 —— 返回 root_available=False 的空报告,
     缺失/清理入口全部暂缓; 盘接回后下一次调用立即重扫。"""
     now = time.time()
-    state = _reconcile_state
     img_root = paths.user_data(_config["paths"]["img_subdir"])
     img_path = Path(img_root)
+    if write:
+        state = _reconcile_state
+    else:
+        root_key = str(img_path.resolve())
+        if _reconcile_ro_state.get("root") != root_key:
+            _reconcile_ro_state.update(ts=0.0, rep=None, root=root_key)
+        state = _reconcile_ro_state
     root_ok = img_path.is_dir()
     if not root_ok:
         # 用户手动删掉图片目录后也不该让图库接口 500: 父目录可写时照旧补建空目录
@@ -950,13 +989,19 @@ def _cached_reconcile(force: bool = False):
             if not _need_scan(now):
                 return state["rep"]
             with _db() as db:
-                state["rep"] = db.reconcile_output(img_root, verify_corrupt=False)
-                # 外来作品标题随文件移动刷新 (懒收敛: 整理/同步/归档搬走的 ext_ 标题不再过期)
-                try:
-                    db.refresh_ext_titles()
-                except Exception:
-                    pass
+                state["rep"] = db.reconcile_output(
+                    img_root, verify_corrupt=False, write=write,
+                    skip_rels=skip_rels)
+                if write:
+                    # 外来作品标题随文件移动刷新 (懒收敛: 整理/同步/归档搬走的 ext_ 标题不再过期)
+                    try:
+                        db.refresh_ext_titles()
+                    except Exception:
+                        pass
             state["ts"] = time.time()
+            if write:
+                # 写扫描后让只读缓存失效, 下一次定时轮询重新看真实状态
+                _reconcile_ro_state["ts"] = 0.0
     return state["rep"]
 
 
@@ -999,10 +1044,568 @@ def _sync_changed(resp) -> bool:
         return True
 
 
-def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
-    """把应用临时副本按入库规则落成 PNG, 并处理重复导入/同页已有文件。
+def _recycle_verified_file(src: Path, expected_md5: str, expected_size, *,
+                           owned=None):
+    """把「校验通过的那一份原件」从图库取走, 不碰后来换入的同路径文件。
 
-    2026-11-21 4B-1: 上传与路径导入共用。src_copy 必须是**应用临时目录里的副本**
+    原子取件: 先用 ``os.replace(src, claim)`` 把原件移出正式路径 (同盘独占
+    暂存名), 再对实际取得的 claim 校验指纹/大小。只有 claim 确属待回收原件
+    才继续; 回收前后都用 owned 回调复核页归属。失败时把 claim/safety 退回
+    原路径, 原路径已被新文件占用则保全在暂存路径并报告位置。
+
+    不依赖硬链接或 inode, 文件系统不支持硬链接时同样可用。
+    返回 (ok, note, changed)。
+    """
+    from utils.hashutil import md5_of
+    from core.image_format import _publish_new_file
+    src = Path(src)
+    tag = uuid.uuid4().hex
+    claim = src.with_name(f".vixiq-recycle-{tag}.tmp")
+    safety = src.with_name(f".vixiq-recycle-keep-{tag}.tmp")
+
+    def _drop(p) -> None:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _matches(p: Path) -> bool:
+        try:
+            if md5_of(str(p)) != expected_md5:
+                return False
+            return expected_size is None or p.stat().st_size == int(expected_size)
+        except Exception:
+            return False
+
+    def _back(p: Path) -> str:
+        """把暂存文件原子退回原路径; 原路径被占则保留并返回其位置。
+
+        不能用 os.replace: 判定空闲与真正落位之间若有另一操作写入同路径,
+        replace 会把后来文件覆盖掉。_publish_new_file 在目标已存在时拒绝。
+        """
+        p = Path(p)
+        try:
+            if not p.is_file():
+                return ""
+            _publish_new_file(p, src)
+            return ""
+        except FileExistsError:
+            return str(p)
+        except Exception:
+            try:
+                return str(p) if p.is_file() else ""
+            except Exception:
+                return ""
+
+    def _recover(main: Path, spare: Path, why: str) -> "tuple[bool, str]":
+        """失败收尾: 优先退回仍在且校验通过的一份, 另一份确认后才删。"""
+        main_ok = main.is_file() and _matches(main)
+        spare_ok = spare.is_file() and _matches(spare)
+        pick = main if main_ok else (spare if spare_ok else None)
+        if pick is None:
+            return False, f"{why}；没有可恢复的副本，请检查回收站"
+        keep = spare if pick == main else main
+        where = _back(pick)
+        if where:
+            _drop(keep)
+            return False, f"{why}；原路径已被占用，原件暂存于 {where}"
+        _drop(keep)
+        return False, f"{why}，原件已退回原路径"
+
+    def _owned_check() -> "tuple[bool, str]":
+        if owned is None:
+            return True, ""
+        try:
+            r = owned()
+        except Exception as e:
+            return False, f"页归属复核失败：{str(e).splitlines()[0]}"
+        if isinstance(r, (tuple, list)):
+            return bool(r[0]), str((r[1] if len(r) > 1 else "") or "")
+        return bool(r), ""
+
+    try:
+        if not src.is_file():
+            # 原路径已经空了: 原件已不在图库, 不再重复回收
+            return True, "原件已不在原路径，视为已处理", False
+        # ① 原子取件: 从正式路径移出后再校验「实际取得的对象」
+        try:
+            os.replace(str(src), str(claim))
+        except Exception as e:
+            return False, (f"原件被占用，本次未回收，文件已保留"
+                           f"（{str(e).splitlines()[0]}）"), False
+        if not _matches(claim):
+            where = _back(claim)
+            note = "原件已被替换，本次未回收，新文件已保留"
+            if where:
+                note += f"；原路径已被占用，文件暂存于 {where}"
+            return False, note, True
+        # ② 取件后复核页归属 (另一连接可能刚把当前页切回原件)
+        ok, why = _owned_check()
+        if not ok:
+            where = _back(claim)
+            note = (why or "页归属已变化，本次未回收") + "，文件已保留"
+            if where:
+                note += f"；原路径已被占用，原件暂存于 {where}"
+            return False, note, True
+        # ③ 回收不可逆: 先留一份校验过的安全副本, 供归属/命令异常时退回
+        try:
+            shutil.copy2(str(claim), str(safety))
+        except Exception as e:
+            _drop(safety)
+            where = _back(claim)
+            note = f"原件安全副本创建失败，本次未回收（{str(e).splitlines()[0]}）"
+            if where:
+                note += f"；文件暂存于 {where}"
+            return False, note, False
+        if not _matches(safety):
+            _drop(safety)
+            where = _back(claim)
+            note = "原件安全副本校验失败，本次未回收"
+            if where:
+                note += f"；文件暂存于 {where}"
+            return False, note, False
+        recycled, bad = _recycle_files([str(claim)])
+        if not bad and recycled > 0 and claim.is_file():
+            # 助手报成功但暂存文件仍在: 不能当已取走, 保留状态并退回
+            bad = [str(claim)]
+        if bad or recycled <= 0:
+            # 助手可能已取走 claim 又报错: 以手里实际还在、且校验通过的一份为准
+            return (*_recover(claim, safety, "原件回收失败"), False)
+        # ④ 回收后再次复核页归属: 期间被切回原件时把安全副本退回
+        ok, why = _owned_check()
+        if not ok:
+            return (*_recover(safety, claim,
+                              (why or "页归属已变化") + "，已取消回收"), True)
+        _drop(safety)
+        changed = src.exists()   # 回收后原路径出现的新文件, 留给后续流程
+        return True, ("原件已回收，路径出现新文件，已保留" if changed else ""), changed
+    except Exception as e:
+        if src.is_file() and not claim.exists() and not safety.exists():
+            return False, f"原件回收失败：{str(e).splitlines()[0]}；原件未动", False
+        return (*_recover(claim, safety,
+                          f"原件回收失败：{str(e).splitlines()[0]}"), False)
+
+
+def _auto_png_cleanup_pending(img_root: Path):
+    """续办「PNG 已登记，原件待处理」的遗留原件清理。
+
+    状态保存在 pages.pending_recycle* (与转 JPG 共用), 跨扫描/重启/开关切换有效。
+    只处理身份仍一致的原件; 被换成其他图片的原件拒绝清理并保留待处理状态。
+    返回 (成功清理数, 失败明细, 本轮需排除出对账的相对路径)。
+    """
+    from core.image_format import actual_format_info
+    from utils.hashutil import md5_of
+    errors: "list[dict]" = []
+    blocked: "set[str]" = set()
+    cleaned = 0
+    try:
+        with _db() as db:
+            rows = db.conn.execute(
+                "SELECT artwork_id, page_num, local_path, md5, file_size_bytes, "
+                "pending_recycle, pending_recycle_md5, pending_recycle_size, "
+                "format_choice FROM pages "
+                "WHERE pending_recycle IS NOT NULL AND pending_recycle != ''"
+            ).fetchall()
+    except Exception:
+        return 0, [], []
+    for r in rows:
+        pending = str(r["pending_recycle"] or "").replace("\\", "/")
+        if not pending:
+            continue
+        # 转 JPG 的旧 PNG 由专用重试入口处理, 这里不抢; 它仍应出现在对账冲突里
+        if str(r["format_choice"] or "").lower() == "jpg":
+            continue
+        blocked.add(pending)
+        cur = str(r["local_path"] or "").replace("\\", "/")
+        src = img_root / pending
+        cur_p = img_root / cur if cur else None
+
+        def _clear_if_ours() -> None:
+            """只清仍属于这条待处理记录的状态, 不误清后来任务。"""
+            try:
+                with _db() as db:
+                    db.clear_pending_recycle_if(
+                        r["artwork_id"], r["page_num"], pending,
+                        str(r["pending_recycle_md5"] or ""),
+                        expected_local=cur or None)
+            except Exception:
+                pass
+
+        if not cur or pending == cur:
+            _clear_if_ours()
+            continue
+        if not src.is_file():
+            _clear_if_ours()
+            continue
+        if cur_p is None or not cur_p.is_file():
+            errors.append({"name": pending,
+                           "reason": "当前 PNG 缺失，原件待处理状态保留，先恢复当前文件"})
+            continue
+        info = actual_format_info(cur_p)
+        if str(info.get("actual_format") or "").lower() != "png":
+            errors.append({"name": pending,
+                           "reason": "当前文件已不是 PNG，拒绝清理原件"})
+            continue
+        try:
+            cur_md5 = md5_of(str(cur_p))
+        except Exception:
+            cur_md5 = None
+        exp_cur = str(r["md5"] or "")
+        if exp_cur and cur_md5 != exp_cur:
+            errors.append({"name": pending,
+                           "reason": "当前 PNG 已被替换，拒绝清理原件"})
+            continue
+        exp_md5 = str(r["pending_recycle_md5"] or "")
+        exp_size = r["pending_recycle_size"]
+        if not exp_md5:
+            _clear_if_ours()
+            errors.append({"name": pending,
+                           "reason": "原件缺少指纹，已取消自动清理"})
+            continue
+        # 页归属与这笔待处理状态绑定: 取件前、回收前、回收后都按最新读数复核
+        def _owned_now() -> "tuple[bool, str]":
+            try:
+                with _db() as db:
+                    now = db.get_page_conversion(r["artwork_id"], r["page_num"])
+            except Exception as e:
+                return False, f"页归属复核失败：{str(e).splitlines()[0]}"
+            if (not now
+                    or str(now.get("local_path") or "").replace("\\", "/") != cur
+                    or str(now.get("pending_recycle") or "").replace("\\", "/") != pending
+                    or str(now.get("pending_recycle_md5") or "") != exp_md5):
+                return False, "页归属已变化，本次未清理原件"
+            return True, ""
+
+        ok, why = _owned_now()
+        if not ok:
+            # 页归属已变化 (另一连接把当前页切走): 页原指向的文件本轮也不参与补登记,
+            # 否则其他来源批量补登记会按旧路径把页改回旧图
+            blocked.add(cur)
+            errors.append({"name": pending, "reason": why})
+            continue
+        ok, note, changed = _recycle_verified_file(
+            src, exp_md5, exp_size, owned=_owned_now)
+        if not ok:
+            # 回收未完成 (含回收后归属变化): 当前文件本轮保持原样, 同样排除补登记
+            blocked.add(cur)
+            errors.append({"name": pending,
+                           "reason": f"{note}，可在页详情重试回收"})
+            continue
+        try:
+            with _db() as db:
+                cleared = db.clear_pending_recycle_if(
+                    r["artwork_id"], r["page_num"], pending, exp_md5,
+                    expected_local=cur)
+        except Exception:
+            cleared = 0
+        if not cleared:
+            errors.append({"name": pending,
+                           "reason": "待处理状态已被其他任务更新，未清除"})
+            continue
+        cleaned += 1
+        if note:
+            errors.append({"name": pending, "reason": note})
+    return cleaned, errors, sorted(blocked)
+
+
+def _auto_png_convert_new_disk_files(img_root: Path):
+    """手动同步前, 按「入库时自动转为 PNG」转换本轮对账新增的静态图。
+
+    安全顺序 (2026-11-26 复验返修):
+      ① 源图保持原位, 只生成并校验属于本次任务的临时 PNG;
+      ② 发布前复核源身份、目标占用与页归属; 目标被别的操作占用时绝不覆盖/删除;
+      ③ PNG 当前路径与转换来源记录提交成功, 且清理前源身份仍一致, 才删原图;
+      ④ 任一步失败只撤「能证明是本次产生且未登记」的文件, 原图与旧登记保全。
+
+    返回 (转换成功数, 失败数, 失败明细, 本轮禁止登记/转换的源文件相对路径)。
+    """
+    from collections import Counter
+    from utils.config import ingest_auto_png
+    errors: "list[dict]" = []
+    blocked: "set[str]" = set()
+    # 先续办上一轮「PNG 已登记、原件待处理」; 开关关闭也要清理
+    _cleaned, _cleanup_errors, _cleanup_blocked = _auto_png_cleanup_pending(img_root)
+    errors.extend(_cleanup_errors)
+    blocked.update(_cleanup_blocked)
+    if not ingest_auto_png():
+        return 0, 0, errors, sorted(blocked)
+    from core.image_format import (
+        PublishRejected, _publish_new_file, apply_ingest_format,
+    )
+    from utils.hashutil import md5_of
+
+    def _identity(p: Path):
+        try:
+            st = p.stat()
+            return (int(st.st_size), int(st.st_mtime_ns), md5_of(str(p)))
+        except Exception:
+            return None
+
+    def _drop(p: Path) -> None:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    try:
+        with _db() as db:
+            rep = db.reconcile_output(img_root, verify_corrupt=False, write=False)
+    except Exception as e:
+        return 0, 0, [{"name": "", "reason": f"对账扫描失败: {e}"}], []
+    if (not getattr(rep, "root_available", True)
+            or getattr(rep, "scan_incomplete", False)):
+        return 0, 0, [], []
+    items = [
+        x for x in (getattr(rep, "normalize_pending", None) or [])
+        if x.get("kind") == "normalize_png"
+        and not x.get("conflict") and not x.get("current")
+        and not x.get("registered")
+        and x.get("readable", True)
+        and str(x.get("format") or "").lower() in ("jpeg", "webp", "bmp", "tiff")
+    ]
+    # 冲突判断必须覆盖完整对账结果 (含原生 PNG 等不参与转换的候选):
+    # 同页多份未登记文件在确认前一律保留原格式。
+    conflict_keys = set()
+    for x in (getattr(rep, "conflicts", None) or []):
+        if x.get("artwork_id") is not None and x.get("page") is not None:
+            conflict_keys.add((str(x["artwork_id"]), int(x["page"])))
+    try:
+        with _db() as db:
+            registered = {str(r[0]).replace("\\", "/") for r in db.conn.execute(
+                "SELECT local_path FROM pages WHERE local_path IS NOT NULL "
+                "AND local_path != ''")}
+            existing_keys = {(str(r[0]), int(r[1])) for r in db.conn.execute(
+                "SELECT artwork_id, page_num FROM pages WHERE trashed_at IS NULL")}
+    except Exception:
+        registered, existing_keys = set(), set()
+    disk_key_counts: Counter = Counter()
+    key_to_rels: "dict[tuple, list[str]]" = {}
+    img_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+    try:
+        for fp in img_root.rglob("*"):
+            if not fp.is_file() or fp.suffix.lower() not in img_exts:
+                continue
+            rel0 = fp.relative_to(img_root).as_posix()
+            if rel0 in registered:
+                continue
+            nk = pixiv_natural_key(fp.name)
+            if not nk or (str(nk[0]), int(nk[1])) in existing_keys:
+                continue
+            _k = (str(nk[0]), int(nk[1]))
+            disk_key_counts[_k] += 1
+            key_to_rels.setdefault(_k, []).append(rel0)
+    except OSError:
+        pass
+
+    converted = failed = 0
+    for item in items:
+        rel = str(item.get("path") or "").replace("\\", "/")
+        p = img_root / rel
+        if not rel or not p.is_file():
+            continue
+        key = ((str(item["artwork_id"]), int(item["page"]))
+               if item.get("artwork_id") and item.get("page") is not None else None)
+        if key and (key in conflict_keys or disk_key_counts.get(key, 0) > 1):
+            # 同页双方 (JPG/原生 PNG 等) 整轮都不能进入登记, 避免只挡一半
+            _rels = key_to_rels.get(key) or [rel]
+            blocked.update(_rels)
+            errors.append({"name": p.name, "key": key,
+                           "reason": "同页存在多个未登记文件，保留原格式待确认"})
+            continue
+        try:
+            st = p.stat()
+            if (int(st.st_size) != int(item.get("size") or -1)
+                    or str(st.st_mtime_ns) != str(item.get("mtime_ns") or "")):
+                blocked.add(rel)
+                errors.append({"name": p.name, "reason": "扫描后文件已变化，本次跳过"})
+                continue
+        except OSError:
+            continue
+        target = p.with_suffix(".png")
+        if target.exists():
+            blocked.add(rel)
+            errors.append({"name": p.name,
+                           "reason": "目标 PNG 已存在，保留原文件待处理"})
+            continue
+        src_md5 = item.get("md5") or md5_of(str(p))
+        identity = _identity(p)
+        if identity is None or identity[2] != src_md5:
+            blocked.add(rel)
+            errors.append({"name": p.name, "reason": "源文件身份无法确认，本次跳过"})
+            continue
+        # 候选归属复核: 期间已被登记/已有页/指纹命中旧记录 → 走原安全规则
+        try:
+            with _db() as db:
+                if db.find_page_by_local_path(rel):
+                    continue
+                if key and db.get_page_conversion(key[0], key[1]):
+                    continue
+                if src_md5 and db.find_page_by_md5(src_md5):
+                    # 已登记文件被移动/改名: 让对账按指纹重指, 不重编码
+                    continue
+        except Exception as e:
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name, "reason": f"复核登记失败: {e}"})
+            continue
+
+        candidate = target.parent / f".vixiq-auto-{uuid.uuid4().hex}.tmp"
+        def _verify_source():
+            if _identity(p) != identity:
+                raise PublishRejected(
+                    "source_changed", "源文件在转换期间已变化，本次未发布")
+        conv = apply_ingest_format(
+            str(p), out_path=str(candidate), enabled=True, delete_source=False,
+            overwrite=True, before_publish=_verify_source)
+        if not conv.get("ok") or not conv.get("converted"):
+            _drop(candidate)
+            failed += 1
+            reason = (conv.get("note") or "").strip()
+            errors.append({"name": p.name, "reason": reason or "PNG 转换失败"})
+            if conv.get("reason") in ("unreadable", "source_changed", "exists",
+                                      "copy_failed", "registration_changed"):
+                blocked.add(rel)
+            continue
+        # 编码完成后再核对一次源身份; 期间被替换则不发布、不登记
+        if _identity(p) != identity:
+            _drop(candidate)
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name,
+                           "reason": "源文件在转换期间已变化，本次未发布"})
+            continue
+        # 产物指纹/大小必须在发布前从临时候选取; 发布后再核对同一产物
+        try:
+            cand_md5 = md5_of(str(candidate))
+            cand_size = candidate.stat().st_size
+        except Exception as e:
+            _drop(candidate)
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name, "reason": f"临时 PNG 校验失败: {e}"})
+            continue
+        if target.exists():
+            _drop(candidate)
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name,
+                           "reason": "目标 PNG 已存在，保留原文件待处理"})
+            continue
+        try:
+            _publish_new_file(candidate, target)
+        except FileExistsError:
+            _drop(candidate)
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name,
+                           "reason": "目标 PNG 已存在，保留原文件待处理"})
+            continue
+        except Exception as e:
+            _drop(candidate)
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name, "reason": f"发布 PNG 失败: {e}"})
+            continue
+        try:
+            now_md5 = md5_of(str(target))
+            now_size = target.stat().st_size
+        except Exception as e:
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name, "reason": f"发布后 PNG 校验失败: {e}"})
+            continue
+        if now_md5 != cand_md5 or now_size != cand_size:
+            # 发布后目标被另一操作替换: 本轮连后来目标一起排除登记, 保留现场
+            blocked.add(rel)
+            blocked.add(target.relative_to(img_root).as_posix())
+            failed += 1
+            errors.append({"name": p.name,
+                           "reason": "目标 PNG 在发布后被替换，本次未登记，原文件保留"})
+            continue
+        rel_png = target.relative_to(img_root).as_posix()
+        reg_id = reg_page = None
+        try:
+            with _db() as db:
+                if key:
+                    # 事务内条件写入: 该页若已被另一连接登记, 本页保留先到者
+                    db.store_page_result(
+                        key[0], key[1], rel_png, cand_md5, cand_size,
+                        conversion=conv, replace_conversion=True,
+                        expect_unregistered=True)
+                    reg_id, reg_page = str(key[0]), int(key[1])
+                    try:
+                        db._adopt_author_from_rel(key[0], rel_png)
+                    except Exception:
+                        pass
+                else:
+                    ext_id = db.register_foreign_file(
+                        rel_png, conversion=conv, md5=cand_md5,
+                        file_size=cand_size, expect_new=True)
+                    if not ext_id:
+                        raise RuntimeError("同页已被其他登记占用")
+                    reg_id, reg_page = ext_id, 0
+        except Exception as e:
+            # 写库失败/被抢先登记: 只撤能确认属于本次的 PNG; 源图从未移动
+            _remove_if_identity(target, cand_md5, cand_size)
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name, "reason": f"登记失败，已保留原文件: {e}"})
+            continue
+        # 登记已提交; 清理前复核页归属、在位产物与源身份
+        try:
+            with _db() as db:
+                rec = db.get_page_conversion(reg_id, reg_page)
+        except Exception:
+            rec = None
+        cur_rel = str((rec or {}).get("local_path") or "").replace("\\", "/")
+        if cur_rel != rel_png:
+            _remove_if_identity(target, cand_md5, cand_size)
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name,
+                           "reason": "登记路径已被其他操作改变，本次未清理原文件"})
+            continue
+        try:
+            still_md5 = md5_of(str(target))
+            still_size = target.stat().st_size
+        except Exception:
+            still_md5, still_size = None, None
+        if still_md5 != cand_md5 or still_size != cand_size:
+            blocked.add(rel)
+            failed += 1
+            errors.append({"name": p.name,
+                           "reason": "PNG 已登记但产物已被替换，原文件保留待确认"})
+            continue
+        if _identity(p) != identity:
+            blocked.add(rel)
+            errors.append({"name": p.name,
+                           "reason": "PNG 已登记，但原文件已变化，未删除"})
+            converted += 1
+            continue
+        try:
+            p.unlink()
+        except Exception as e:
+            # 记录「已登记 PNG，原件待处理」, 跨扫描/重启/开关切换续办
+            try:
+                with _db() as db:
+                    db.set_pending_recycle(
+                        reg_id, reg_page, rel, src_md5, identity[0])
+            except Exception:
+                pass
+            blocked.add(rel)
+            errors.append({"name": p.name,
+                           "reason": f"PNG 已登记，原件待回收（可在页详情重试）: {e}"})
+            converted += 1
+            continue
+        converted += 1
+    return converted, failed, errors, sorted(blocked)
+
+
+def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
+    """把应用临时副本按入库设置落盘, 并处理重复导入/同页已有文件。
+
+    2026-11-21 4B-1: 上传与路径导入共用; 2026-11-26 起按「入库时自动转为 PNG」
+    设置决定是否转换 (关闭时保留原扩展名与原始字节)。src_copy 必须是**应用临时目录里的副本**
     (外部源文件保持原位); 调用方负责事后清理整个临时目录。
     返回 {kind: imported|reused|pending|failed, name, target, restored, converted,
           note, source_md5, source_format, source_file_size, current_format, converted_at}
@@ -1012,7 +1615,11 @@ def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
     - failed: 入库移动失败 (临时文件仍可用于排查)。
     """
     import shutil as _sh
-    from core.image_format import normalize_to_png, same_pixels, is_readable
+    from core.image_format import (
+        actual_format_info, apply_ingest_format, extension_for_format,
+        is_readable, same_pixels,
+    )
+    from utils.config import ingest_auto_png
     from utils.hashutil import md5_of
 
     src_copy = Path(src_copy)
@@ -1022,14 +1629,71 @@ def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
     except Exception:
         src_md5 = None
 
-    conv = normalize_to_png(src_copy, out_path=src_copy.with_name(src_copy.stem + ".png"),
-                            delete_source=True)
+    # 反搜收件箱不是正式入库: 只搬运原文件, 不要求可解码、不转 PNG;
+    # 后续反搜/手动入库时再按入库规则校验。
+    try:
+        _root = Path(img_root).resolve()
+        _dest = dest_root.resolve()
+        _in_library = (_dest == _root or _root in _dest.parents)
+    except Exception:
+        _in_library = True
+    if not _in_library:
+        target = dest_root / src_copy.name
+        if target.exists():
+            stem, suf = target.stem, target.suffix
+            i = 2
+            while (dest_root / f"{stem} ({i}){suf}").exists():
+                i += 1
+            target = dest_root / f"{stem} ({i}){suf}"
+        try:
+            dest_root.mkdir(parents=True, exist_ok=True)
+            _sh.move(str(src_copy), str(target))
+        except Exception as e:
+            return {"kind": "failed", "name": src_copy.name, "target": None,
+                    "restored": False, "ok": False, "converted": False,
+                    "record_conversion": False,
+                    "note": f"收件箱移动失败：{str(e).splitlines()[0]}",
+                    "source_md5": src_md5, "source_format": None,
+                    "source_file_size": None,
+                    "current_format": src_copy.suffix.lstrip(".").lower(),
+                    "converted_at": None}
+        return {"kind": "imported", "name": target.name, "target": str(target),
+                "restored": False, "ok": True, "converted": False,
+                "record_conversion": False,
+                "note": "反搜收件箱只搬运，不转换", "source_md5": src_md5,
+                "source_format": None, "source_file_size": None,
+                "current_format": src_copy.suffix.lstrip(".").lower(),
+                "converted_at": None}
+
+    # 入库格式: 全局设置决定是否转 PNG; 该页此前明确选过 JPG 时尊重用户选择。
+    enabled = ingest_auto_png()
+    nkey_src = pixiv_natural_key(src_copy.name)
+    if enabled and nkey_src:
+        try:
+            with _db() as db:
+                rec = db.get_page_conversion(nkey_src[0], nkey_src[1])
+        except Exception:
+            rec = None
+        if rec and str(rec.get("format_choice") or "").lower() == "jpg":
+            enabled = False
+
+    # 以实际解码格式决定落点扩展名 (扩展名可能是错的, 如 JPEG 字节命名成 .png)
+    _info = actual_format_info(src_copy)
+    _fmt = str(_info.get("actual_format") or "").lower()
+    _actual_ext = extension_for_format(_fmt, src_copy.suffix.lower())
+    _convertible = (_fmt in ("jpeg", "webp", "bmp", "tiff")
+                    and not _info.get("animated"))
+    out_ext = ".png" if (enabled and (_convertible or _fmt == "png")) else _actual_ext
+    out_path = src_copy.with_name(src_copy.stem + out_ext)
+    conv = apply_ingest_format(src_copy, out_path=out_path, enabled=enabled,
+                               delete_source=True)
     ok = bool(conv.get("ok"))
     final_tmp = Path(conv.get("current_path") or src_copy)
     target_name = final_tmp.name if ok else src_copy.name
     result = {
         "kind": "imported", "name": target_name, "target": None, "restored": False,
         "ok": ok, "converted": bool(conv.get("converted")),
+        "record_conversion": bool(conv.get("record")),
         "note": conv.get("note") or "", "source_md5": src_md5,
         "source_format": conv.get("source_format"),
         "source_file_size": conv.get("source_file_size"),
@@ -1037,9 +1701,29 @@ def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
         "converted_at": conv.get("converted_at"),
     }
     # 单帧图片才做像素核对; 动图/多帧只认指纹, 其余列待确认
-    single_frame = (conv.get("current_format") != "gif"
+    single_frame = (not conv.get("animated")
+                    and conv.get("current_format") != "gif"
                     and "动图" not in (conv.get("note") or "")
                     and "多帧" not in (conv.get("note") or ""))
+
+    if not ok:
+        if conv.get("reason") == "unreadable":
+            # 源图无法解码: 任何模式都不入库, 源文件留在原处
+            result.update(kind="failed", record_conversion=False,
+                          note=conv.get("note") or "源图片无法打开")
+            return result
+        # 可解码但 PNG 编码失败: 按实际格式回退入库 (扩展名跟随真实格式)
+        fallback = src_copy.with_name(src_copy.stem + _actual_ext)
+        try:
+            if fallback.resolve() != src_copy.resolve():
+                _sh.copy2(str(src_copy), str(fallback))
+            final_tmp = fallback
+            target_name = fallback.name
+            result["name"] = target_name
+        except Exception as e:
+            result.update(kind="failed", record_conversion=False,
+                          note=f"原格式保留失败：{str(e).splitlines()[0]}")
+            return result
 
     def _drop_tmp():
         try:
@@ -1064,7 +1748,7 @@ def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
                 if single_frame and same_pixels(final_tmp, cur):
                     _drop_tmp()
                     result.update(kind="reused",
-                                  note="已有同一来源的转换记录，复用已有登记")
+                                  note="已有同一来源的入库记录，复用已有登记")
                 else:
                     _drop_tmp()
                     result.update(kind="pending",
@@ -1087,7 +1771,7 @@ def _ingest_image_file(src_copy: Path, dest_root: Path, img_root: Path) -> dict:
                 return result
             if single_frame and same_pixels(final_tmp, existing):
                 _drop_tmp()
-                result.update(kind="reused", note="同页已有相同 PNG，复用已有登记")
+                result.update(kind="reused", note="同页已有相同图片，复用已有登记")
             else:
                 _drop_tmp()
                 result.update(kind="pending",
@@ -1144,6 +1828,287 @@ def _cleanup_ingest_tmpdir(tmpdir: Path) -> None:
         _sh.rmtree(str(t), ignore_errors=True)
     except Exception:
         pass
+
+
+# ---------------- 📁 从本地文件夹/选中图片导入 (外部源文件保持原位) ----------------
+_IMPORT_IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def _import_snapshot(plan) -> "list[tuple[str, int, int]]":
+    """预览清单的文件身份快照: 路径 + 大小 + mtime(ns), 执行前据此核对没有变化。"""
+    out = []
+    for fp, _dest, _kind in plan:
+        try:
+            st = os.stat(str(fp))
+            out.append((str(fp), int(st.st_size), int(st.st_mtime_ns)))
+        except OSError:
+            out.append((str(fp), -1, -1))
+    return out
+
+
+def _import_check_snapshot(snapshot) -> "list[dict]":
+    """核对预览清单: 返回已消失/已变化的文件 (空 = 清单仍与确认页一致)。"""
+    changed = []
+    for p, size, mtime in snapshot or []:
+        try:
+            st = os.stat(p)
+        except OSError:
+            changed.append({"name": Path(p).name, "reason": "文件已消失"})
+            continue
+        if int(st.st_size) != int(size) or int(st.st_mtime_ns) != int(mtime):
+            changed.append({"name": Path(p).name, "reason": "文件已变化"})
+    return changed
+
+
+def _import_replan(plan, make_custom: bool, img_root: Path, input_root: Path):
+    """按用户确认的「无 ID 图片处理方式」重新落目标 (预览默认按转反搜估算)。"""
+    out = []
+    for fp, _dest, kind in plan:
+        if kind == "pixiv":
+            out.append((fp, img_root, "pixiv"))
+        elif make_custom:
+            out.append((fp, img_root / _CUSTOM_SRC_DIR, "custom"))
+        else:
+            out.append((fp, input_root, "reverse"))
+    return out
+
+
+def _import_source_key(data: dict) -> str:
+    """同一批导入的身份 (无预览令牌时): 来源路径集合的哈希, 用于识别同批重试。"""
+    raw = str(data.get("path") or "").strip().strip('"')
+    raw_list = data.get("paths")
+    if isinstance(raw_list, list) and raw_list:
+        items = []
+        for x in raw_list:
+            s = str(x or "").strip().strip('"')
+            try:
+                items.append(str(Path(s).resolve()))
+            except Exception:
+                items.append(s)
+        return "files:" + hashlib.sha1(
+            "\n".join(sorted(items)).encode("utf-8")).hexdigest()
+    try:
+        p = str(Path(raw).resolve()) if raw else ""
+    except Exception:
+        p = raw
+    return "dir:" + hashlib.sha1(p.encode("utf-8")).hexdigest()
+
+
+def _import_build_plan(data: dict):
+    """校验导入来源并生成导入计划 (dry-run 与正式执行共用)。
+
+    plan = [(源文件绝对路径, 目标根目录, "pixiv"|"custom"|"reverse")]
+    返回 (plan, src_label, err)；err = (说明, HTTP 状态) 或 None。
+    """
+    raw = str(data.get("path") or "").strip().strip('"')
+    raw_list = data.get("paths")
+    make_custom = bool(data.get("make_custom_artworks"))
+    if not raw and not (isinstance(raw_list, list) and raw_list):
+        return None, "", ("缺少 path（文件夹）或 paths（多张图片）", 400)
+
+    img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
+    input_root = Path(paths.user_data(
+        _config["paths"].get("input_subdir", "input"))).resolve()
+    guarded = ((img_root, "图库图片目录"), (input_root, "反搜收件箱"))
+
+    files: "list[Path]" = []          # 待导入的源图片 (绝对路径)
+    src_label = ""                    # 预览里回显的"来源"
+    if isinstance(raw_list, list) and raw_list:
+        # 多选图片: 每个都要单独校验 (文件必须存在, 且不在图库/收件箱内部)
+        picked = []
+        for x in raw_list[:2000]:
+            fp = Path(str(x or "").strip().strip('"'))
+            if not fp.is_file():
+                return None, "", (f"文件不存在：{fp}", 400)
+            res = fp.resolve()
+            if res.suffix.lower() not in _IMPORT_IMG_EXT:
+                continue          # 与文件夹模式一致: 非图片静默跳过
+            for g, label in guarded:
+                if res.is_relative_to(g):
+                    return None, "", (f"不能从{label}内部导入", 400)
+            picked.append(res)
+        files = picked
+        src_label = f"选中的 {len(files)} 张图片"
+    else:
+        src = Path(raw)
+        if not src.is_dir():
+            return None, "", (f"不是有效文件夹：{raw}", 400)
+        src_res = src.resolve()
+        # 安全闸: 既不能选图库自身/其内部(会自我搬运), 也不能选它的上级(会把整棵树搬走)
+        for g, label in guarded:
+            if (src_res == g or src_res.is_relative_to(g)
+                    or g.is_relative_to(src_res)):
+                return None, "", (f"不能选择{label}本身、其内部或其上级目录", 400)
+        if src_res.parent == src_res:
+            return None, "", ("不能直接选择整个磁盘根目录", 400)
+        src_label = str(src_res)
+        MAX_SCAN = 50000
+        seen = 0
+        for root_dir, _dirs, names in os.walk(src_res):
+            for nm in names:
+                seen += 1
+                if seen > MAX_SCAN:
+                    return None, "", (
+                        "该目录文件过多（>5 万），请选择更具体的文件夹", 400)
+                fp = Path(root_dir) / nm
+                if fp.suffix.lower() in _IMPORT_IMG_EXT:
+                    files.append(fp)
+
+    # 三种去向 ("导入前先判定"):
+    #   pixiv  → 标准 P 站作品, 直接入库 img/ (对账登记 + 后台补元数据);
+    #   custom → 不是标准 P 站作品, 且用户选了「建自定义作品」→ 入 img/#其他来源#/ 建 ext_ 壳;
+    #   reverse→ 不是标准 P 站作品, 用户选「转反搜」(默认) → 入 input/ 收件箱。
+    plan = []
+    for fp in files:
+        if pixiv_natural_key(fp.name):
+            plan.append((fp, img_root, "pixiv"))
+        elif make_custom:
+            plan.append((fp, img_root / _CUSTOM_SRC_DIR, "custom"))
+        else:
+            plan.append((fp, input_root, "reverse"))
+    return plan, src_label, None
+
+
+def _import_execute_plan(plan, img_root: Path, src_label: str,
+                         progress_cb=None, expected=None) -> dict:
+    """执行导入计划; 每张得出结果后回调 ``progress_cb(done, total)``。
+
+    成功、复用、待确认、复制/入库失败、转换失败、源文件变化都算「已处理」——
+    分母固定为本次确认的计划张数, 计数不会因结果类型变化。单张意外异常只记失败,
+    不中断整批。``expected`` 是预览清单快照 [(路径, 大小, mtime_ns)]: 逐张复制前
+    与复制后都会核对身份, 源文件被替换/消失时该项不导入、留在原处, 记入
+    ``source_changed``, 其他图片继续。
+    返回字段与 /api/library/import-from-path 原同步响应一致。
+    """
+    import shutil as _sh
+    imported, redirected, skipped, failed = [], [], [], []
+    reused, pending, convert_failed = [], [], []
+    source_changed: "list[dict]" = []
+    ingest_records: "list[dict]" = []
+    custom_files: "list[Path]" = []      # 待登记的「自定义作品」文件 (入库成功才登记)
+    total = len(plan)
+    done = 0
+    expect = {}
+    for _p, _size, _mtime in (expected or []):
+        expect[str(_p)] = (int(_size), int(_mtime))
+
+    def _src_state(fp) -> "tuple[int, int] | None":
+        try:
+            st = os.stat(str(fp))
+            return int(st.st_size), int(st.st_mtime_ns)
+        except OSError:
+            return None
+
+    tmpdir = _new_ingest_tmpdir()
+    try:
+        for fp, dest_root, kind in plan:
+            try:
+                want = expect.get(str(fp))
+                state = _src_state(fp)
+                if want is not None and state != want:
+                    # 等待处理期间被替换/删除: 不导入, 留在原处, 仍计入已处理
+                    source_changed.append({
+                        "name": fp.name,
+                        "reason": "源文件已消失" if state is None else "源文件已变化",
+                    })
+                    continue
+                # 外部源文件只读: 先复制到应用临时副本, 转换失败也不动原文件
+                tmp_src = tmpdir / fp.name
+                if tmp_src.exists():
+                    stem, suf = tmp_src.stem, tmp_src.suffix
+                    i = 2
+                    while (tmpdir / f"{stem} ({i}){suf}").exists():
+                        i += 1
+                    tmp_src = tmpdir / f"{stem} ({i}){suf}"
+                copied = False
+                try:
+                    _sh.copy2(str(fp), str(tmp_src))
+                    copied = True
+                except Exception:
+                    failed.append(fp.name)
+                if copied and want is not None and _src_state(fp) != want:
+                    # 复制期间源文件被替换: 丢弃本次副本, 不登记变化后的内容
+                    try:
+                        tmp_src.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    copied = False
+                    source_changed.append({"name": fp.name, "reason": "源文件已变化"})
+                if copied:
+                    r = _ingest_image_file(tmp_src, dest_root, img_root)
+                    ingest_records.append(r)
+                    if r["kind"] == "imported":
+                        if kind == "pixiv":
+                            imported.append(r["name"])
+                        elif kind == "custom":
+                            custom_files.append(Path(r["target"]))
+                        else:
+                            redirected.append(r["name"])
+                    elif r["kind"] == "reused":
+                        reused.append(fp.name)
+                    elif r["kind"] == "pending":
+                        pending.append({"name": fp.name, "reason": r["note"]})
+                        skipped.append(fp.name)      # 保留现有登记, 源文件留在原处
+                    else:
+                        failed.append(fp.name)
+                    if not r["ok"] and r.get("record_conversion"):
+                        convert_failed.append({"name": fp.name, "reason": r["note"]})
+            except Exception:
+                failed.append(fp.name)
+            finally:
+                done += 1
+                if progress_cb:
+                    try:
+                        progress_cb(done, total)
+                    except Exception:
+                        pass
+    finally:
+        _cleanup_ingest_tmpdir(tmpdir)
+
+    # 「建自定义作品」: 把复制进 #其他来源#/ 的文件登记成 ext_ 壳作品 (标题=文件名)
+    custom_created = []
+    if custom_files:
+        with _db() as db:
+            for t in custom_files:
+                rel = str(t.relative_to(img_root)).replace("\\", "/")
+                try:
+                    if db.register_foreign_file(rel):
+                        custom_created.append(rel)
+                except Exception:
+                    pass
+
+    # 落盘即对账 + 作者归位 + 后台补全 (与上传导入同一套收尾)
+    rep = _cached_reconcile(force=True)
+    _record_ingested_conversions(img_root, ingest_records)
+    with _db() as db:
+        _adopt_authors_from_folders(db, img_root)
+        db.cleanup_orphans()
+    if _organize_loose_images(img_root):
+        rep = _cached_reconcile(force=True)
+    if rep.new_pages_linked > 0:
+        _kick_metadata_fill()
+    n = len(imported) + len(redirected) + len(custom_created)
+    if n or skipped or failed or custom_created or reused or convert_failed \
+            or source_changed:
+        audit_log.record("add", "导入图片(源文件原位)",
+                         f"从 {src_label} 入库 {len(imported)} 张，"
+                         f"转反搜收件箱 {len(redirected)} 张"
+                         + (f"，建自定义作品 {len(custom_created)} 个" if custom_created else "")
+                         + (f"，重复复用 {len(reused)} 张" if reused else "")
+                         + (f"，待确认 {len(pending)} 张" if pending else "")
+                         + (f"，转换失败保留原格式 {len(convert_failed)} 张" if convert_failed else "")
+                         + (f"，源文件变化跳过 {len(source_changed)} 张" if source_changed else "")
+                         + (f"，跳过 {len(skipped)} 张" if skipped else "")
+                         + (f"，复制失败 {len(failed)} 张" if failed else "")
+                         + "（外部源文件保持原位）",
+                         n)
+    return {"imported": imported, "redirected": redirected,
+            "custom_created": custom_created, "skipped": skipped,
+            "reused": reused, "pending": pending,
+            "convert_failed": convert_failed, "failed": failed,
+            "source_changed": source_changed,
+            "new_pages": rep.new_pages_linked,
+            "conflicts": getattr(rep, "conflicts", []) or []}
 
 
 # 预览令牌: 确认时必须带回, 且绑定当前对话框提交的质量、源路径与文件身份。
@@ -1376,6 +2341,9 @@ def _record_ingested_conversions(img_root: Path, results: "list[dict]") -> int:
         with _db() as db:
             for r in results:
                 if r.get("kind") != "imported" or not r.get("target"):
+                    continue
+                # 关闭自动转 PNG 时不得留下转换来源记录 (只有真的转换过才写)
+                if not r.get("record_conversion", True):
                     continue
                 target = Path(r["target"])
                 try:
@@ -1767,6 +2735,15 @@ def _recycle_files(paths: "list[str]") -> "tuple[int, list[str]]":
         out = [ln.strip() for ln in (p.stdout or "").splitlines()]
         n = int(out[0]) if out and out[0].isdigit() else 0
         bad = [x for x in out[1:] if x]
+        # 非零退出/无输出/成功数不足都算失败: 调用方据此保留「待回收」状态
+        if p.returncode not in (0, None):
+            if not bad:
+                bad = list(paths) or [f"回收站处理失败（退出码 {p.returncode}）"]
+            n = 0
+        elif n < len(paths):
+            missing = [x for x in paths if x not in bad]
+            if missing and not bad:
+                bad = missing
         return n, bad
     except Exception:
         return 0, paths
@@ -3043,7 +4020,8 @@ def _tidy_build_plans(db, img_root: Path) -> list:
 
 def _tidy_apply_plans(db, img_root: Path,
                       plan_ids: "list[int] | None" = None,
-                      expected: "list[dict] | None" = None) -> dict:
+                      expected: "list[dict] | None" = None,
+                      progress_cb=None) -> dict:
     """执行整理计划: 先文件夹改名, 再逐文件移动, 再文件名规范化, 最后清空夹;
     同步 pages.local_path。只执行 auto 计划 (categorize/待确认 永不自动执行)。
 
@@ -3103,6 +4081,26 @@ def _tidy_apply_plans(db, img_root: Path,
     # 安全: 只执行 auto 计划 (改/移有据可依); categorize(待确认) 只展示, 永不自动执行
     plans = [p for p in plans if p["auto"]]
     img_root = Path(img_root).resolve()
+    exec_plans = [p for p in plans if p["type"] != "rmdir"]
+    rmdir_plans = [p for p in plans if p["type"] == "rmdir"]
+    exec_total = len(exec_plans)
+    _exec_done = [0]
+
+    def _emit(stage: str, done: int, total: int, rmdir: bool = False) -> None:
+        """执行进度: 分母是本次确认且匹配到的计划数; 空目录阶段单独计数。"""
+        if progress_cb is None:
+            return
+        try:
+            progress_cb({"stage": stage, "done": done, "total": total,
+                         "rmdir": bool(rmdir)})
+        except Exception:
+            pass
+
+    def _tick() -> None:
+        _exec_done[0] += 1
+        _emit("执行整理", _exec_done[0], exec_total)
+
+    _emit("执行整理", 0, exec_total)
     renamed = moved = filenamed = 0
     failed = []
     db_failed = []
@@ -3116,34 +4114,37 @@ def _tidy_apply_plans(db, img_root: Path,
     for p in plans:
         if p["type"] != "rename":
             continue
-        src = img_root / p["from"]
-        dst = img_root / p["to"]
-        if not src.is_dir():
-            stale.append(f"{p['from']} → {p['to']}: 源文件夹已不存在")
-            continue
-        if dst.exists():
-            # NTFS 大小写不敏感: dst 与 src 仅大小写不同 = 同一个夹, 允许改名 (规范化大小写,
-            # 如 GGAC@毒瘤 → ggac@毒瘤); 否则是真冲突, 跳过
-            if os.path.normcase(str(dst)) != os.path.normcase(str(src)):
-                stale.append(f"{p['from']} → {p['to']}: 目标已存在，跳过")
+        try:
+            src = img_root / p["from"]
+            dst = img_root / p["to"]
+            if not src.is_dir():
+                stale.append(f"{p['from']} → {p['to']}: 源文件夹已不存在")
                 continue
-        try:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            src.rename(dst)
-            renamed += 1
-            rename_map[p["from"]] = p["to"]
-        except Exception as e:
-            failed.append(f"{p['from']} → {p['to']}: {str(e).splitlines()[0]}")
-            continue
-        # 磁盘已改名; 写库单独兜底, 失败记录旧路径/新路径/阶段, 便于定向补写
-        try:
-            db.rewrite_page_path_prefix(p["from"], p["to"])
-        except Exception as e:
-            _db_fail(p["from"], p["to"], "rewrite_page_path_prefix", str(e))
-        try:
-            db.refresh_ext_titles()  # 文件夹整体改名 → 外来作品标题里的路径同步刷新
-        except Exception as e:
-            _db_fail(p["from"], p["to"], "refresh_ext_titles", str(e))
+            if dst.exists():
+                # NTFS 大小写不敏感: dst 与 src 仅大小写不同 = 同一个夹, 允许改名 (规范化大小写,
+                # 如 GGAC@毒瘤 → ggac@毒瘤); 否则是真冲突, 跳过
+                if os.path.normcase(str(dst)) != os.path.normcase(str(src)):
+                    stale.append(f"{p['from']} → {p['to']}: 目标已存在，跳过")
+                    continue
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                src.rename(dst)
+                renamed += 1
+                rename_map[p["from"]] = p["to"]
+            except Exception as e:
+                failed.append(f"{p['from']} → {p['to']}: {str(e).splitlines()[0]}")
+                continue
+            # 磁盘已改名; 写库单独兜底, 失败记录旧路径/新路径/阶段, 便于定向补写
+            try:
+                db.rewrite_page_path_prefix(p["from"], p["to"])
+            except Exception as e:
+                _db_fail(p["from"], p["to"], "rewrite_page_path_prefix", str(e))
+            try:
+                db.refresh_ext_titles()  # 文件夹整体改名 → 外来作品标题里的路径同步刷新
+            except Exception as e:
+                _db_fail(p["from"], p["to"], "refresh_ext_titles", str(e))
+        finally:
+            _tick()
     # ② 逐文件移动
     for p in plans:
         if p["type"] != "move":
@@ -3182,6 +4183,7 @@ def _tidy_apply_plans(db, img_root: Path,
                                  "数据库里没有匹配的旧路径")
                 except Exception as e:
                     _db_fail(rel, new_rel, "relink_page_path", str(e))
+        _tick()
     # ③ 文件名规范化 (已在正确文件夹内 → 原地改名 + 同步 DB 路径; 目标已存在则跳过, 绝不覆盖)
     for p in plans:
         if p["type"] != "filrename":
@@ -3208,26 +4210,34 @@ def _tidy_apply_plans(db, img_root: Path,
                              "数据库里没有匹配的旧路径")
             except Exception as e:
                 _db_fail(rel, p["to"], "relink_page_path", str(e))
+        _tick()
     # ④ 清理空夹: 由深到浅逐级 os.rmdir (绝不 rmtree); 有任意文件就保留
     rmdirs = 0
     rmdir_kept = 0
-    for _p in sorted([x for x in plans if x["type"] == "rmdir"],
-                     key=lambda x: -x["from"].count("/")):
-        _d = img_root / _p["from"]
-        if not _d.is_dir():
-            continue
-        _dirs = [_d] + [x for x in _d.rglob("*") if x.is_dir()]
-        _dirs.sort(key=lambda x: len(x.parts), reverse=True)
-        for _sub in _dirs:
-            try:
-                os.rmdir(str(_sub))
-            except OSError:
-                continue    # 非真空/被占用/已不存在 → 保留, 绝不强删
-        if not _d.exists():
-            rmdirs += 1
-        else:
-            rmdir_kept += 1
-            stale.append(f"{_p['from']}: 目录已不再为空（或无法删除），已保留")
+    rmdir_total = len(rmdir_plans)
+    rmdir_done = 0
+    if rmdir_total:
+        _emit("清理空目录", 0, rmdir_total, rmdir=True)
+    for _p in sorted(rmdir_plans, key=lambda x: -x["from"].count("/")):
+        try:
+            _d = img_root / _p["from"]
+            if not _d.is_dir():
+                continue
+            _dirs = [_d] + [x for x in _d.rglob("*") if x.is_dir()]
+            _dirs.sort(key=lambda x: len(x.parts), reverse=True)
+            for _sub in _dirs:
+                try:
+                    os.rmdir(str(_sub))
+                except OSError:
+                    continue    # 非真空/被占用/已不存在 → 保留, 绝不强删
+            if not _d.exists():
+                rmdirs += 1
+            else:
+                rmdir_kept += 1
+                stale.append(f"{_p['from']}: 目录已不再为空（或无法删除），已保留")
+        finally:
+            rmdir_done += 1
+            _emit("清理空目录", rmdir_done, rmdir_total, rmdir=True)
     # ⑤ (已移除) 旧「作者更正」执行段: 曾用文件夹名解析出的作者**无条件覆盖** DB。
     # 数据只能「用户 → 数据库 → 磁盘」单向流动, 检测到磁盘与 DB 不一致时
     # 由 ①a 生成「待确认」项交给用户判断, 绝不自动改写数据库。
@@ -6090,24 +7100,29 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         except Exception:
             return jsonify({"error": "read failed"}), 500
 
-    @app.route("/api/library/backup/restore", methods=["POST"])
-    def api_library_backup_restore():
-        """切换原图旧版本: 先把当前文件保存为唯一版本, 再把所选旧版本换上去。
+    def _perform_old_version_restore(rel: str, stage_cb=None):
+        """切换原图旧版本 (同步接口与进度任务共用), 返回 (payload, http_status)。
 
         旧 `.bak` / 切换前留下的 `.bak-<时间>` 都留在列表里, 因此可以再切回当前版。
         """
-        data = request.get_json(silent=True) or {}
-        rel = data.get("rel") or ""
+        def _stage(name):
+            if stage_cb is None:
+                return
+            try:
+                stage_cb(name)
+            except Exception:
+                pass
+
         p = _local_bak_rel(rel)
         orig_rel, _ver = _parse_bak_rel(rel)
         if p is None or not orig_rel or not p.is_file():
-            return jsonify({"status": "error", "error": "备份不存在"}), 404
+            return {"status": "error", "error": "备份不存在"}, 404
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
         # 第 6 项返修 ④: 以图库登记的作品/页号找当前文件, 而不是只看文件名。
         nat = pixiv_natural_key(Path(orig_rel).name)
         if not nat:
-            return jsonify({"status": "error", "stage": "核对登记",
-                            "error": "旧版本文件名无法识别作品/页号，不能切换"}), 409
+            return {"status": "error", "stage": "核对登记",
+                    "error": "旧版本文件名无法识别作品/页号，不能切换"}, 409
         with _db() as db:
             rows = db.conn.execute(
                 "SELECT local_path FROM pages WHERE artwork_id=? AND page_num=? "
@@ -6116,25 +7131,26 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         registered = [str(r["local_path"] or "").replace("\\", "/")
                       for r in rows if str(r["local_path"] or "").strip()]
         if len(registered) != 1:
-            return jsonify({"status": "error", "stage": "核对登记",
-                            "error": f"作品 {nat[0]} 第 {nat[1]} 页没有唯一登记文件，"
-                                     f"不能切换旧版本"}), 409
+            return {"status": "error", "stage": "核对登记",
+                    "error": f"作品 {nat[0]} 第 {nat[1]} 页没有唯一登记文件，"
+                             f"不能切换旧版本"}, 409
         registered_rel = registered[0]
         cur_fmt = Path(registered_rel).suffix.lower()
         old_fmt = Path(orig_rel).suffix.lower()
         if cur_fmt != old_fmt:
-            return jsonify({"status": "error", "stage": "核对登记",
-                            "error": f"旧版本格式 {old_fmt or '未知'} 与当前登记 "
-                                     f"{cur_fmt or '未知'} 不一致；请用页级格式转换处理，"
-                                     f"不在这里生成同页普通文件"}), 409
+            return {"status": "error", "stage": "核对登记",
+                    "error": f"旧版本格式 {old_fmt or '未知'} 与当前登记 "
+                             f"{cur_fmt or '未知'} 不一致；请用页级格式转换处理，"
+                             f"不在这里生成同页普通文件"}, 409
         target = (img_root / registered_rel).resolve()
         if target != img_root and img_root not in target.parents:
-            return jsonify({"status": "error", "error": "目标路径越界"}), 400
+            return {"status": "error", "error": "目标路径越界"}, 400
         snapshot_rel = None
         stage = "检查当前版本"
         tmp_snap = tmp_restore = None
         try:
             if target.is_file():
+                _stage("保存当前版本")
                 stage = "保存当前版本"
                 ts = time.strftime("%Y%m%d-%H%M%S")
                 snap = target.with_name(target.name + f".bak-{ts}")
@@ -6148,6 +7164,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     raise RuntimeError("当前版本快照大小校验失败")
                 os.replace(tmp_snap, snap)
                 snapshot_rel = str(snap.relative_to(img_root)).replace("\\", "/")
+            _stage("切换所选旧图")
             stage = "切换所选旧版本"
             target.parent.mkdir(parents=True, exist_ok=True)
             tmp_restore = target.with_name(target.name + f".restore-{os.getpid()}.tmp")
@@ -6162,12 +7179,19 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                         tmp.unlink(missing_ok=True)
                     except OSError:
                         pass
-            return jsonify({"status": "error", "stage": stage,
-                            "error": f"{stage}失败: {str(e).splitlines()[0]}",
-                            "snapshot": snapshot_rel}), 500
+            return {"status": "error", "stage": stage,
+                    "error": f"{stage}失败: {str(e).splitlines()[0]}",
+                    "snapshot": snapshot_rel}, 500
         audit_log.record("update", "切换原图旧版本", registered_rel, 1)
-        return jsonify({"status": "ok", "restored": registered_rel,
-                        "snapshot": snapshot_rel})
+        return {"status": "ok", "restored": registered_rel,
+                "snapshot": snapshot_rel}, 200
+
+    @app.route("/api/library/backup/restore", methods=["POST"])
+    def api_library_backup_restore():
+        """切换原图旧版本: 同步入口, 保留给旧调用方与回归测试。"""
+        data = request.get_json(silent=True) or {}
+        payload, code = _perform_old_version_restore(data.get("rel") or "")
+        return jsonify(payload), code
 
     @app.route("/api/library/backup/delete", methods=["POST"])
     def api_library_backup_delete():
@@ -6198,6 +7222,337 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         if not (p.name.startswith("pixiv_backup_") or p.name.startswith("pre_restore_")):
             return None
         return p
+
+    # ---- 备份中心耗时操作: 内存任务 + 轮询 (第一批进度) ----
+    _BACKUP_JOBS = {}
+    _BACKUP_JOB_LOCK = threading.Lock()
+    _BACKUP_JOB_TTL = 900
+
+    class _BackupJobError(RuntimeError):
+        def __init__(self, stage, message, snapshot=None):
+            self.stage = stage
+            self.snapshot = snapshot
+            super().__init__(message)
+
+    def _backup_job_cleanup_locked():
+        now = time.time()
+        for jid, job in list(_BACKUP_JOBS.items()):
+            if _backup_job_expired(job, now, _BACKUP_JOB_TTL):
+                _BACKUP_JOBS.pop(jid, None)
+
+    _RESTORE_FAILED_INDEX = {
+        "校验备份": 0, "备份文件无法读取": 0,
+        "等待图库写入结束": 1, "获取独占写入": 1,
+        "保存恢复前快照": 2,
+        "恢复并检查": 3, "恢复数据库内容": 3, "重新连接并迁移": 3,
+        "对比差异": 1, "确认已失效": 1, "确认预览": 1,
+    }
+
+    def _restore_failed_index(stage, last_index):
+        if stage in _RESTORE_FAILED_INDEX:
+            return _RESTORE_FAILED_INDEX[stage]
+        return max(0, min(3, int(last_index or 0)))
+
+    def _backup_job_update(jid, **fields):
+        with _BACKUP_JOB_LOCK:
+            job = _BACKUP_JOBS.get(jid)
+            if job is None:
+                return
+            if "stage" in fields:
+                stages = job.get("stages") or []
+                if fields["stage"] in stages:
+                    job["stage_index"] = stages.index(fields["stage"])
+                if fields["stage"] != job.get("stage"):
+                    job.setdefault("stage_history", []).append(fields["stage"])
+            job.update(fields)
+            job["updated_at"] = time.time()
+
+    def _backup_job_stage_cb(jid):
+        def cb(stage):
+            _backup_job_update(jid, stage=stage)
+        return cb
+
+    def _start_backup_job(kind, stages, work):
+        stages = list(stages)
+        job = {"id": uuid.uuid4().hex, "kind": kind, "stages": stages,
+               "stage": stages[0] if stages else "", "stage_index": 0,
+               "stage_history": [stages[0]] if stages else [],
+               "state": "running", "done": 0, "total": 0,
+               "created_at": time.time(), "updated_at": time.time(),
+               "finished_at": None, "failed_index": None,
+               "result": None, "error": None, "error_stage": None,
+               "snapshot": None, "rolled_back": None, "rollback_error": None}
+        with _BACKUP_JOB_LOCK:
+            _backup_job_cleanup_locked()
+            _BACKUP_JOBS[job["id"]] = job
+        jid = job["id"]
+
+        def _run():
+            try:
+                result = work(jid)
+                _backup_job_update(jid, state="ok", result=result,
+                                   finished_at=time.time(),
+                                   stage=(stages[-1] if stages else "完成"))
+                try:
+                    if kind == "backup":
+                        mark_dirty("backups", "ops")
+                    elif kind == "restore":
+                        mark_dirty("backups", "artworks", "pages", "stats", "ops")
+                    elif kind == "restore-image":
+                        mark_dirty("backups", "artworks", "pages", "stats", "ops")
+                    elif kind == "save-as":
+                        mark_dirty("ops")
+                except Exception:
+                    pass
+            except BackupRestoreError as e:
+                failed = (_restore_failed_index(e.stage, job.get("stage_index"))
+                          if kind == "restore" else None)
+                _backup_job_update(jid, state="error", error=str(e),
+                                   error_stage=e.stage, snapshot=e.snapshot,
+                                   rolled_back=e.rolled_back,
+                                   rollback_error=e.rollback_error,
+                                   failed_index=failed,
+                                   finished_at=time.time(),
+                                   stage=e.stage)
+            except _BackupJobError as e:
+                _backup_job_update(jid, state="error", error=str(e),
+                                   error_stage=e.stage, snapshot=e.snapshot,
+                                   finished_at=time.time(),
+                                   stage=e.stage)
+            except Exception as e:
+                _backup_job_update(jid, state="error",
+                                   error=str(e).splitlines()[0] or str(e),
+                                   error_stage=job.get("stage"),
+                                   finished_at=time.time())
+        threading.Thread(target=_run, daemon=True,
+                         name=f"backup-job-{kind}").start()
+        return jid
+
+    def _backup_job_get(jid):
+        with _BACKUP_JOB_LOCK:
+            job = _BACKUP_JOBS.get(jid)
+            if job is None:
+                return None
+            return json.loads(json.dumps(job, ensure_ascii=False))
+
+    def _backup_diff_payload(diff):
+        return {
+            "backup_only_authors": diff.backup_only_authors,
+            "backup_only_artworks": diff.backup_only_artworks,
+            "current_only_authors": diff.current_only_authors,
+            "current_only_artworks": diff.current_only_artworks,
+            "pages_added_in_backup": diff.pages_added_in_backup,
+            "pages_removed_by_restore": diff.pages_removed_by_restore,
+            "pages_changed": diff.pages_changed,
+            "artworks_changed": diff.artworks_changed,
+            "authors_changed": diff.authors_changed,
+            "tags_added_in_backup": diff.tags_added_in_backup,
+            "tags_removed_by_restore": diff.tags_removed_by_restore,
+            "other_tables": diff.other_tables,
+        }
+
+    def _backup_compare_payload(db, p, stage_cb=None):
+        preview = db.preview_backup(p, stage_cb=stage_cb)
+        info, diff = preview["info"], preview["diff"]
+        current = {
+            "artworks": db.conn.execute(
+                "SELECT COUNT(*) FROM artworks").fetchone()[0],
+            "pages_done": db.conn.execute(
+                "SELECT COUNT(*) FROM pages WHERE status=?",
+                (PSt.DONE,)).fetchone()[0],
+            "authors": db.conn.execute(
+                "SELECT COUNT(*) FROM authors").fetchone()[0],
+        }
+        return {"status": "ok", "name": p.name,
+                "manifest": info["manifest"], "counts": info["counts"],
+                "manifest_matches": info.get("manifest_matches"),
+                "current_counts": current,
+                "diff": _backup_diff_payload(diff),
+                "will_overwrite_current": diff.will_overwrite_current(),
+                "will_lose_current": diff.will_lose_current(),
+                "preview_token": preview["token"]}
+
+    def _backup_restore_payload(db, p, confirm, token, stage_cb=None):
+        res = db.restore_from_zip(
+            p, confirm_accept_loss=bool(confirm),
+            preview_token=token, stage_cb=stage_cb)
+        return {"status": "ok", "snapshot": res["snapshot"],
+                "counts": res["counts"], "manifest": res["manifest"],
+                "diff": _backup_diff_payload(res["diff"])}
+
+    def _sha256_file(path: Path) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _copy_backup_to_dir(src: Path, dest: Path, progress_cb=None) -> Path:
+        """另存备份: 分块复制并报字节数, 完整写完后校验, 再原子且**不覆盖**发布。
+
+        目标名在复制完成后可能被别的操作抢占; 发布时用硬链接/rename 的
+        "目标已存在即失败"语义逐次换后缀, 不覆盖任何新出现的同名文件。
+        """
+        def _candidate(seq: int) -> Path:
+            return dest / (src.name if seq <= 1
+                           else f"{src.stem} ({seq}){src.suffix}")
+
+        seq = 1
+        target = _candidate(seq)
+        while target.exists():
+            seq += 1
+            target = _candidate(seq)
+        tmp = target.with_name(target.name + f".copy-{uuid.uuid4().hex}.tmp")
+        total = src.stat().st_size
+        done = 0
+        if progress_cb:
+            progress_cb("正在复制备份", done, total)
+        try:
+            with open(src, "rb") as fin, open(tmp, "wb") as fout:
+                while True:
+                    chunk = fin.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    fout.write(chunk)
+                    done += len(chunk)
+                    if progress_cb:
+                        progress_cb("正在复制备份", done, total)
+            if done != total:
+                raise RuntimeError("复制后大小校验失败")
+            if progress_cb:
+                progress_cb("正在校验副本", total, total)
+            if _sha256_file(tmp) != _sha256_file(src):
+                raise RuntimeError("复制后内容校验失败")
+            if _BACKUP_COPY_HOOK is not None:
+                try:
+                    _BACKUP_COPY_HOOK(src, target, dest)
+                except Exception:
+                    pass
+            published = None
+            for _ in range(100):
+                try:
+                    os.link(tmp, target)      # 原子创建; 目标已存在会失败
+                except FileExistsError:
+                    pass
+                except OSError:
+                    # 文件系统不支持硬链接 (如 exFAT); Windows 的 rename 本身不覆盖
+                    if target.exists():
+                        pass
+                    else:
+                        try:
+                            os.rename(tmp, target)
+                        except (FileExistsError, PermissionError):
+                            pass
+                        else:
+                            published = target
+                            break
+                else:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    published = target
+                    break
+                seq += 1
+                target = _candidate(seq)
+            if published is None:
+                raise RuntimeError("目标同名文件持续出现，无法发布")
+            return published
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    @app.route("/api/library/db-backup/job", methods=["POST"])
+    def api_library_db_backup_job_start():
+        """启动备份中心的耗时任务; 返回 job_id, 由 /job/<id> 轮询。"""
+        data = request.get_json(silent=True) or {}
+        action = str(data.get("action") or "")
+        if action == "backup":
+            def _work(jid):
+                with _db() as db:
+                    path = db.backup_to_zip(stage_cb=_backup_job_stage_cb(jid))
+                    info = db.inspect_backup_zip(path)
+                    return {"status": "ok", "path": str(path),
+                            "name": path.name, "size": path.stat().st_size,
+                            "counts": info["counts"],
+                            "manifest": info["manifest"],
+                            "manifest_matches": info.get("manifest_matches")}
+            jid = _start_backup_job(
+                "backup", ["生成数据库副本", "压缩备份", "校验并保存"], _work)
+            return jsonify({"status": "ok", "job_id": jid})
+        if action in ("compare", "restore"):
+            p = _db_backup_path(data.get("name"))
+            if p is None:
+                return jsonify({"status": "error", "stage": "校验备份",
+                                "error": "备份不存在"}), 404
+            if action == "compare":
+                def _work(jid):
+                    with _db() as db:
+                        return _backup_compare_payload(
+                            db, p, stage_cb=_backup_job_stage_cb(jid))
+                jid = _start_backup_job("compare", ["校验备份", "核对差异"], _work)
+                return jsonify({"status": "ok", "job_id": jid})
+            token = str(data.get("preview_token") or "")
+            if not token:
+                return jsonify({"status": "error", "stage": "确认预览",
+                                "error": "请先对比预览，确认后再恢复"}), 400
+
+            def _work(jid):
+                with _db() as db:
+                    return _backup_restore_payload(
+                        db, p, data.get("confirm_accept_loss"), token,
+                        stage_cb=_backup_job_stage_cb(jid))
+            jid = _start_backup_job(
+                "restore",
+                ["校验备份", "等待图库写入结束", "保存恢复前快照", "恢复并检查"],
+                _work)
+            return jsonify({"status": "ok", "job_id": jid})
+        if action == "save-as":
+            p = _db_backup_path(data.get("name"))
+            if p is None:
+                return jsonify({"status": "error", "error": "备份不存在"}), 404
+            raw = str(data.get("dest_dir") or "").strip()
+            if not raw:
+                return jsonify({"status": "error", "error": "目标文件夹不能为空"}), 400
+            dest = Path(raw).expanduser()
+            if not dest.is_absolute():
+                return jsonify({"status": "error", "error": "请填绝对路径"}), 400
+            if not dest.is_dir():
+                return jsonify({"status": "error", "error": "目标文件夹不存在"}), 400
+
+            def _work(jid):
+                def _progress(stage, done, total):
+                    _backup_job_update(jid, stage=stage, done=done, total=total)
+                target = _copy_backup_to_dir(p, dest, _progress)
+                audit_log.record("create", "数据库备份另存", str(target), 1)
+                return {"status": "ok", "path": str(target),
+                        "name": target.name, "total_bytes": p.stat().st_size}
+            jid = _start_backup_job(
+                "save-as", ["正在复制备份", "正在校验副本"], _work)
+            return jsonify({"status": "ok", "job_id": jid})
+        if action == "restore-image":
+            rel = str(data.get("rel") or "")
+
+            def _work(jid):
+                payload, code = _perform_old_version_restore(
+                    rel, stage_cb=_backup_job_stage_cb(jid))
+                if code != 200:
+                    raise _BackupJobError(payload.get("stage"),
+                                          payload.get("error") or "切换失败",
+                                          payload.get("snapshot"))
+                return payload
+            jid = _start_backup_job(
+                "restore-image", ["保存当前版本", "切换所选旧图"], _work)
+            return jsonify({"status": "ok", "job_id": jid})
+        return jsonify({"status": "error", "error": "未知任务类型"}), 400
+
+    @app.route("/api/library/db-backup/job/<jid>")
+    def api_library_db_backup_job_status(jid):
+        job = _backup_job_get(str(jid or ""))
+        if job is None:
+            return jsonify({"status": "error",
+                            "error": "任务不存在或已过期"}), 404
+        return jsonify({"status": "ok", "job": job})
 
     @app.route("/api/library/db-backups")
     def api_library_db_backups():
@@ -6248,43 +7603,11 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                             "error": "备份不存在"}), 404
         try:
             with _db() as db:
-                preview = db.preview_backup(p)
-                info, diff = preview["info"], preview["diff"]
-                current = {
-                    "artworks": db.conn.execute(
-                        "SELECT COUNT(*) FROM artworks").fetchone()[0],
-                    "pages_done": db.conn.execute(
-                        "SELECT COUNT(*) FROM pages WHERE status=?",
-                        (PSt.DONE,)).fetchone()[0],
-                    "authors": db.conn.execute(
-                        "SELECT COUNT(*) FROM authors").fetchone()[0],
-                }
+                payload = _backup_compare_payload(db, p)
         except Exception as e:
             return jsonify({"status": "error", "stage": "校验备份",
                             "error": str(e).splitlines()[0]}), 400
-        return jsonify({
-            "status": "ok", "name": p.name,
-            "manifest": info["manifest"], "counts": info["counts"],
-            "manifest_matches": info.get("manifest_matches"),
-            "current_counts": current,
-            "diff": {
-                "backup_only_authors": diff.backup_only_authors,
-                "backup_only_artworks": diff.backup_only_artworks,
-                "current_only_authors": diff.current_only_authors,
-                "current_only_artworks": diff.current_only_artworks,
-                "pages_added_in_backup": diff.pages_added_in_backup,
-                "pages_removed_by_restore": diff.pages_removed_by_restore,
-                "pages_changed": diff.pages_changed,
-                "artworks_changed": diff.artworks_changed,
-                "authors_changed": diff.authors_changed,
-                "tags_added_in_backup": diff.tags_added_in_backup,
-                "tags_removed_by_restore": diff.tags_removed_by_restore,
-                "other_tables": diff.other_tables,
-            },
-            "will_overwrite_current": diff.will_overwrite_current(),
-            "will_lose_current": diff.will_lose_current(),
-            "preview_token": preview["token"],
-        })
+        return jsonify(payload)
 
     @app.route("/api/library/db-backup/restore", methods=["POST"])
     def api_library_db_backup_restore():
@@ -6300,35 +7623,18 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                             "error": "请先对比预览，确认后再恢复"}), 400
         try:
             with _db() as db:
-                res = db.restore_from_zip(
-                    p, confirm_accept_loss=bool(data.get("confirm_accept_loss")),
-                    preview_token=token)
+                payload = _backup_restore_payload(
+                    db, p, data.get("confirm_accept_loss"), token)
         except BackupRestoreError as e:
             return jsonify({"status": "error", "stage": e.stage,
-                            "error": str(e), "snapshot": e.snapshot}), 409
+                            "error": str(e), "snapshot": e.snapshot,
+                            "rolled_back": e.rolled_back,
+                            "rollback_error": e.rollback_error}), 409
         except Exception as e:
             return jsonify({"status": "error", "stage": "恢复",
                             "error": str(e).splitlines()[0]}), 500
-        diff = res["diff"]
         audit_log.record("update", "从数据库备份恢复", p.name, 1)
-        return jsonify({
-            "status": "ok", "snapshot": res["snapshot"],
-            "counts": res["counts"], "manifest": res["manifest"],
-            "diff": {
-                "backup_only_authors": diff.backup_only_authors,
-                "backup_only_artworks": diff.backup_only_artworks,
-                "current_only_authors": diff.current_only_authors,
-                "current_only_artworks": diff.current_only_artworks,
-                "pages_added_in_backup": diff.pages_added_in_backup,
-                "pages_removed_by_restore": diff.pages_removed_by_restore,
-                "pages_changed": diff.pages_changed,
-                "artworks_changed": diff.artworks_changed,
-                "authors_changed": diff.authors_changed,
-                "tags_added_in_backup": diff.tags_added_in_backup,
-                "tags_removed_by_restore": diff.tags_removed_by_restore,
-                "other_tables": diff.other_tables,
-            },
-        })
+        return jsonify(payload)
 
     @app.route("/api/library/db-backup/save-as", methods=["POST"])
     def api_library_db_backup_save_as():
@@ -6345,16 +7651,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error", "error": "请填绝对路径"}), 400
         if not dest.is_dir():
             return jsonify({"status": "error", "error": "目标文件夹不存在"}), 400
-        target = dest / p.name
-        n = 2
-        while target.exists():
-            target = dest / f"{p.stem} ({n}){p.suffix}"
-            n += 1
         try:
-            shutil.copy2(p, target)
-            if target.stat().st_size != p.stat().st_size:
-                target.unlink(missing_ok=True)
-                raise RuntimeError("复制后大小校验失败")
+            target = _copy_backup_to_dir(p, dest)
         except Exception as e:
             return jsonify({"status": "error",
                             "error": f"另存失败: {str(e).splitlines()[0]}"}), 500
@@ -7202,7 +8500,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         only_missing_file = args.get("file_missing", "") == "1"
         view = args.get("view", "artwork")
         # 「缺失文件」筛选时强制重扫对账, 保证结果即时准确
-        missing_set = set(_cached_reconcile(force=only_missing_file).missing_ids or [])
+        missing_set = set(_cached_reconcile(
+            force=only_missing_file, write=False).missing_ids or [])
         file_missing_ids = missing_set if only_missing_file else None
         common = dict(
             q=args.get("q", ""),
@@ -7272,7 +8571,17 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         仍 force 即时对账。
         """
         periodic = request.args.get("periodic", "") == "1"
-        rep = _cached_reconcile(force=not periodic)
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        # 手动同步前: 按「入库时自动转为 PNG」只转换尚未登记的新静态图。
+        # periodic 轮询与只读扫描不改写文件。
+        auto_png_converted = auto_png_failed = 0
+        auto_png_errors: "list[dict]" = []
+        auto_png_blocked: "list[str]" = []
+        if not periodic and img_root.is_dir():
+            auto_png_converted, auto_png_failed, auto_png_errors, auto_png_blocked = \
+                _auto_png_convert_new_disk_files(img_root)
+        rep = (_cached_reconcile(force=False, write=False) if periodic
+               else _cached_reconcile(force=True, skip_rels=auto_png_blocked))
         # 图库根目录不可访问: 明确告诉前端「图库不可用」, 本轮不产生缺失判定、不写库
         if not getattr(rep, "root_available", True):
             return jsonify({
@@ -7283,10 +8592,26 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 "scanned_images": 0, "new_pages_linked": 0, "pages_relinked": 0,
                 "duplicates": [], "conflicts": [], "pending": [],
                 "normalize_pending": [],
+                "auto_png_converted": auto_png_converted,
+                "auto_png_failed": auto_png_failed,
+                "auto_png_errors": auto_png_errors,
                 "scan_incomplete": False, "unreadable_dirs": [],
             }), 503
         resp = _reconcile_to_json(rep)
-        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        resp["auto_png_converted"] = auto_png_converted
+        resp["auto_png_failed"] = auto_png_failed
+        resp["auto_png_errors"] = auto_png_errors
+        # 同页多份未登记文件: 自动转换只报告不动文件, 也要出现在冲突列表里
+        _seen_conf = set()
+        for _e in auto_png_errors:
+            _k = _e.get("key")
+            if not _k or _k in _seen_conf:
+                continue
+            _seen_conf.add(_k)
+            resp.setdefault("conflicts", []).append({
+                "artwork_id": _k[0], "page": _k[1], "registered": "",
+                "path": _e.get("name") or "", "reason": _e.get("reason") or "",
+            })
         if periodic:
             # 15s 定时轮询**只读**: 以前这里每轮都写库 (补作者表 + 清孤儿), 与自检/元数据
             # 补全这类长任务抢写锁 —— SQLite 单写者, 长任务持锁时轮询就报
@@ -7314,18 +8639,21 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             try:
                 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif",
                            ".bmp", ".tif", ".tiff"}
+                _blocked = set(auto_png_blocked)
                 disk_rels = [p.relative_to(img_root).as_posix()
                              for p in img_root.rglob("*")
-                             if p.is_file() and p.suffix.lower() in IMG_EXT]
+                             if p.is_file() and p.suffix.lower() in IMG_EXT
+                             and p.relative_to(img_root).as_posix() not in _blocked]
                 with _db() as db:
                     resp["foreign_registered"] = db.register_foreign_files(
-                        db.foreign_unregistered_files(disk_rels))
+                        db.foreign_unregistered_files(disk_rels),
+                        img_root=img_root)
                     # 按文件夹命名 (bili@/twi@/GGAC@ 等) 把「其他来源」细分到具体站点
                     resp["sources_refined"] = db.refresh_foreign_sources()
             except Exception:
                 resp["foreign_registered"] = 0
         # 对账发现新入库图片 → 后台联网补标题/标签/作者 (导入即完整, 不等自检)
-        if rep.new_pages_linked > 0:
+        if rep.new_pages_linked > 0 or auto_png_converted > 0:
             _kick_metadata_fill()
         return jsonify(resp)
 
@@ -7334,7 +8662,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         """深度健康检查: 在普通对账基础上, 额外对每个图片做 PIL 打开校验, 识别损坏文件。"""
         img_root = paths.user_data(_config["paths"]["img_subdir"])
         with _db() as db:
-            rep = db.reconcile_output(img_root, verify_corrupt=True)
+            rep = db.reconcile_output(img_root, verify_corrupt=True, write=False)
         if not getattr(rep, "root_available", True):
             return jsonify({
                 "status": "error",
@@ -7963,18 +9291,145 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                         "refused": refused, "failed": bad})
 
     # ---------------- 🖼 壁纸管理: 归属索引 / 扫描 / 回收 (2026-11-16) ----------------
+    def _wall_library_items(wall_dir: "Path | None") -> "tuple[list, int]":
+        """壁纸库里的「图库原图」: 设壁纸时直接引用原图、不复制到壁纸夹的记录。
+
+        返回 (可浏览的原图条目, 去重后的引用总数)。条目只收图库根目录内的文件
+        (预览 URL 需要相对路径); 总数沿用旧口径, 包含根目录外仍存在的引用。
+        """
+        try:
+            img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
+        except Exception:
+            return [], 0
+        wall_resolved = wall_dir.resolve() if wall_dir is not None else None
+        out, seen = [], set()
+        try:
+            with _db() as db:
+                usages = db.list_wallpaper_usage(limit=5000, include_backfilled=True)
+                aids = sorted({str(u.get("artwork_id") or "") for u in usages
+                               if str(u.get("artwork_id") or "")})
+                meta = {}
+                if aids:
+                    ph = ",".join("?" * len(aids))
+                    for r in db.conn.execute(
+                            f"SELECT a.artwork_id, a.title, au.name AS author_name "
+                            f"  FROM artworks a LEFT JOIN authors au ON au.author_id=a.author_id "
+                            f" WHERE a.artwork_id IN ({ph})", aids):
+                        meta[str(r["artwork_id"])] = dict(r)
+        except Exception:
+            return [], 0
+        cur_path = None
+        try:
+            cur = _wallpaper_file()
+            if cur is not None:
+                cur_path = Path(cur).resolve()
+        except Exception:
+            cur_path = None
+        for u in usages:
+            raw = str(u.get("file_path") or "")
+            if not raw:
+                continue
+            try:
+                fp = Path(raw).resolve()
+            except OSError:
+                continue
+            if not fp.is_file() or (wall_resolved is not None and fp.parent == wall_resolved):
+                continue
+            key = str(fp)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                rel = fp.relative_to(img_root).as_posix()
+            except ValueError:
+                continue          # 图库根目录外: 计入总数, 但无法用 /api/local-img 预览
+            try:
+                st = fp.stat()
+            except OSError:
+                continue
+            aid = str(u.get("artwork_id") or "")
+            m = meta.get(aid) or {}
+            ver = int(st.st_mtime)
+            q = quote(rel, safe="")
+            out.append({
+                "kind": "library",
+                "name": fp.name,
+                "rel": rel,
+                "path": str(fp),
+                "size": int(st.st_size),
+                "mtime": ver,
+                "width": 0,
+                "height": 0,
+                "format": fp.suffix.lstrip(".").upper(),
+                "artwork_id": aid,
+                "page_num": u.get("page_num"),
+                "match_kind": "library",
+                "match_label": "图库原图",
+                "confidence": 0,
+                "title": m.get("title") or "",
+                "author_name": m.get("author_name") or "",
+                "favorite": False,
+                "labels": [],
+                "group_id": None,
+                "group_name": "",
+                "source": "library",
+                "usage_source": u.get("source") or "",
+                "used_at": u.get("used_at") or "",
+                "source_url": ("https://www.pixiv.net/artworks/" + aid
+                               if aid.isdigit() else ""),
+                "url": "/api/local-img?p=" + q + "&_img_v=" + str(ver),
+                "thumb": "/api/local-img?p=" + q + "&thumb=1&_img_v=" + str(ver),
+                "is_r18": None,          # 由当前 pages 归属回填, 历史记录不参与分级
+                "current": 1 if cur_path is not None and fp == cur_path else 0,
+            })
+        # 安全分级只认当前归属: pages.local_path 指向该路径、页未进回收站、
+        # 作品未失效且分级明确。历史 wallpaper_usage.artwork_id 仅用于展示。
+        # Windows 路径按「反斜杠转正斜杠 + 不区分大小写」核对归属。
+        def _norm_rel(s) -> str:
+            return str(s or "").replace("\\", "/").strip("/").lower()
+        if out:
+            owners = {}
+            rels = sorted({_norm_rel(e["rel"]) for e in out})
+            try:
+                with _db() as db:
+                    for i in range(0, len(rels), 400):
+                        chunk = rels[i:i + 400]
+                        ph = ",".join("?" * len(chunk))
+                        for r in db.conn.execute(
+                                f"SELECT p.local_path, a.is_r18 FROM pages p "
+                                f"  JOIN artworks a ON a.artwork_id = p.artwork_id "
+                                f" WHERE p.trashed_at IS NULL AND a.deleted_at IS NULL "
+                                f"   AND LOWER(REPLACE(p.local_path, char(92), '/'))"
+                                f"       IN ({ph})",
+                                chunk):
+                            owners.setdefault(_norm_rel(r["local_path"]), []).append(r["is_r18"])
+            except Exception:
+                owners = {}
+            for e in out:
+                regs = owners.get(_norm_rel(e["rel"])) or []
+                # 无有效登记 / 多个页指向同一路径 / 分级未知 → 一律按未知处理
+                e["is_r18"] = (int(regs[0])
+                               if len(regs) == 1 and regs[0] is not None else None)
+        return out, len(seen)
+
     @app.route("/api/wallpaper/files")
     def api_wallpaper_files():
-        """壁纸夹归属清单 + 统计 + 重复组 (只读, 读 wallpaper_files 索引)。
+        """壁纸夹归属清单 + 图库原图引用 + 统计 + 重复组 (只读)。
 
-        items 为空 = 还没扫过, 前端提示先点「扫描归属」。
+        items = 壁纸夹里的实际文件; library_items = 直接引用图库原图的设置记录,
+        两者合起来才是「壁纸库」。items 为空 = 还没扫过, 前端提示先点「扫描归属」。
         """
         d = candidates_dir()
         zero = {"total": 0, "bytes": 0, "owned": 0, "orphan": 0,
-                "dupes": 0, "dupe_files": 0, "scanned_at": ""}
+                "dupes": 0, "dupe_files": 0, "scanned_at": "", "library_refs": 0,
+                "library_total": 0}
         if d is None:
+            lib_items, lib_total = _wall_library_items(None)
+            zero["library_refs"] = lib_total
+            zero["library_total"] = lib_total
             return jsonify({"ok": True, "dir": "", "scanned": False,
-                            "stats": zero, "items": [], "groups": []})
+                            "stats": zero, "items": [], "library_items": lib_items,
+                            "groups": []})
         try:
             rows = _wall_list_files(_db)
         except Exception as e:
@@ -8031,28 +9486,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             "dupe_files": sum(len(g["files"]) for g in groups),
             "scanned_at": max((str(r.get("scanned_at") or "") for r in rows), default=""),
         }
-        # 壁纸库 ≠ 壁纸夹：直接引用图库原图的设置记录不复制文件，但也要算进壁纸库。
-        # library_total = 壁纸夹文件 + 使用记录里仍存在、且不在壁纸夹的原图（去重）。
-        library_refs = 0
-        try:
-            wall_dir = d.resolve()
-            seen_refs = set()
-            with _db() as _db2:
-                for u in _db2.list_wallpaper_usage(limit=5000, include_backfilled=True):
-                    fp = Path(str(u.get("file_path") or ""))
-                    try:
-                        if not fp.is_file() or fp.resolve().parent == wall_dir:
-                            continue
-                        seen_refs.add(str(fp.resolve()))
-                    except OSError:
-                        continue
-            library_refs = len(seen_refs)
-        except Exception:
-            library_refs = 0
+        # 壁纸库 ≠ 壁纸夹：直接引用图库原图的设置记录不复制文件，但也要能在壁纸库里浏览/搜索。
+        library_items, library_refs = _wall_library_items(d)
         stats["library_refs"] = library_refs
         stats["library_total"] = len(items) + library_refs
         return jsonify({"ok": True, "dir": str(d), "scanned": bool(items),
-                        "stats": stats, "items": items, "groups": groups})
+                        "stats": stats, "items": items,
+                        "library_items": library_items, "groups": groups})
 
     @app.route("/api/wallpaper/files/scan", methods=["POST"])
     @wall_admin_exclusive
@@ -8563,9 +10003,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         cur_rel = str(rec.get("local_path") or "").replace("\\", "/")
 
         def _clear_pending():
+            """只清仍属于这条记录的待处理状态, 不误清后来任务。"""
             try:
                 with _db() as db2:
-                    db2.set_pending_recycle(aid, page, None)
+                    db2.clear_pending_recycle_if(
+                        aid, page, pending,
+                        str(rec.get("pending_recycle_md5") or ""),
+                        expected_local=cur_rel)
             except Exception:
                 pass
 
@@ -8577,9 +10021,79 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                             "pending": False}), 409
         # 只处理仍是「用户已选择 JPG」的页; 当前 JPG 必须仍在
         fmt_choice = str(rec.get("format_choice") or "").lower()
+        if fmt_choice != "jpg":
+            # 「入库自动转 PNG」遗留的原件清理: 当前必须是仍匹配登记的 PNG
+            from core.image_format import actual_format_info
+            cur = img_root / cur_rel
+            if not cur.is_file():
+                return jsonify({"status": "error", "stage": "current_missing",
+                                "error": "当前 PNG 缺失，先恢复后再回收原件",
+                                "pending": True}), 409
+            if str(actual_format_info(cur).get("actual_format") or "").lower() != "png":
+                return jsonify({"status": "error", "stage": "page_state_changed",
+                                "error": "当前文件已不是 PNG，未回收原件",
+                                "pending": True}), 409
+            exp_cur = str(rec.get("md5") or "")
+            if exp_cur and md5_of(str(cur)) != exp_cur:
+                return jsonify({"status": "error", "stage": "current_changed",
+                                "error": "当前 PNG 已被替换，未回收原件",
+                                "pending": True}), 409
+            src = img_root / pending
+            if not src.is_file():
+                _clear_pending()
+                return jsonify({"status": "ok", "retried": 0, "pending": False})
+            expected_md5 = str(rec.get("pending_recycle_md5") or "")
+            expected_size = rec.get("pending_recycle_size")
+            if not expected_md5:
+                _clear_pending()
+                return jsonify({"status": "error", "stage": "pending_unknown",
+                                "error": "缺少原件指纹，已取消自动回收",
+                                "pending": False}), 409
+            # 页归属与待处理状态绑定: 取件前、回收前、回收后都按最新读数复核
+            def _owned_now() -> "tuple[bool, str]":
+                try:
+                    with _db() as db2:
+                        now = db2.get_page_conversion(aid, page)
+                except Exception as e:
+                    return False, f"页归属复核失败：{str(e).splitlines()[0]}"
+                if (not now
+                        or str(now.get("local_path") or "").replace("\\", "/") != cur_rel
+                        or str(now.get("pending_recycle") or "").replace("\\", "/") != pending
+                        or str(now.get("pending_recycle_md5") or "") != expected_md5):
+                    return False, "页归属已变化，未回收原件"
+                return True, ""
+
+            ok, why = _owned_now()
+            if not ok:
+                return jsonify({"status": "error", "stage": "page_state_changed",
+                                "error": why, "pending": True}), 409
+            ok, note, changed = _recycle_verified_file(
+                src, expected_md5, expected_size, owned=_owned_now)
+            if not ok:
+                stage = "page_state_changed" if "页归属" in note else "recycle_failed"
+                return jsonify({"status": "error", "stage": stage,
+                                "error": note,
+                                "pending": True}), (409 if stage == "page_state_changed"
+                                                    else 500)
+            try:
+                with _db() as db2:
+                    cleared = db2.clear_pending_recycle_if(
+                        aid, page, pending, expected_md5,
+                        expected_local=cur_rel)
+            except Exception:
+                cleared = 0
+            if not cleared:
+                return jsonify({"status": "error", "stage": "page_state_changed",
+                                "error": "待处理状态已被其他任务更新，未清除",
+                                "pending": True}), 409
+            audit_log.record("edit", "重试回收入库原件",
+                             f"#{aid} p{page} 原件已送回收站", 1, ids=[aid])
+            return jsonify({"status": "ok", "retried": 1,
+                            "pending": False, "changed": changed,
+                            "note": note or None})
         cur_fmt = str(rec.get("current_format")
                       or Path(cur_rel).suffix.lstrip(".")).lower()
-        if fmt_choice != "jpg" or cur_fmt not in ("jpg", "jpeg") \
+        if cur_fmt not in ("jpg", "jpeg") \
                 or Path(cur_rel).suffix.lower() not in (".jpg", ".jpeg"):
             return jsonify({"status": "error", "stage": "page_state_changed",
                             "error": "页已不是 JPG 选择，未回收旧 PNG",
@@ -9066,7 +10580,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
         2026-11-21 第 4 项: 清理缺失必须先预览、勾选具体作品;
         只返回本次对账仍判定为缺失的记录, 扫描不完整时如实标注。"""
-        rep = _cached_reconcile(force=False)
+        rep = _cached_reconcile(force=False, write=False)
         if not getattr(rep, "root_available", True):
             return jsonify({
                 "status": "error",
@@ -9999,7 +11513,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             disk_rels = [p.relative_to(img_root).as_posix() for p in img_root.rglob("*")
                          if p.is_file() and p.suffix.lower() in _TIDY_IMG_EXT]
             out["foreign_registered"] = db.register_foreign_files(
-                db.foreign_unregistered_files(disk_rels))
+                db.foreign_unregistered_files(disk_rels), img_root=img_root)
             _ph(2, "来源细分…")
             out["sources_refined"] = db.refresh_foreign_sources()
             _ph(3, "清理孤儿数据…")
@@ -11264,15 +12778,19 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         }
         return jsonify({"status": "ok", "plans": plans, "counts": counts})
 
-    @app.route("/api/library/tidy/apply", methods=["POST"])
-    def api_library_tidy_apply():
-        """执行整理计划 (移动+改名+同步 local_path), 随后强制对账。"""
-        data = request.get_json(silent=True) or {}
-        plan_ids = data.get("plans")  # None = 全部
-        expected = data.get("expected") or None   # 预览快照: 内容变了就不执行该项
-        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
-        with _db() as db:
-            rep = _tidy_apply_plans(db, img_root, plan_ids, expected)
+    _tidy_jobs = {}
+    _tidy_jobs_lock = threading.Lock()
+    _tidy_run_guard = threading.Lock()   # 同一图库同一时间只允许一个整理执行器
+
+    def _tidy_running_job():
+        with _tidy_jobs_lock:
+            for _j in _tidy_jobs.values():
+                if _j.get("state") == "running":
+                    return _j
+        return None
+
+    def _tidy_after_apply(rep: dict) -> None:
+        """整理完成后的收尾: 强制对账 + 审计。同步接口与后台任务共用。"""
         try:
             _cached_reconcile(force=True)
         except Exception:
@@ -11292,7 +12810,93 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 _parts.append(f"清理空夹 {rep['rmdirs']} 个")
             audit_log.record("update", "整理文件夹",
                              "，".join(_parts) + (f"（{len(_fl)} 项失败）" if _fl else ""), _n)
+
+    @app.route("/api/library/tidy/apply", methods=["POST"])
+    def api_library_tidy_apply():
+        """执行整理计划 (移动+改名+同步 local_path), 随后强制对账。"""
+        data = request.get_json(silent=True) or {}
+        plan_ids = data.get("plans")  # None = 全部
+        expected = data.get("expected") or None   # 预览快照: 内容变了就不执行该项
+        running = _tidy_running_job()
+        if running:
+            return jsonify({"status": "error", "job_id": running["id"],
+                            "message": "整理正在执行中，请查看原任务"}), 409
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        with _tidy_run_guard:
+            with _db() as db:
+                rep = _tidy_apply_plans(db, img_root, plan_ids, expected)
+        _tidy_after_apply(rep)
         return jsonify({"status": "ok", **rep})
+
+    @app.route("/api/library/tidy/apply/job", methods=["POST"])
+    def api_library_tidy_apply_job():
+        """后台执行整理计划: 前端轮询计数, 避免同步请求看不到进度。"""
+        data = request.get_json(silent=True) or {}
+        plan_ids = data.get("plans")
+        expected = data.get("expected") or None
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+        job_id = uuid.uuid4().hex
+        now = time.time()
+        with _tidy_jobs_lock:
+            for jid, old in list(_tidy_jobs.items()):
+                if (old.get("state") != "running"
+                        and now - (old.get("finished_at") or now) > 7200):
+                    _tidy_jobs.pop(jid, None)
+            for old in _tidy_jobs.values():
+                if old.get("state") == "running":
+                    return jsonify({"status": "ok", "job_id": old["id"],
+                                    "reused": True})
+            job = {"id": job_id, "state": "running", "stage": "执行整理",
+                   "done": 0, "total": 0, "planned": False,
+                   "rmdir_done": 0, "rmdir_total": 0,
+                   "created_at": now, "finished_at": None,
+                   "result": None, "error": None}
+            _tidy_jobs[job_id] = job
+
+        def _progress(ev: dict) -> None:
+            with _tidy_jobs_lock:
+                job["planned"] = True
+                if ev.get("rmdir"):
+                    job["rmdir_done"] = int(ev.get("done") or 0)
+                    job["rmdir_total"] = int(ev.get("total") or 0)
+                    job["stage"] = "清理空目录"
+                else:
+                    job["done"] = int(ev.get("done") or 0)
+                    job["total"] = int(ev.get("total") or 0)
+                    job["stage"] = "执行整理"
+
+        def _run() -> None:
+            try:
+                with _tidy_run_guard:
+                    with _db() as db:
+                        rep = _tidy_apply_plans(db, img_root, plan_ids, expected,
+                                                progress_cb=_progress)
+                _tidy_after_apply(rep)
+                with _tidy_jobs_lock:
+                    job["planned"] = True
+                    job["result"] = rep
+                    job["state"] = "done"
+                    job["finished_at"] = time.time()
+                    job["done"] = job.get("total") or job.get("done") or 0
+                    if job.get("rmdir_total"):
+                        job["rmdir_done"] = job["rmdir_total"]
+            except Exception as e:
+                with _tidy_jobs_lock:
+                    job["state"] = "error"
+                    job["error"] = str(e) or e.__class__.__name__
+                    job["finished_at"] = time.time()
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"status": "ok", "job_id": job_id})
+
+    @app.route("/api/library/tidy/apply/job/<job_id>", methods=["GET"])
+    def api_library_tidy_apply_job_status(job_id):
+        with _tidy_jobs_lock:
+            job = _tidy_jobs.get(job_id)
+            if not job:
+                return jsonify({"status": "error",
+                                "message": "任务不存在或已过期"}), 404
+            return jsonify({"status": "ok", **dict(job)})
 
     @app.route("/api/library/tidy/adopt-claim", methods=["POST"])
     def api_library_tidy_adopt_claim():
@@ -11454,6 +13058,11 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         body: {"files": ["a.png", "not_found/b.png", ...]}
         """
         import shutil as _sh
+        from core.image_format import (
+            actual_format_info, apply_ingest_format, extension_for_format,
+        )
+        from utils.config import ingest_auto_png
+        from utils.hashutil import md5_of
         data = request.get_json(silent=True) or {}
         rels = data.get("files")
         if not isinstance(rels, list) or not rels:
@@ -11464,6 +13073,10 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         dest_dir = img_root / _CUSTOM_SRC_DIR
         IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         imported, skipped, failed = [], [], []
+        convert_failed: "list[dict]" = []
+        ingest_records: "list[dict]" = []
+        auto_png = ingest_auto_png()
+        dest_dir.mkdir(parents=True, exist_ok=True)
         # 单次上限: 超出的必须**如实告诉用户**, 不能悄悄丢掉 (自查清单: "静默失败"类)
         CAP = 500
         over_limit = max(0, len(rels) - CAP)
@@ -11475,40 +13088,109 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             if src.suffix.lower() not in IMG_EXT:
                 skipped.append({"file": src.name, "reason": "不是图片"})
                 continue
-            target = dest_dir / src.name
-            if target.exists():
-                # 同名已存在: 绝不覆盖 (宁可不导, 也不动用户已有的那份)
+            # 以实际解码格式决定落点扩展名; 伪 PNG (JPEG 字节挂 .png) 也按真实格式
+            info = actual_format_info(src)
+            fmt = str(info.get("actual_format") or "").lower()
+            actual_ext = extension_for_format(fmt, src.suffix.lower())
+            static = (fmt in ("jpeg", "webp", "bmp", "tiff")
+                      and not info.get("animated"))
+            target_ext = ".png" if (auto_png and (static or fmt == "png")) else actual_ext
+            target = dest_dir / (src.stem + target_ext)
+            # 同名已存在: 绝不覆盖; 同一图的原后缀/真实格式落点都算已存在
+            other_names = {src.name, src.stem + actual_ext, src.stem + target_ext}
+            if any((dest_dir / nm).exists() for nm in other_names):
                 skipped.append({"file": src.name, "reason": "图库里已有同名文件"})
                 continue
-            try:
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                _sh.copy2(str(src), str(target))       # 先复制入库 (此步失败源文件不动)
-            except Exception as e:
-                failed.append({"file": src.name, "reason": f"复制失败: {e}"})
-                continue
-            rel_img = str(target.relative_to(img_root)).replace("\\", "/")
-            ok = False
+            conv = apply_ingest_format(src, out_path=target, enabled=auto_png,
+                                       delete_source=False)
+            final_target = target
+            if conv.get("ok") and auto_png and not target.exists():
+                # 动图/多帧保持原格式: 按实际扩展名复制入库
+                fallback = dest_dir / (src.stem + actual_ext)
+                if fallback.exists():
+                    skipped.append({"file": src.name, "reason": "图库里已有同名文件"})
+                    continue
+                try:
+                    _sh.copy2(str(src), str(fallback))
+                except Exception as e:
+                    failed.append({"file": src.name, "reason": f"复制失败: {e}"})
+                    continue
+                final_target = fallback
+                conv = dict(conv, current_path=str(fallback))
+            if not conv.get("ok"):
+                if conv.get("reason") == "unreadable":
+                    # 源图无法解码: 保留在收件箱, 列为入库失败, 不得登记
+                    failed.append({"file": src.name,
+                                   "reason": conv.get("note") or "图片无法打开"})
+                    continue
+                if not auto_png:
+                    failed.append({"file": src.name,
+                                   "reason": conv.get("note") or "图片无法打开"})
+                    continue
+                # 可解码但 PNG 编码失败: 回退原格式入库, 并在结果里说明原因
+                fallback = dest_dir / (src.stem + actual_ext)
+                if fallback.exists():
+                    skipped.append({"file": src.name, "reason": "图库里已有同名文件"})
+                    continue
+                try:
+                    _sh.copy2(str(src), str(fallback))
+                except Exception as e:
+                    failed.append({"file": src.name, "reason": f"复制失败: {e}"})
+                    continue
+                final_target = fallback
+                convert_failed.append({
+                    "file": src.name,
+                    "reason": conv.get("note") or "PNG 转换失败，已保留原格式",
+                })
+                conv = {"ok": True, "converted": False, "record": False,
+                        "current_format": fmt or actual_ext.lstrip("."),
+                        "source_format": None, "source_file_size": None,
+                        "source_md5": None, "converted_at": None, "note": ""}
+            rel_img = str(final_target.relative_to(img_root)).replace("\\", "/")
+            ext_id = None
             try:
                 with _db() as db:
-                    ok = bool(db.register_foreign_file(rel_img))
-                    if ok:
-                        db.cleanup_orphans()
+                    ext_id = db.register_foreign_file(
+                        rel_img, md5=md5_of(str(final_target)),
+                        file_size=final_target.stat().st_size)
             except Exception as e:
+                # 登记抛异常: 撤掉本次副本, 源图留在收件箱, 重试不被同名挡住
+                try:
+                    final_target.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 failed.append({"file": src.name, "reason": f"登记失败: {e}"})
                 continue
-            if not ok:
+            if not ext_id:
                 # 登记不上 (例如已登记过同一路径) → 把复制进来的副本撤掉, 别留半成品
                 try:
-                    target.unlink(missing_ok=True)
+                    final_target.unlink(missing_ok=True)
                 except OSError:
                     pass
                 skipped.append({"file": src.name, "reason": "已在图库登记过"})
                 continue
             try:
+                with _db() as db:
+                    db.cleanup_orphans()
+            except Exception:
+                pass
+            try:
                 src.unlink(missing_ok=True)            # 入库成功才收回件箱里的源文件
             except OSError:
                 pass
             imported.append(rel_img)
+            ingest_records.append({
+                "kind": "imported", "target": str(final_target), "ok": True,
+                "converted": bool(conv.get("converted")),
+                "record_conversion": bool(conv.get("record")),
+                "current_format": conv.get("current_format"),
+                "source_format": conv.get("source_format"),
+                "source_file_size": conv.get("source_file_size"),
+                "source_md5": conv.get("source_md5"),
+                "converted_at": conv.get("converted_at"),
+            })
+        if ingest_records:
+            _record_ingested_conversions(img_root, ingest_records)
         if imported:
             audit_log.record("add", "反搜收件箱手动入库",
                              f"把 {len(imported)} 张待反搜图片收进图库（建自定义作品）："
@@ -11518,6 +13200,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             mark_dirty("artworks", "pages", "facets", "stats", "reverse")
         return jsonify({"status": "ok", "imported": imported,
                         "skipped": skipped, "failed": failed,
+                        "convert_failed": convert_failed,
                         "over_limit": over_limit})
 
     @app.route("/api/reverse/discard", methods=["POST"])
@@ -11819,8 +13502,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
           对账登记 + 后台联网补标题/标签/作者 + 自动归入作者文件夹;
         - 文件名无作品 ID (截图/随便命名) → 转存 input/ 反搜收件箱, 去反搜页识别;
         - 只取 basename 防路径穿越; 重名自动加 (2)。
-        2026-11-21 4B-1: 静态图片统一转 PNG; 重复导入/同页已有文件按来源指纹
-        与像素核对复用, 无法确认的保留现有登记并列为待确认。
+        2026-11-26: 按「入库时自动转为 PNG」设置决定是否转 PNG (默认关闭, 保留原始
+        格式与字节); 重复导入/同页已有文件按来源指纹与像素核对复用, 无法确认的
+        保留现有登记并列为待确认。
         """
         import os as _os
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
@@ -11861,7 +13545,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     pending.append({"name": base, "reason": r["note"]})
                 else:
                     rejected.append(base)
-                if not r["ok"]:
+                if not r["ok"] and r.get("record_conversion"):
                     convert_failed.append({"name": base, "reason": r["note"]})
         finally:
             _cleanup_ingest_tmpdir(tmpdir)
@@ -11942,6 +13626,22 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         没有二者合一的形态 —— 前端因此给两个按钮 (支持多选图片)。"""
         return jsonify({"status": "ok", "paths": _pick_files_dialog()})
 
+    _import_jobs = {}
+    _import_jobs_lock = threading.Lock()
+    _import_run_guard = threading.Lock()   # 同一图库同一时间只允许一个导入执行器
+    # 预览清单缓存: scan_token → {plan, snapshot, src_label, created_at}
+    # 执行只认确认页那份清单, 预览后新增的文件留到后续批次。
+    _import_previews = {}
+    _import_previews_lock = threading.Lock()
+    _IMPORT_PREVIEW_TTL = 7200
+
+    def _import_running_job():
+        with _import_jobs_lock:
+            for _j in _import_jobs.values():
+                if _j.get("state") == "running":
+                    return _j
+        return None
+
     @app.route("/api/library/import-from-path", methods=["POST"])
     def api_library_import_from_path():
         """📁 把本地文件夹 / 选中的图片导入图库 (外部源文件全程保持原位)。
@@ -11953,180 +13653,163 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
           - 无 ID (截图等)        → 入库 input/ 反搜收件箱
           - 目标同名/同页已有     → 按来源指纹与像素核对复用或列待确认
         2026-11-21 4B-1 返修: 外部源文件只读, 转换/导入全部在应用临时副本上完成;
-        成功、复用、转换失败、待确认都不会移动或删除源文件。"""
-        import shutil as _sh
+        成功、复用、转换失败、待确认都不会移动或删除源文件。
+        2026-11-24: 扫描与执行抽到模块级 _import_build_plan / _import_execute_plan,
+                    供后台任务 (带逐张计数) 与同步接口共用。"""
         data = request.get_json(silent=True) or {}
-        raw = str(data.get("path") or "").strip().strip('"')
-        raw_list = data.get("paths")
         dry = bool(data.get("dry_run"))
-        make_custom = bool(data.get("make_custom_artworks"))
-        if not raw and not (isinstance(raw_list, list) and raw_list):
-            return jsonify({"status": "error",
-                            "error": "缺少 path（文件夹）或 paths（多张图片）"}), 400
+        plan, src_label, err = _import_build_plan(data)
+        if err:
+            return jsonify({"status": "error", "error": err[0]}), err[1]
+        if dry:
+            n_pixiv = sum(1 for x in plan if x[2] == "pixiv")
 
+            def _planned_target_name(fp: Path) -> str:
+                # 预览只按扩展名估计转换后的目标名 (GIF/PNG 保持原名; 多帧 WEBP 实际执行时会保持)
+                return fp.name if fp.suffix.lower() in (".png", ".gif") else fp.stem + ".png"
+
+            taken = sum(1 for fp, dr, _k in plan
+                        if (dr / _planned_target_name(fp)).exists())
+            token = uuid.uuid4().hex
+            now = time.time()
+            with _import_previews_lock:
+                for t, ent in list(_import_previews.items()):
+                    if now - float(ent.get("created_at") or 0) > _IMPORT_PREVIEW_TTL:
+                        _import_previews.pop(t, None)
+                _import_previews[token] = {
+                    "plan": plan,
+                    "snapshot": _import_snapshot(plan),
+                    "src_label": src_label,
+                    "created_at": now,
+                }
+            return jsonify({"status": "ok", "dry_run": True, "path": src_label,
+                            "total": len(plan), "with_id": n_pixiv,
+                            "without_id": len(plan) - n_pixiv, "conflicts": taken,
+                            "scan_token": token})
+        running = _import_running_job()
+        if running:
+            return jsonify({"status": "error", "job_id": running["id"],
+                            "source": running.get("source", ""),
+                            "message": "导入正在执行中，请查看原任务"}), 409
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
+        with _import_run_guard:
+            result = _import_execute_plan(plan, img_root, src_label)
+        return jsonify({"status": "ok", **result})
+
+    @app.route("/api/library/import-from-path/job", methods=["POST"])
+    def api_library_import_from_path_job():
+        """后台执行导入: 前端轮询计数「已处理 X／N 张」。
+
+        `scan_token` 来自 dry-run 预览, 把执行绑定到确认页的那份清单:
+        预览后新增的文件留到后续批次; 原清单文件消失/变化时返回 `preview_stale`,
+        要求重新预览确认。同一图库同时只跑一个任务; 只有同一批 (清单 + 无 ID
+        处理方式) 重试才复用任务, 不同批次返回 `busy`, 由前端保留该批并提供重试。
+        """
+        data = request.get_json(silent=True) or {}
+        token = str(data.get("scan_token") or "").strip()
+        make_custom = bool(data.get("make_custom_artworks"))
+        mode_key = "custom" if make_custom else "reverse"
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
         input_root = Path(paths.user_data(
             _config["paths"].get("input_subdir", "input"))).resolve()
-        guarded = ((img_root, "图库图片目录"), (input_root, "反搜收件箱"))
-        IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
-        files: "list[Path]" = []          # 待导入的源图片 (绝对路径)
-        src_label = ""                    # 预览里回显的"来源"
-        if isinstance(raw_list, list) and raw_list:
-            # 多选图片: 每个都要单独校验 (文件必须存在, 且不在图库/收件箱内部)
-            picked = []
-            for x in raw_list[:2000]:
-                fp = Path(str(x or "").strip().strip('"'))
-                if not fp.is_file():
-                    return jsonify({"status": "error",
-                                    "error": f"文件不存在：{fp}"}), 400
-                res = fp.resolve()
-                if res.suffix.lower() not in IMG_EXT:
-                    continue          # 与文件夹模式一致: 非图片静默跳过
-                for g, label in guarded:
-                    if res.is_relative_to(g):
-                        return jsonify({"status": "error",
-                                        "error": f"不能从{label}内部导入"}), 400
-                picked.append(res)
-            files = picked
-            src_label = f"选中的 {len(files)} 张图片"
+        if token:
+            with _import_previews_lock:
+                ent = _import_previews.get(token)
+            if not ent:
+                return jsonify({"status": "error", "code": "preview_expired",
+                                "message": "预览已失效，请重新扫描确认"}), 400
+            plan = _import_replan(ent["plan"], make_custom, img_root, input_root)
+            snapshot = ent["snapshot"]
+            src_label = ent["src_label"]
+            batch_key = token + "|" + mode_key
         else:
-            src = Path(raw)
-            if not src.is_dir():
-                return jsonify({"status": "error", "error": f"不是有效文件夹：{raw}"}), 400
-            src_res = src.resolve()
-            # 安全闸: 既不能选图库自身/其内部(会自我搬运), 也不能选它的上级(会把整棵树搬走)
-            for g, label in guarded:
-                if (src_res == g or src_res.is_relative_to(g)
-                        or g.is_relative_to(src_res)):
-                    return jsonify({"status": "error",
-                                    "error": f"不能选择{label}本身、其内部或其上级目录"}), 400
-            if src_res.parent == src_res:
-                return jsonify({"status": "error", "error": "不能直接选择整个磁盘根目录"}), 400
-            src_label = str(src_res)
-            MAX_SCAN = 50000
-            seen = 0
-            for root_dir, _dirs, names in os.walk(src_res):
-                for nm in names:
-                    seen += 1
-                    if seen > MAX_SCAN:
-                        return jsonify({"status": "error",
-                                        "error": "该目录文件过多（>5 万），请选择更具体的文件夹"}), 400
-                    fp = Path(root_dir) / nm
-                    if fp.suffix.lower() in IMG_EXT:
-                        files.append(fp)
+            plan, src_label, err = _import_build_plan(data)
+            if err:
+                return jsonify({"status": "error", "error": err[0]}), err[1]
+            snapshot = _import_snapshot(plan)
+            batch_key = _import_source_key(data) + "|" + mode_key
 
-        # 三种去向 ("导入前先判定"):
-        #   pixiv  → 标准 P 站作品, 直接入库 img/ (对账登记 + 后台补元数据);
-        #   custom → 不是标准 P 站作品, 且用户选了「建自定义作品」→ 入 img/#其他来源#/ 建 ext_ 壳;
-        #   reverse→ 不是标准 P 站作品, 用户选「转反搜」(默认) → 入 input/ 收件箱。
-        CUSTOM_DIR = _CUSTOM_SRC_DIR
-        plan = []
-        for fp in files:
-            if pixiv_natural_key(fp.name):
-                plan.append((fp, img_root, "pixiv"))
-            elif make_custom:
-                plan.append((fp, img_root / CUSTOM_DIR, "custom"))
-            else:
-                plan.append((fp, input_root, "reverse"))
-
-        n_pixiv = sum(1 for x in plan if x[2] == "pixiv")
-        n_custom = sum(1 for x in plan if x[2] == "custom")
-
-        def _planned_target_name(fp: Path) -> str:
-            # 预览只按扩展名估计转换后的目标名 (GIF/PNG 保持原名; 多帧 WEBP 实际执行时会保持)
-            return fp.name if fp.suffix.lower() in (".png", ".gif") else fp.stem + ".png"
-
-        taken = sum(1 for fp, dr, _k in plan
-                    if (dr / _planned_target_name(fp)).exists())
-        if dry:
-            return jsonify({"status": "ok", "dry_run": True, "path": src_label,
-                            "total": len(plan), "with_id": n_pixiv,
-                            "without_id": len(plan) - n_pixiv, "conflicts": taken})
-
-        imported, redirected, skipped, failed = [], [], [], []
-        reused, pending, convert_failed = [], [], []
-        ingest_records: "list[dict]" = []
-        custom_files: "list[Path]" = []      # 待登记的「自定义作品」文件 (入库成功才登记)
-        tmpdir = _new_ingest_tmpdir()
-        try:
-            for fp, dest_root, kind in plan:
-                # 外部源文件只读: 先复制到应用临时副本, 转换失败也不动原文件
-                tmp_src = tmpdir / fp.name
-                if tmp_src.exists():
-                    stem, suf = tmp_src.stem, tmp_src.suffix
-                    i = 2
-                    while (tmpdir / f"{stem} ({i}){suf}").exists():
-                        i += 1
-                    tmp_src = tmpdir / f"{stem} ({i}){suf}"
-                try:
-                    _sh.copy2(str(fp), str(tmp_src))
-                except Exception:
-                    failed.append(fp.name)
+        def _batch_conflict():
+            """同批重试 → 复用任务; 另一批运行中 → busy; None = 可以创建。"""
+            for old in _import_jobs.values():
+                if old.get("state") != "running":
                     continue
-                r = _ingest_image_file(tmp_src, dest_root, img_root)
-                ingest_records.append(r)
-                if r["kind"] == "imported":
-                    if kind == "pixiv":
-                        imported.append(r["name"])
-                    elif kind == "custom":
-                        custom_files.append(Path(r["target"]))
-                    else:
-                        redirected.append(r["name"])
-                elif r["kind"] == "reused":
-                    reused.append(fp.name)
-                elif r["kind"] == "pending":
-                    pending.append({"name": fp.name, "reason": r["note"]})
-                    skipped.append(fp.name)      # 保留现有登记, 源文件留在原处
-                else:
-                    failed.append(fp.name)
-                if not r["ok"]:
-                    convert_failed.append({"name": fp.name, "reason": r["note"]})
-        finally:
-            _cleanup_ingest_tmpdir(tmpdir)
+                if old.get("batch_key") == batch_key:
+                    return jsonify({"status": "ok", "job_id": old["id"],
+                                    "reused": True, "total": old.get("total", 0),
+                                    "source": old.get("source", "")})
+                src = old.get("source") or ""
+                return jsonify({"status": "error", "busy": True,
+                                "job_id": old["id"], "source": src,
+                                "message": "已有另一批导入正在执行"
+                                           + (f"（{src}）" if src else "")
+                                           + "，请等待完成后再试本批"}), 409
+            return None
 
-        # 「建自定义作品」: 把复制进 #其他来源#/ 的文件登记成 ext_ 壳作品 (标题=文件名)
-        custom_created = []
-        if custom_files:
-            with _db() as db:
-                for t in custom_files:
-                    rel = str(t.relative_to(img_root)).replace("\\", "/")
-                    try:
-                        if db.register_foreign_file(rel):
-                            custom_created.append(rel)
-                    except Exception:
-                        pass
+        now = time.time()
+        with _import_jobs_lock:
+            for jid, old in list(_import_jobs.items()):
+                if (old.get("state") != "running"
+                        and now - (old.get("finished_at") or now) > 7200):
+                    _import_jobs.pop(jid, None)
+            res = _batch_conflict()
+            if res is not None:
+                return res
 
-        # 落盘即对账 + 作者归位 + 后台补全 (与上传导入同一套收尾)
-        rep = _cached_reconcile(force=True)
-        _record_ingested_conversions(img_root, ingest_records)
-        with _db() as db:
-            _adopt_authors_from_folders(db, img_root)
-            db.cleanup_orphans()
-        if _organize_loose_images(img_root):
-            rep = _cached_reconcile(force=True)
-        if rep.new_pages_linked > 0:
-            _kick_metadata_fill()
-        n = len(imported) + len(redirected) + len(custom_created)
-        if n or skipped or failed or custom_created or reused or convert_failed:
-            audit_log.record("add", "导入图片(源文件原位)",
-                             f"从 {src_label} 入库 {len(imported)} 张，"
-                             f"转反搜收件箱 {len(redirected)} 张"
-                             + (f"，建自定义作品 {len(custom_created)} 个" if custom_created else "")
-                             + (f"，重复复用 {len(reused)} 张" if reused else "")
-                             + (f"，待确认 {len(pending)} 张" if pending else "")
-                             + (f"，转换失败保留原格式 {len(convert_failed)} 张" if convert_failed else "")
-                             + (f"，跳过 {len(skipped)} 张" if skipped else "")
-                             + (f"，复制失败 {len(failed)} 张" if failed else "")
-                             + "（外部源文件保持原位）",
-                             n)
-        return jsonify({"status": "ok", "imported": imported,
-                        "redirected": redirected, "custom_created": custom_created,
-                        "skipped": skipped, "reused": reused, "pending": pending,
-                        "convert_failed": convert_failed,
-                        "failed": failed,
-                        "new_pages": rep.new_pages_linked,
-                        "conflicts": getattr(rep, "conflicts", []) or []})
+        changed = _import_check_snapshot(snapshot)
+        if changed:
+            return jsonify({"status": "error", "code": "preview_stale",
+                            "changed": changed,
+                            "message": "预览后源文件有变化，请重新扫描确认"}), 409
+
+        job_id = uuid.uuid4().hex
+        with _import_jobs_lock:
+            # 核对快照期间可能已有别的请求创建了任务
+            res = _batch_conflict()
+            if res is not None:
+                return res
+            job = {"id": job_id, "state": "running", "stage": "导入图片",
+                   "prepared": True, "done": 0, "total": len(plan),
+                   "batch_key": batch_key, "source": src_label,
+                   "created_at": time.time(), "finished_at": None,
+                   "result": None, "error": None}
+            _import_jobs[job_id] = job
+
+        def _progress(done: int, total: int) -> None:
+            with _import_jobs_lock:
+                job["done"] = int(done)
+                job["total"] = int(total)
+
+        def _run() -> None:
+            try:
+                with _import_run_guard:
+                    result = _import_execute_plan(plan, img_root, src_label,
+                                                  progress_cb=_progress,
+                                                  expected=snapshot)
+                with _import_jobs_lock:
+                    job["result"] = result
+                    job["state"] = "done"
+                    job["finished_at"] = time.time()
+                    job["done"] = job["total"]
+            except Exception as e:
+                with _import_jobs_lock:
+                    job["state"] = "error"
+                    job["error"] = str(e) or e.__class__.__name__
+                    job["finished_at"] = time.time()
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"status": "ok", "job_id": job_id, "total": len(plan),
+                        "source": src_label})
+
+    @app.route("/api/library/import-from-path/job/<job_id>", methods=["GET"])
+    def api_library_import_from_path_job_status(job_id):
+        with _import_jobs_lock:
+            job = _import_jobs.get(job_id)
+            if not job:
+                return jsonify({"status": "error",
+                                "message": "任务不存在或已过期"}), 404
+            return jsonify({"status": "ok", **dict(job)})
 
     # ---------------- 图片缩略图代理 (绕 pixiv 防盗链) ----------------
     @app.route("/api/img")
@@ -12263,6 +13946,32 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
         return jsonify({"ok": True, "enabled": enabled})
+
+    @app.route("/api/ingest")
+    def api_ingest_get():
+        """读取入库格式设置 (目前只有「入库时自动转为 PNG」)。"""
+        from utils.config import INGEST_DEFAULTS, load_config
+        ing = load_config().get("ingest", {})
+        return jsonify({k: bool(ing.get(k, v)) for k, v in INGEST_DEFAULTS.items()})
+
+    @app.route("/api/ingest", methods=["POST"])
+    def api_ingest_set():
+        """设置入库格式开关 (写回 config/user.json 持久化)。
+
+        白名单只认 INGEST_DEFAULTS 里的键; 未出现的键不动, 交 _deep_merge 合并。
+        保存后下一次入库立即按新设置处理, 不需要重启。
+        """
+        body = request.get_json(silent=True) or {}
+        from utils.config import INGEST_DEFAULTS, save_user_config
+        upd = {k: bool(body[k]) for k in INGEST_DEFAULTS if k in body}
+        if not upd:
+            return jsonify({"ok": False, "error": "没有可识别的入库格式开关"}), 400
+        try:
+            save_user_config({"ingest": upd})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+        mark_dirty("settings")
+        return jsonify({"ok": True, **upd})
 
     @app.route("/api/launcher")
     def api_launcher_get():

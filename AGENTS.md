@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-23（当前前端版本 `20261123e`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127b`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -10,7 +10,7 @@
 
 1. **一次只改一项**。用户明确要求「我一项项跟你说」，不要一次实现多个需求。
    上一轮一口气改了 7 项，被整体回退（见 §4.1）。有歧义先问，不要自行扩大范围。
-2. **改完必须验证**：`py_compile` + 全量冒烟（当前 169 用例，必须全过，2026-11-23 已 169/169 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
+2. **改完必须验证**：`py_compile` + 全量冒烟（当前 184 用例，必须全过，2026-11-26 已 184/184 通过），同步相应程序/资源并验收安装版；仅更新交接文档按 §2.2 核对，不重启或部署程序。
 3. **不碰安全红线**（§7）：绝不自动删文件、R18 不加载真实像素、不 force push。
 
 ---
@@ -45,7 +45,7 @@
 | `core/wallpaper_lib.py` | 从图库按尺寸/比例生成壁纸 |
 | `db/store.py` | 数据访问层；`db/migrations/NNN_*.sql` 迁移 |
 | `utils/proc.py` | **所有子进程统一入口**（隐藏控制台窗口），见 §6.1 |
-| `autotest/smoke_all.py` | 全量冒烟，169 个用例；新增功能必须加断言 |
+| `autotest/smoke_all.py` | 全量冒烟，184 个用例；新增功能必须加断言 |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ```powershell
 .venv\Scripts\python.exe -m py_compile web\server.py core\wallpaper_index.py
-.venv\Scripts\python.exe -m autotest.smoke_all        # 169 用例必须全过
+.venv\Scripts\python.exe -m autotest.smoke_all        # 184 用例必须全过
 ```
 
 - 冒烟无参数、跑全量约 50 秒；输出报告在 `autotest/SMOKE_REPORT.md`。
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261123e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127b`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,815 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.70 原件回收二次收口：skip_rels 仍算磁盘存在 + 原子不覆盖退回（2026-11-27，前端 `20261127b`，已发布到安装版）
+
+- **同步对账保留当前图**：`reconcile_output` 的 `skip_rels` 从「完全排除」改为
+  「只排除登记/转换，仍算磁盘存在」：跳过文件加入 `disk_rels` 与自然键存在集合，
+  缺失判定也先看登记路径是否仍在磁盘。回收期间页被切回 JPG 后，同一请求的写对账
+  不再把当前页误判为丢失并重指到 PNG；下一次同步也不会把当前 JPG 当遗留原件回收。
+- **退回原子不覆盖**：`_recycle_verified_file` 的 `_back` 改用
+  `_publish_new_file`（目标已存在时拒绝），不再先看空闲再 `os.replace`；判定与落位
+  之间若有另一操作写入同路径，后来文件保留，原件暂存同目录并报告位置，两份都能用
+  SHA-256 验证。
+- **失败时在手副本优先**：回收助手取走 claim 后返回错误时，不再先删安全副本再退回
+  不存在的 claim；按 claim/safety 的实际存在与校验结果选择可恢复的一份，恢复成功
+  才删另一份；无法恢复原路径时保留可恢复副本与位置。下次同步按同一笔失败状态续办，
+  不会用「原路径缺失」代替已处理。
+- **回归**：T194 新增页切回 JPG 后写对账保留 JPG、第二次同步不回收当前图；退回时
+  原位置被抢的原子不覆盖（后来文件与暂存旧图双 SHA）；助手取走 claim 后报错用安全
+  副本退回、下一次续办；保留同页待确认双方不登记与正常 PNG 续办。全量 **185/185**
+  （113.92 s），日志 `_dev_runtime/diagnostics/trae-20261127b-recheck-smoke.log`。
+  另有 T90/归档恢复各一次环境性 flake，隔离与复跑均通过。
+- **候选/发布**：候选包 `_dev_runtime/packages/vixiq`（`built_at 2026-11-27
+  02:52:08`，前端 `20261127b`）在 7813 通过 `check_ingest_auto_png_candidate.py`；
+  回滚清单 `_dev_runtime/backups/publish-20261127b-20261127-025301.json`（3 个旧
+  文件按 SHA-256 去重，6 个替换项，新增备份 14,424,519 字节）；dist 与安装版 exe /
+  index.html 哈希一致（exe `1240bfc4d550…`），两处 `config/user.json` 哈希未变。
+- **安装版验证**：7810 前端 `20261127b-1795693960-1795695345-1795519082`、
+  `built_at 2026-11-27 02:52:08`、`frozen=true`、`/api/ingest` 默认
+  `auto_png=false`、健康正常。下一步：交 Codex 复验；通过后再接手动「批量转 PNG」
+  的共用进度。GitHub 未提交、未推送。
+
+### 4.69 原件回收收口：原子取件 + 归属复核 + 无硬链接依赖（2026-11-27，前端 `20261127a`，已发布到安装版）
+
+- **原子取件**：`_recycle_verified_file` 不再「复制/硬链接快照再删原路径」，改为
+  `os.replace(src, claim)` 先把原件移出正式路径，再对实际取得的 claim 校验
+  md5/大小。只回收已验证的 claim，不再对原路径做第二次删除，避免回收后再误删
+  同大小换入的新文件。
+- **归属绑定**：`owned` 回调在取件后、回收后各复核一次最新页归属与
+  `pending_recycle*`；回收期间另一连接把页切回原 JPG 时，用回收前的安全副本把
+  原件退回原路径，保留待处理状态并报告。`clear_pending_recycle_if` 增加
+  `expected_local`，页归属已变时不清状态。
+- **失败保全**：取件失败（占用）保留原文件与待处理状态；claim 身份不符时把后来
+  文件退回原路径，原路径已被占则暂存在同目录 `.vixiq-recycle-*.tmp` 并在结果中
+  给出位置；回收子进程失败同样退回 claim。开关开启/关闭都会续办，失败两轮后
+  解除故障可正常清理。
+- **不再依赖硬链接/inode**：取件与回收全走同盘 move + 快照校验，文件系统不支持
+  `os.link` 时也能完成；文件确实被替换时保留新文件并提示。
+- **回归**：T194 新增原件被占用两次（开/关各一次）、回收助手谎报成功但暂存仍在、
+  取件前同大小换图、取件后写入新文件、回收期间切页（同步与页详情重试）、禁用硬链接
+  下的正常/替换两条路径、`expected_local` 条件清除。全量 **185/185**（116.28 s），
+  日志 `_dev_runtime/diagnostics/trae-20261127a-recycle-smoke4.log`。
+- **候选/发布**：候选包 `_dev_runtime/packages/vixiq`（`built_at 2026-11-27
+  01:39:15`，前端 `20261127a`）在 7813 通过 `check_ingest_auto_png_candidate.py`；
+  回滚清单 `_dev_runtime/backups/publish-20261127a-20261127-013952.json`（3 个旧
+  文件按 SHA-256 去重，6 个替换项，新增备份 14,421,357 字节）；dist 与安装版 exe /
+  index.html 哈希一致（exe `6196d1ac1a67…`），两处 `config/user.json` 哈希未变。
+- **安装版验证**：7810 前端 `20261127a-1795693960-1795695345-1795519082`、
+  `built_at 2026-11-27 01:39:15`、`frozen=true`、`/api/ingest` 默认
+  `auto_png=false`、健康正常。下一步：交 Codex 复验；通过后再接手动「批量转 PNG」
+  的共用进度。GitHub 未提交、未推送。
+
+### 4.68 入库自动转 PNG 四次复验返修：归档备份身份 + 待确认整轮排除 + 待回收身份（2026-11-26，前端 `20261126h`，已发布到安装版）
+
+- **反搜归档文件保护（`core/reverse_search.py:_archive_commit`）**：动手前记录源、
+  在位目标、跨格式旧页与旧登记四份身份；转换期间目标被他人换掉/新建时绝不覆盖；
+  覆盖前备份旧目标并校验备份身份。登记失败只在目标仍属本次且旧登记未变时用
+  `os.replace` 恢复；恢复被拒/目标被占时保留校验过的旧图备份，结果里给出可恢复
+  路径，不再谎称「已保留原图与原登记」。登记成功后才删源与跨格式旧文件，并核对
+  它们仍是开始时那一份，换入的新文件一律保留。新页/加副本登记走
+  `_register_archived_page(expect_unregistered=True)` 条件写入，抢先登记的页与文件
+  都保留。
+- **同步待确认整轮排除**：同页多个未登记候选（JPG + 原生 PNG 等）用 `key_to_rels`
+  把双方都加入 `blocked`，写库对账与 foreign 登记整轮跳过；发布后目标被替换时把
+  源与后来目标一起排除，本轮双方都不登记。
+- **待回收身份绑定**：`_recycle_verified_file` 先在同目录取硬链接/副本快照并校验，
+  回收快照，再仅在源路径仍匹配时删源；同大小不同内容的替换会保留新文件并报告。
+  `_recycle_files` 非零退出/无输出/成功数不足都返回失败列表，调用方不清待处理状态；
+  续办与页详情重试在执行前复核最新页归属，使用 `clear_pending_recycle_if` 只清仍属于
+  同一任务的 `pending_recycle*`。
+- **回归**：T194 新增恢复 `os.replace` 被拒时保留旧图备份、发布后目标被他人换图再
+  登记失败不覆盖来客、登记成功后源 JPG / 跨格式旧 JPG 被替换仍保留、加副本条件写入
+  被抢先登记、同页 JPG+原生 PNG 双方 0 登记、发布后目标也 0 登记、待回收同大小替换、
+  回收站非零退出、第二连接切页、条件清除不误清后来任务、页详情重试正常续办。全量
+  **185/185**（126.24 s），日志
+  `_dev_runtime/diagnostics/trae-20261126h-recheck-smoke3.log`（首跑 T171 一次环境性
+  失败，隔离与复跑均通过）。
+- **候选/发布**：候选包 `_dev_runtime/packages/vixiq`（`built_at 23:53:33`，前端
+  `20261126h`）在 7813 通过 `check_ingest_auto_png_candidate.py`（含同页混合冲突页
+  查询 404）；回滚清单 `_dev_runtime/backups/publish-20261126h-20261126-235611.json`
+  （3 个旧文件按 SHA-256 去重，6 个替换项，新增备份 14,415,334 字节）；dist 与安装版
+  exe / index.html 哈希与候选一致，两处 `config/user.json` 哈希未变。
+- **安装版验证**：7810 前端 `20261126h-1795693960-1795695345-1795519082`、
+  `built_at 23:53:33`、`frozen=true`、`/api/ingest` 默认 `auto_png=false`、健康正常。
+  下一步：交 Codex 复验；通过后再做手动「批量转 PNG」的共用进度。GitHub 未提交、
+  未推送。
+
+### 4.67 入库自动转 PNG 三次复验返修：并发页保护 + 原件清理续办 + 归档回滚（2026-11-26，前端 `20261126g`，已发布到安装版）
+
+- **同步并发页保护**：`store_page_result(expect_unregistered=True)` 用事务内条件
+  `INSERT ... ON CONFLICT DO UPDATE ... WHERE local_path 为空`，另一连接先登记时本次
+  不覆盖；`register_foreign_file(expect_new=True)` 用普通 INSERT + IntegrityError 回滚。
+  失败只撤能证明属于本次的 PNG，源图与先到登记都保留。
+- **产物身份从候选到清理全链路核对**：转换产物先在临时文件取 md5/大小，发布后核对
+  仍是同一产物才登记；登记后复核页 `local_path`、在位 PNG 与源图身份，任一变化都
+  不删源、报告待确认。源 JPG 替换、目标 PNG 被替换、发布前后来客均覆盖测试。
+- **原件清理可续办**：PNG 已登记但原图删除失败时写 `pages.pending_recycle*`
+  （复用转 JPG 的待回收状态），跨扫描/重启/开关切换保留；同步开头先续办，开启或关闭
+  都会清理。`/api/library/convert-to-jpg/retry-recycle` 扩展支持自动 PNG 页；身份不符
+  拒绝清理并清状态，待处理源不会再登记为新图。
+- **反搜归档按逻辑页决策**：`_resolve_archive_target` 同时看磁盘最终路径与已有页登记。
+  已有 p0.jpg 时开启自动 PNG 不再把 p0.png 当空位：跳过保留源与旧页，加副本分配到
+  p1，覆盖在成功后清理旧 JPG。新增 `_archive_commit`：先备好并校验临时产物，覆盖前
+  备份旧目标；登记失败恢复旧目标/撤新产物，编码失败保留旧图与源；p1 不会被覆盖。
+- **回归**：T194 增加同页并发登记、发布后产物替换、源图替换、清理失败续办（关闭
+  开关）、逻辑页 p0.jpg 的跳过/副本/覆盖、归档编码失败/登记失败回滚。
+  全量 **185/185**（119.12 s），日志
+  `_dev_runtime/diagnostics/trae-20261126g-ingest-auto-png-final-smoke.log`。
+- **候选/发布**：候选包 `_dev_runtime/packages/vixiq`（`built_at 22:35:49`，前端
+  `20261126g`）在 7813 通过 `check_ingest_auto_png_candidate.py`；回滚清单
+  `_dev_runtime/backups/publish-20261126g-20261126-223652.json`（3 个旧文件按
+  SHA-256 去重，6 个替换项，新增备份 14,406,666 字节）；dist 与安装版关键文件哈希
+  一致，两处 `config/user.json` 哈希未变。
+- **安装版验证**：7810 前端 `20261126g-1795693960-1795695345-1795519082`、
+  `built_at 22:35:49`、`frozen=true`、`/api/ingest` 默认 `auto_png=false`、健康正常。
+  下一步：交 Codex 复验；通过后再做手动「批量转 PNG」的共用进度。GitHub 未提交、
+  未推送。
+
+### 4.66 入库自动转 PNG 二次复验返修：提交后再删源 + 归档先探测格式 + 放大态关闭（2026-11-26，前端 `20261126f`，已发布到安装版）
+
+- **同步改为「提交后再清理原图」**：`_auto_png_convert_new_disk_files` 生成并校验属于本次
+  任务的临时 PNG，源图全程原位；发布前复核源身份、目标占用与页归属，目标被别的操作
+  占用时只丢弃本次候选，绝不删除别人文件；PNG 路径与来源记录提交成功且清理前源身份
+  仍一致，才删源图。写库/清理失败只报告 `auto_png_errors`，原图与旧登记保全；失败源
+  通过 `skip_rels` 排除出同轮对账，下一次同步可重试。foreign 登记与转换来源改为
+  `register_foreign_file(conversion=...)` 同一事务提交，并写入 md5/大小。
+- **对账区分查看/诊断/入库**：`/api/library/items`、`/api/library/health`、
+  `/api/library/missing-items` 改只读对账，不再顺手登记新 Pixiv JPG；手动同步才按
+  开关转换。`reconcile_output(skip_rels=...)` 支持本轮暂不纳入的文件。
+- **移动/改名与混合冲突**：其他来源 JPG 外部改名按 md5 指纹重指旧登记，不再重编码；
+  `normalize_pending` 带 md5；同页 JPG+原生 PNG 等混合候选在确认前全部保留原格式，
+  冲突写入 `conflicts`/`auto_png_errors`。`db/store.reconcile_output` 的
+  `new_page_paths` 防止同轮后到文件覆盖先登记页。
+- **反搜归档先探测格式再选策略**：`_resolve_archive_target` 在移动前用真实格式与
+  最终输出算 canonical，再执行跳过/加副本/覆盖；关闭时伪 PNG 落 `.jpg`，开启时静态
+  图落 `.png`；「加副本」按最终文件名页号登记，p1 不覆盖 p0；覆盖/复制都会同步页
+  登记与当前格式。
+- **放大态 ✕ 一点即关**：`.lightbox-close` 提高 `z-index: 20`，不再被放大后的
+  `.lightbox-img-wrap` 盖住；关闭按钮第一下就退出，不会先还原缩略图。
+- **回归**：T194 扩写同步写库异常/清理失败、目标被占、源图被替换、同页 JPG+PNG、
+  移动改名、列表/健康只读、归档跳过/副本/覆盖两种开关、伪 PNG、归档 p1、放大态关
+  闭 CSS；全量 **185/185**（109.59 s），日志
+  `_dev_runtime/diagnostics/trae-20261126f-ingest-auto-png-recheck-smoke.log`。
+- **候选/发布**：候选包 `_dev_runtime/packages/vixiq`（`built_at 20:15:45`，前端
+  `20261126f`）在 7813 通过 `check_ingest_auto_png_candidate.py`（含混合格式冲突、
+  伪 PNG、同步转换）；回滚清单
+  `_dev_runtime/backups/publish-20261126f-20261126-201706.json`（4 个旧文件按
+  SHA-256 去重，8 个替换项，新增备份 14,529,062 字节）；dist 与安装版关键文件哈希
+  一致，两处 `config/user.json` 哈希未变。
+- **安装版验证**：7810 前端 `20261126f-1795693960-1795695345-1795519082`、
+  `built_at 20:15:45`、`frozen=true`、`/api/ingest` 默认 `auto_png=false`、健康正常；
+  样式已含放大态关闭层级。下一步：交 Codex 复验；通过后再做手动「批量转 PNG」的
+  共用进度。GitHub 未提交、未推送。
+
+### 4.65 入库自动转 PNG 返修：同步事务化 + 定时只读 + 真实格式识别（2026-11-26，前端 `20261126e`，已发布到安装版）
+
+- **磁盘同步事务化**：`web/server.py:_auto_png_convert_new_disk_files` 改为先用
+  `db.reconcile_output(write=False)` 取本轮真实新增候选，复核路径/大小/mtime/页键后
+  才转换。原文件先备份到应用临时目录，PNG 路径与转换来源记录一起写库成功后才删备份；
+  写库失败撤 PNG、恢复原文件，重试仍能写出完整记录。原文件删除失败单独报告
+  `auto_png_errors`，不留未登记 PNG，后续只有原图一条正式登记。同页多份未登记文件
+  交由对账冲突规则，确认前不改写任何一张。
+- **同页冲突不再顶掉登记**：`db/store.py:reconcile_output` 增加本轮 `new_page_paths`；
+  同一轮同页不同内容的后到文件只进 `conflicts`，不再用 `mark_page_status` 覆盖刚登记
+  的页。
+- **定时扫描只读**：`_cached_reconcile(write=False)` 使用独立只读缓存（按图库根目录
+  区分），`POST /api/library/sync?periodic=1` 冷/热缓存都不登记、不改写；手动同步仍
+  按开关转换新图。
+- **反搜入库/归档按真实格式**：`normalize_to_png` 以实际解码格式判定 PNG/动图/静态图，
+  同目标路径时校验后原子替换；伪 PNG（JPEG 字节挂 .png）关闭时落 `.jpg`、开启时转
+  真 PNG。反搜收件箱与归档都按真实扩展名落盘；可解码但 PNG 编码失败回退原格式并
+  说明原因，源图无法解码则保留在收件箱/原处并列为失败；登记抛异常会撤掉本次副本。
+- **归档「加副本」页号**：归档后用最终文件名解析实际页码，p1 使用自己的页号和来源
+  记录，不再覆盖 p0。关闭自动转 PNG 时也先修正与实际格式不符的扩展名。
+- **文案**：同步结果与「转为 PNG」弹窗按实际结果显示自动转换成功/失败/可手动转换，
+  不再写「同步只识别并报告」；正常 JPG 用「可转为 PNG」表述。
+- **回归**：T194 扩写同步写库异常/原文件处理异常/重试、同页冲突、定时冷热缓存、
+  伪 PNG 文件导入与反搜入库、坏图与编码失败、归档 p1；T31/T33/T74/T100/T104/T112
+  改用真实图片字节。全量 **185/185**（96.46 s），日志
+  `_dev_runtime/diagnostics/trae-20261126e-ingest-auto-png-rework-smoke.log`。
+- **候选/发布**：候选包 `_dev_runtime/packages/vixiq`（`built_at 19:52:40`，前端
+  `20261126e`）在 7813 隔离数据通过 `check_ingest_auto_png_candidate.py`（含同页冲突、
+  伪 PNG 关闭/开启）；回滚清单
+  `_dev_runtime/backups/publish-20261126e-20261126-195416.json`（4 个旧文件按
+  SHA-256 去重，8 个替换项，新增备份 15,107,421 字节）；dist 与安装版关键文件哈希
+  一致，两处 `config/user.json` 哈希未变。
+- **安装版验证**：7810 前端 `20261126e-1795693960-1795539441-1795519082`、
+  `built_at 19:52:40`、`frozen=true`、`/api/ingest` 默认 `auto_png=false`、健康正常；
+  页面含入库格式开关。下一步：交 Codex 复验；通过后再做手动「批量转 PNG」的共用进度。
+  GitHub 未提交、未推送。
+
+### 4.64 入库时自动转为 PNG：默认关闭 + 覆盖全部正式入库入口（2026-11-26，前端 `20261126d`，已发布到安装版）
+
+- **设置项**：`utils/config.py` 新增 `INGEST_DEFAULTS={"auto_png": False}` 与
+  `ingest_auto_png()`；`resources/default.json` 新增 `ingest.auto_png=false`。
+  旧 `user.json` 缺节/缺键、全新安装都按关闭；设置页「浏览与下载 → 🖼️ 入库格式」
+  开关写回 `config/user.json`，下一次入库立即生效，重启保留。接口
+  `GET/POST /api/ingest`（白名单只认 `auto_png`）。
+- **统一策略**：`core/image_format.apply_ingest_format()` 开启时转调
+  `normalize_to_png`；关闭时只做可读性检查并按原字节复制，不重新编码、不改扩展名、
+  不写转换来源；复制走目标同目录临时文件 + 原子替换，避免下载暂存与图库跨盘。
+- **覆盖入口**：下载/补页/强制重下（`core/crawler._finalize_downloaded_page`）、
+  网页上传与文件/文件夹导入（`web/server._ingest_image_file`）、反搜收件箱
+  `/api/reverse/adopt`、反搜命中自动归档（`core/reverse_search`）、手动
+  `/api/library/sync` 实际登记的新静态图。开启时 JPG/静态 WEBP 转 PNG，原生 PNG
+  直入，GIF/多帧 WEBP 保留动画，转换失败保留原格式并在结果说明；关闭时用
+  SHA-256 核对原始字节。`format_choice='jpg'` 的页在补图/修复/重下时保持 JPG。
+- **不改写已有记录**：`periodic=1` 同步、体检只读步骤、导入预览/匹配阶段不改文件；
+  手动同步只转换「路径未登记且页键不存在」的新图，切换设置后已有文件保持原样。
+- **前端**：设置页新增 `#ingest-auto-png-toggle` / `#ingest-auto-png-state`；
+  `loadIngestFormat()` / `toggleIngestFormat()` 接入设置页、`settings` 数据域刷新与
+  首屏加载；导入确认、执行中、`_askImportMode` 文案按开关显示，删除写死的
+  「静态图片统一转 PNG」。同步结果 toast 显示自动转 PNG / 转换失败计数。
+- **回归**：新增 T194（配置默认/接口、关闭时上传与导入及下载的 SHA-256、开启时
+  JPG/WEBP/PNG/GIF/失败、format_choice、反搜入库/归档、磁盘同步、切换不改写、前端
+  接线与版本串）；T174/T175 固定按关闭运行以保留「同步只报告待转 PNG」语义。
+  全量 **185/185**（109.70 s），日志
+  `_dev_runtime/diagnostics/trae-20261126d-ingest-auto-png-smoke.log`。
+- **候选/发布**：候选包 `_dev_runtime/packages/vixiq`（`built_at 13:29:39`，前端
+  `20261126d`）在 7813 隔离数据通过 `check_ingest_auto_png_candidate.py`；回滚清单
+  `_dev_runtime/backups/publish-20261126d-20261126-133035.json`（2 个旧文件按
+  SHA-256 去重，4 个替换项，新增备份 14,327,412 字节）；dist 与安装版已替换
+  `vixiq.exe`、`base_library.zip`；两处 `config/user.json` 哈希未变。
+- **安装版验证**：7810 前端 `20261126d-1795670623-1795539441-1795519082`、
+  `built_at 13:29:39`、`frozen=true`、`/api/ingest` 默认 `auto_png=false`、健康正常；
+  页面含入库格式开关。下一步：交 Codex 验收；通过后再接手动「批量转 PNG」的共用
+  进度。GitHub 未提交、未推送。
+
+### 4.63 导入启动失败收尾：重开的弹窗直接显示失败（2026-11-26，前端 `20261126c`，已发布到安装版）
+
+- **导入启动异常分支使用当前等待器实例号**：`importStartRun` 的 catch 改为
+  `opModalSame(waiter.seq || seq)`，与整理入口一致；同时结束 `_importStart` 等待。
+  关闭弹窗后从导入入口重开时，启动失败（普通 HTTP 500 / 断网）会直接更新重开后的
+  弹窗，而不是停在「导入中…」禁用按钮。
+- **失败弹窗可操作**：匹配时调用 `importShowResult(_importRun)`，标题「⚠ 导入失败」，
+  显示服务端原因或网络错误，提供「重新选择」与「关闭」；失败状态保存在
+  `_importRun`，从原入口重开仍可查看。跨业务弹窗仍按实例号隔离。
+- **回归**：新增 T193（异常分支等待器实例号、结束等待、失败状态保存、版本串）。
+  全量 **184/184**（121.71 s），日志
+  `_dev_runtime/diagnostics/trae-20261126c-import-start-fail-smoke.log`。
+- **浏览器实测**：`check_shared_progress_ui.py` 新增：
+  - 启动 POST 挂起后返回普通 HTTP 500：关闭并重开，弹窗直接显示「导入失败」、
+    「模拟启动失败」与「重新选择/关闭」；
+  - 启动 POST 模拟断网（TypeError: Failed to fetch）：关闭并重开，同样直接显示
+    「导入失败」与网络原因、重新选择入口。
+  日志 `shared-progress-ui.log`；整理/导入既有 UI 脚本回归通过。
+- **候选/发布**：候选包 `built_at 11:39:12`（前端 `20261126c`）在 7813 通过版本、
+  健康、静态串与导入任务。回滚清单
+  `_dev_runtime/backups/publish-20261126c-20261126-114009.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,094,045 字节**）；dist 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`；两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261126c-1795664352-1795539441-1795519082`、
+  `built_at 11:39:12`、`frozen=true`、健康正常。
+- 下一步：交 Codex 复验；通过后批量转 PNG 直接用这套控件与跟踪。GitHub 未提交、未推送。
+
+### 4.62 启动等待重开 / 迟到忙响应重试 / 扫描文案与响应体超时（2026-11-26，前端 `20261126b`，已发布到安装版）
+
+- **启动等待独立状态**：导入/整理启动回包前，`_importRun`/`_tidyRun` 带 `starting`；
+  `_importStart`/`_tidyStart` 记录等待器。关闭弹窗后从原入口重开，走
+  `importResumeStarting`/`tidyResumeStarting`：接回同一次启动等待并绑定新的弹窗
+  实例号，不发 `undefined` 任务查询；回包只提交一次，匹配后直接进入进度/结果。
+- **迟到忙响应保留本批**：迟到回包先按业务状态分类。`start.busy` 时只保存
+  `_importPendingBatch` 与 `_importBusyInfo`，从入口 `importShowBusyPending()`
+  显示原因并提供「重试本批」，不会把别批 `job_id` 记成自己的任务；stale/expired
+  保存为可读错误。匹配弹窗时的忙响应也走同一展示函数。
+- **扫描可见文案**：`opProgressPaint` 的 flow 分支只在 `o.text !== undefined`
+  时更新文本，阶段 paint 不再清空「正在扫描所选…」；可见文案与读屏区域同步。
+- **响应体超时**：`opFetchJson` 内层 `resp.json()` 的 `AbortError/terminated/aborted`
+  统一转「任务查询超时」，不再被吞成「任务查询失败」。
+- **回归**：新增 T192（starting/等待器/启动重开/忙响应保存/扫描文案/响应体超时）。
+  全量 **183/183**（98.19 s），日志
+  `_dev_runtime/diagnostics/trae-20261126b-starting-resume-smoke.log`。
+- **浏览器实测**：`check_shared_progress_ui.py` 新增：
+  - 导入启动 POST 延迟 1.5 s，关闭后从入口重开（不出现「任务不存在」、只提交一次，
+    回包后直接看到结果）；整理启动同样验证；
+  - 迟到 409 busy（带别批 `job_id`）后从入口显示「另有导入正在执行」，点「重试本批」
+    成功，未查询别批任务；
+  - 扫描可见文案 `#imp-scan-progress-text` 与读屏同步；
+  - `opFetchJson` 对响应体中断抛「任务查询超时」。
+  日志 `shared-progress-ui.log`；整理/导入两个既有 UI 脚本回归通过。
+- **候选/发布**：候选包 `built_at 11:09:04`（前端 `20261126b`）在 7813 通过版本、
+  健康、静态串与导入任务。回滚清单
+  `_dev_runtime/backups/publish-20261126b-20261126-110959.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,090,895 字节**）；dist 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`；两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261126b-1795662544-1795539441-1795519082`、
+  `built_at 11:09:04`、`frozen=true`、健康正常。
+- 下一步：交 Codex 复验；通过后批量转 PNG 直接用这套控件与跟踪。GitHub 未提交、未推送。
+
+### 4.61 迟到回包归属 + 扫描阶段播报（2026-11-26，前端 `20261126a`，已发布到安装版）
+
+- **启动/预览迟到回包不覆盖当前弹窗**：`openLibModal` 每次递增并记录弹窗实例号
+  `dataset.opSeq`；`opModalSeq()` / `opModalSame(seq)` 放进共用逻辑。导入启动
+  (`importStartRun`)、整理启动 (`applyTidy`)、整理预览 (`openTidyPreview`) 在发起
+  请求前记下 `seq`，回包先保存业务状态：有任务号就按原任务号继续跟踪，只有
+  `opModalSame(seq)` 时才接管或替换弹窗。成功、拒绝、异常以及关闭后重开同一业务
+  都按实例号区分，旧回包只影响发起时的界面。
+- **扫描阶段播报**：导入扫描 `importScanProgressHtml` 与整理预览扫描改用
+  `opProgressHtml(..., {mode:'flow'})`，带 `role=status`/`aria-live=polite` 隐藏区域，
+  打开后 `opProgressPaint(..., {stage:'正在扫描所选…'/'正在扫描目录与检查冲突'})`；
+  扫描、执行、终态分别由控件 live 区域与结果弹窗标题播报。
+- **响应体卡死也识别为超时**：`opFetchJson` 除 `AbortError` 外，把
+  `terminated/aborted` 也转成「任务查询超时」，保留继续查询入口。
+- **回归**：新增 T191（实例号、`opModalSame(seq)`、两处扫描共用控件、响应体中断
+  文案、版本串）。全量 **182/182**（95.85 s），日志
+  `_dev_runtime/diagnostics/trae-20261126a-late-response-smoke.log`。
+- **浏览器实测**：`check_shared_progress_ui.py` 新增「导入启动回包迟到」场景
+  （POST 延迟 1.6 s，关闭启动弹窗并打开整理预览，回包后预览保持，任务从导入入口
+  接回并完成）与扫描播报断言；原有归属、失败、查询中断、超时、淡入/减少动效场景
+  继续通过。`check_tidy_progress_ui.py`、`check_import_progress_ui.py` 回归通过；
+  日志 `shared-progress-ui.log`。
+- **候选/发布**：候选包 `built_at 10:17:30`（前端 `20261126a`）在 7813 通过版本、
+  健康、静态串与导入任务。回滚清单
+  `_dev_runtime/backups/publish-20261126a-20261126-101827.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,088,677 字节**）；dist 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`；两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261126a-1795659450-1795539441-1795519082`、
+  `built_at 10:17:30`、`frozen=true`、健康正常；静态 app.js 含 `opModalSame` /
+  `opModalSame(seq)` / 响应体中断识别。
+- 下一步：交 Codex 复验；通过后批量转 PNG 直接用这套控件与跟踪。GitHub 未提交、未推送。
+
+### 4.60 共用进度返修：弹窗归属 / 单次查询超时 / 阶段播报（2026-11-25，前端 `20261125a`，已发布到安装版）
+
+- **后台任务只更新自己的弹窗**：`openLibModal` 每次打开清空归属，业务调用后
+  `opClaimModal(owner)` 认领（整理预览 `tidy-preview`、整理进度 `tidy:任务号`、
+  整理结果 `tidy-result:任务号`、导入扫描/选择 `import-scan`/`import-choose`、
+  导入进度 `import:任务号`、导入结果 `import-result:任务号`）。任务状态、结果、
+  异常先写入各自任务记录；只有 `opModalMatches(owner)`（弹窗可见且归属匹配）才
+  更新、关闭或替换弹窗。成功回调延时 350ms 后再次核对归属。
+- **单次查询超时**：新增 `opFetchJson`（AbortController，默认 5s）供
+  `opPollJobStatus` 使用；服务端长时间无响应时计入重试，连续失败进入「查询中断」
+  并保留最后进度，恢复后从原任务号继续。保留 500 重试路径。
+- **阶段播报与出现阈值**：进度控件带 `role=status` / `aria-live=polite` /
+  `aria-atomic=true` 隐藏区域，只在阶段变化时写入（逐张计数不打断）；弹窗标题
+  带 `aria-live` 播报结果。`openLibModal` 给 `.op-progress` 加约 300ms 淡入
+  （`op-fade-in` → `op-shown`），短任务直接出结果；减少动效下禁用过渡与流动动画。
+- **回归**：新增 T190（归属函数与两个入口认领位置、`opFetchJson`/超时文案、
+  aria 属性、淡入类、版本串）。全量 **181/181**（115.72 s），日志
+  `_dev_runtime/diagnostics/trae-20261125a-shared-progress-fix-smoke.log`。
+- **浏览器实测**：新增 `check_shared_progress_ui.py`：
+  - 导入成功时不关闭已打开的整理预览，从导入入口看到正确结果；
+  - 整理失败时不覆盖已打开的导入选择弹窗，整理入口随后显示失败结果；
+  - 连续 500 进入查询中断时整理预览保持，恢复后从导入入口继续查询并完成；
+  - `opFetchJson` 对慢响应抛「任务查询超时」；
+  - 阶段播报（`role=status`/`aria-live=polite`/「逐张导入」）与约 300ms 淡入；
+    减少动效下流动动画 `animation-name=none`。
+  日志 `shared-progress-ui.log`；整理/导入两个既有 UI 脚本回归通过。
+- **候选/发布**：候选包 `built_at 00:57:21`（前端 `20261125a`）在 7813 通过版本、
+  健康、静态串与导入任务。回滚清单
+  `_dev_runtime/backups/publish-20261125a-20261125-005827.json`（5 个旧文件按 SHA-256
+  去重，10 个替换项，新增备份 **15,211,873 字节**）；dist 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`、`style.css`；两处
+  `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261125a-1795539441-1795539441-1795519082`、
+  `built_at 00:57:21`、`frozen=true`、健康正常；静态 app.js 含 `opClaimModal` /
+  `opModalMatches` / `opFetchJson` / `opRevealProgressIn` / 导入结果归属。
+- 下一步：交 Codex 复验；通过后批量转 PNG 直接用这套控件与跟踪。GitHub 未提交、未推送。
+
+### 4.59 整理与导入共用进度控件与任务跟踪（2026-11-24，前端 `20261124n`，已发布到安装版）
+
+- **共用代码位置**（`web/static/app.js`，约 9903–10026 行）：
+  - `opProgressHtml(wid, o)`：生成进度控件，支持 `flow` / `count` / `segments`
+    三种显示方式；`textId`/`fillId` 可覆盖子元素 id，兼容已有入口。
+  - `opProgressPaint(wid, o)`：按阶段更新显示方式、真实计数、阶段充能状态。
+  - `opPollJobStatus(url, jobId, onState, opts)`：通用任务轮询；HTTP 5xx 等带
+    JSON 的错误响应也计入重试（连续 5 次或超时才抛错）；任务自身报错抛出的
+    Error 带 `job` 字段，业务可区分「任务失败」与「查询中断」。
+  - `opTrackJob(key, jobId, opts)`：按「业务:任务号」去重，同一页面同一任务只保留
+    一套轮询；查询中断后再次调用即从原任务号继续。
+- **整理接入**：`tidyRunProgressHtml` 用 `opProgressHtml('tidy-run-exec'/'tidy-run-rmdir')`
+  生成执行与清理两条计数控件；`tidyPaintRun` 用 `opProgressPaint` 更新计划数与
+  目录数；`tidyRunWatch` 用 `opTrackJob('tidy', …)`；查询中断时保留最后进度并显示
+  「继续查询」，任务失败仍走原结果弹窗。
+- **导入接入**：`importRunProgressHtml` 用 `opProgressHtml('imp-run-flow'/'imp-run-count')`；
+  `importPaintRun` 用 `opProgressPaint` 在扫描流动与逐张计数间切换；`importRunWatch`
+  用 `opTrackJob('import', …)`；查询中断同样保留进度与继续查询。
+- **回归**：新增 T189（共用函数、两个入口调用位置、旧轮询 Promise 已并入
+  `_opTracks`、版本串）。全量 **180/180**（127.20 s），日志
+  `_dev_runtime/diagnostics/trae-20261124n-shared-progress-smoke.log`。
+- **浏览器实测**：
+  - `check_tidy_progress_ui.py` 回归通过（扫描流动、执行 `／3`、空目录 `／5`、
+    关闭重开接回、结果失败原因）。
+  - `check_import_progress_ui.py` 回归通过，并新增：主流程轮询前 2 次任务查询返回
+    500 → 自动重试后继续完成（保留进度、无中断弹窗）；阶段 10 使用 360×800 窄屏 +
+    `prefers-reduced-motion: reduce`，共用控件不溢出、流动动画 `animation-name=none`；
+    执行中替换仍按源文件变化跳过。
+  - 关闭弹窗、切页后从原入口接回；同一页面重复打开只保留一套轮询（`_opTracks` 去重）。
+- **候选/发布**：候选包 `built_at 23:56:57`（前端 `20261124n`）在 7813 通过版本、
+  健康、静态串与导入任务。回滚清单
+  `_dev_runtime/backups/publish-20261124n-20261124-235815.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,078,925 字节**）；dist 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`；两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124n-1795535817-1795527753-1795519082`、
+  `built_at 23:56:57`、`frozen=true`、健康正常；静态 app.js 含 `opProgressHtml` /
+  `opTrackJob` / 整理与导入接入 / 「继续查询」。
+- 下一步：交 Codex 验收；通过后批量转 PNG 直接用这套控件与跟踪。GitHub 未提交、未推送。
+
+### 4.58 导入执行中源图变化：逐张核对身份（2026-11-24，前端 `20261124m`，已发布到安装版）
+
+- **逐张核对确认身份**：`_import_execute_plan(..., expected=快照)` 在每张复制前
+  与复制后各核对一次源文件大小/mtime；源文件在等待或复制过程中被替换时，
+  丢弃本次副本、不写图库，该项留在原处，记入 `source_changed`（`源文件已变化`）；
+  源文件消失记 `源文件已消失`。其他图片继续处理。
+- **分母不变**：源文件变化/消失的项仍计入本次已处理（`done` 推进），
+  进度仍到 `N／N`；结果弹窗新增「源文件已变化或消失，未导入（N 张）」分区，
+  列出文件名与原因，摘要行显示「源文件变化未导入 N 张」。
+- **任务接线**：job 路由把预览快照 `expected` 传给执行器，确保只核对确认页清单。
+- **回归**：T188 新增执行中替换（第一张 1／2 后把第二张换成 29×18 另一张有效图，
+  结果只入库第一张、`source_changed` 列出第二张「源文件已变化」、进度 2／2、
+  图库无替换图）与执行中消失（`源文件已消失`、进度 2／2）两个场景；并发 fake
+  执行器断言收到预览快照。全量 **179/179**（103.92 s），日志
+  `_dev_runtime/diagnostics/trae-20261124m-import-src-change-smoke.log`。
+- **浏览器复测**：`check_import_progress_ui.py` 新增第 10 阶段（两张有效合成图，
+  执行到 1／2 时替换下一张）验证结果「源文件已变化或消失，未导入（1 张）」、
+  文件名与原因、第一张已入库、替换内容未入库、源文件仍在且尺寸为替换后 29×18；
+  前 9 步回归（预览新增/删除、批次互斥、四类结果、按钮文案）继续通过；
+  日志 `import-progress-ui.log`。
+- **候选/发布**：候选包 `built_at 23:44:27`（前端 `20261124m`）在 7813 通过版本、
+  健康、静态串与两轮导入任务。回滚清单
+  `_dev_runtime/backups/publish-20261124m-20261124-234531.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,077,452 字节**）；dist 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`；两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124m-1795535067-1795527753-1795519082`、
+  `built_at 23:44:27`、`frozen=true`、健康正常；静态 app.js 含 `source_changed` 与
+  「源文件已变化或消失，未导入」。
+- 下一步：交 Codex 复验；通过后再做批量转 PNG。GitHub 未提交、未推送。
+
+### 4.57 导入进度返修：确认清单绑定 / 批次识别 / 按钮文案（2026-11-24，前端 `20261124l`，已发布到安装版）
+
+- **确认页清单与实际执行一致**：dry-run 生成 `scan_token` 并在服务端缓存本次
+  预览的文件清单（路径 + 大小 + mtime）。确认后执行只认这份清单，不再重扫目录；
+  预览后新增的文件留在后续批次。原清单文件消失或变化时，job 返回
+  `preview_stale` + 变化文件，前端提示重新扫描确认（本批不执行）。
+- **同批重试与另一批区分**：任务记录 `batch_key`（清单令牌 + 无 ID 处理方式，或
+  来源路径哈希 + 处理方式）。同批重试返回同一 `job_id`（`reused=true`）；
+  不同来源或改处理方式返回 409 `busy` + 当前任务来源。前端保留本批参数，
+  提供「重试本批」；进度弹窗显示「来源：…」，明确哪批正在执行。旧同步入口仍互斥 409。
+- **按钮提示与行为一致**：`index.html` 导入按钮悬停改为「外部源文件保持原位
+  （不会被移走或删除）」，不再声称进回收站。
+- **回归**：T188 扩充（预览后新增文件不进入本批并留在原处；删除/修改清单文件
+  返回 `preview_stale` 且列出原因；同批重试复用；不同来源、同预览改处理方式、
+  旧同步均被挡；未知令牌 `preview_expired`）。全量 **179/179**（116.90 s），
+  日志 `_dev_runtime/diagnostics/trae-20261124l-import-fix-smoke.log`。
+- **浏览器复测**：`check_import_progress_ui.py` 在确认页出现后加入新文件，
+  执行仍为 `／5` 且新文件未入库；再导入一批时删除一张源文件，开始导入被拒，
+  弹窗列出「990702_p0.png（文件已消失）」；进度弹窗显示来源；按钮悬停无「回收站」；
+  源文件全部原位。日志 `import-progress-ui.log`。
+- **候选/发布**：候选包 `built_at 23:15:30`（前端 `20261124l`）在 7813 通过版本、
+  健康、静态串、预览令牌新增文件与删除文件两条路径。回滚清单
+  `_dev_runtime/backups/publish-20261124l-20261124-231652.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,070,126 字节**）；dist 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`；两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124l-1795533330-1795527753-1795519082`、
+  `built_at 23:15:30`、`frozen=true`、健康正常；静态 app.js 含 `scan_token` /
+  `importRetryPending` / `preview_stale` / `imp-run-src`，按钮文案已更新。
+- 下一步：交 Codex 复验；通过后再做批量转 PNG。GitHub 未提交、未推送。
+
+### 4.56 导入图片/文件夹进度（2026-11-24，前端 `20261124k`，已发布到安装版）
+
+- **扫描用流动、确认后计数**：系统选择框返回后才打开导入弹窗，显示
+  `.op-track.flow` + 「正在扫描所选文件夹/图片…」；dry-run 拿到总数并确认后，
+  后台任务改用「已处理 X／N 张」计数条，分母固定为本次确认的计划张数。
+- **单张处理推进一次**：`web/server.py` 抽出模块级 `_import_build_plan` /
+  `_import_execute_plan`；执行循环内成功、复用、待确认、复制/入库失败、转换失败
+  都算已处理并回调 `progress_cb(done,total)`。新增
+  `POST /api/library/import-from-path/job` 与 `GET .../job/<id>`
+  （`prepared/done/total/state/result`），同一图库同时只跑一个导入；重复提交返回
+  同一 `job_id`（`reused=true`），旧同步入口运行中返回 409。
+- **结束四类汇总**：结果弹窗列已入库（Pixiv 作品 / 自定义作品）、已复用、待确认、失败；
+  转反搜与转换失败单独注明；待确认保留原因，失败保留文件名；源文件保持原位。
+- **关闭/切页接回**：前端 `_importRun` 保存当前/最近任务，运行中关闭弹窗或切页后
+  从原入口回来接回进度；结束后仍显示原结果，提供「再导入一批」。扫描期间用户关闭
+  弹窗时迟到结果不再弹确认（`_importScanSeq`）。
+- **回归**：新增 T188（固定合成 3 张：复用/入库/转反搜；回调 done 1→3 且分母恒 3；
+  HTTP 任务 total=2 → done=2；并发同 job_id、旧同步 409；注入复制失败后 done 仍到
+  total 且 failed 保留文件名；静态接线与 `20261124k`）。全量 **179/179**（113.58 s），
+  日志 `_dev_runtime/diagnostics/trae-20261124k-import-progress-smoke.log`。
+- **浏览器复测**：`check_import_progress_ui.py`（合成图库 5 张：复用/入库/待确认/
+  复制失败/无ID）验证扫描流动、确认「共 5 张」、执行 `／5` 计数、执行中关闭重开接回、
+  切页再回来、结果「已入库 1 · 已复用 1 · 待确认 1 · 失败 1」、关闭重开仍是结果、
+  取消扫描不弹确认、源文件全部原位；日志 `import-progress-ui.log`。
+- **候选/发布**：候选包 `built_at 22:44:36`（前端 `20261124k`）在 7813 通过
+  （版本/健康/静态串 + 两轮导入任务）。回滚清单
+  `_dev_runtime/backups/publish-20261124k-20261124-224722.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,055,929 字节**）；`dist` 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`，哈希一致；两处
+  `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124k-1795531476-1795527753-1795519082`、
+  `built_at 22:44:36`、`frozen=true`、健康正常；静态 app.js 已含
+  `importRunWatch`/`importShowResult`/`已处理 X／N 张`。
+- 下一步：第二批其余项（批量转 PNG、单张 PNG 转 JPG、以图搜图）；GitHub 未提交、未推送。
+
+### 4.55 整理进度返修：稳定分母 / 单任务互斥 / 结果保留（2026-11-24，前端 `20261124j`，已发布到安装版）
+
+- **分母从一开始稳定**：任务初始 `total=0`、`planned=false`；前端在分母未确认时显示
+  「正在核对整理计划…」，不再先显示全部快照数。执行层回调后才以非清理计划数为分母；
+  清理阶段在候选总数确定后才报 `0／N`；无清理候选时不发清理回调、前端不显示该条。
+  只清空目录时执行条显示「无整理项需要执行」，清理条 `0／N → N／N`。
+- **同一图库只运行一个整理**：新增 `_tidy_run_guard`，异步任务与旧同步入口共用互斥。
+  重复提交返回已有 `job_id`（`reused=true`）；旧同步入口在运行中返回 409 并带 `job_id`。
+- **重新进入接回原任务**：前端 `_tidyRun` 保存当前/最近任务。运行中关闭弹窗或切页后
+  再点「整理文件夹」接回进度，不重新预览；任务结束后重新进入仍显示原结果，
+  结果弹窗提供「重新预览」。
+- **部分失败可查**：结果弹窗区分成功汇总、失败、跳过/状态变化、写库待处理；
+  失败项保留具体原因，不再只留 toast 总数。失败/跳过也计入已处理计数。
+- **回归**：新增 T187（两个并发任务同 job_id 且执行器只进一次、旧同步 409、任务初始
+  `planned=false/total=0`、注入移动失败后其他项完成、无空目录不发清理阶段、
+  只清空目录时执行分母 0/清理分母 2）。全量 **178/178**（110.77 s），日志
+  `_dev_runtime/diagnostics/trae-20261124j-tidy-recheck-smoke.log`。
+- **浏览器复测**：`check_tidy_progress_ui.py`（合成图库，注入 1 次移动失败）验证
+  首屏无 `／8` 分母、执行 `／3` 至完成、空目录 `／5`、执行中关闭重开接回且不重新扫描、
+  结果弹窗显示「失败（1 项）+ 原因」和跳过项、关闭重开仍是原结果、点「重新预览」才再次扫描；
+  日志 `tidy-progress-ui.log`。
+- **候选/发布**：候选包 `built_at 22:17:05`（前端 `20261124j`）在 7813 通过。回滚清单
+  `_dev_runtime/backups/publish-20261124j-20261124-221757.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,052,311 字节**）；`dist` 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`，三处哈希一致；
+  两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124j-1795529825-1795527753-1795519082`、
+  `built_at 22:17:05`、`frozen=true`、健康正常；整理任务 GET 不存在 ID 返回 404；
+  真实库 1605 作品 / 2108 图 / 433 作者，壁纸库 1180。
+- 下一步：第二批导入进度；GitHub 未提交、未推送。
+
+### 4.54 整理文件夹进度（2026-11-24，前端 `20261124i`，已发布到安装版）
+
+- **预览扫描用流动**：`openTidyPreview()` 点击后立即打开同一弹窗，显示
+  `.op-track.flow` + 「正在扫描目录与检查冲突…」；预览接口与认领扫描并行，返回后
+  在同一弹窗替换成计划表格。预览仍不改任何文件。
+- **确认执行按计划计数**：新增后台任务 `POST /api/library/tidy/apply/job` 与
+  `GET /api/library/tidy/apply/job/<id>`；`_tidy_apply_plans` 新增 `progress_cb`，
+  以本次确认且匹配到的**非空目录计划数**为分母（跳过/失败也算已处理），前端
+  `tidyPollJob` 轮询并显示「已处理 12／28 项」。旧同步接口保留。
+- **空目录清理单列阶段**：执行阶段结束后进入独立的「清理空目录」阶段，
+  候选总数确定后才从 `0／N` 开始报计数；完成后 `rmdir_done=rmdir_total`。
+- **浏览器验收**：`check_tidy_progress_ui.py`（隔离库，3 个待归位目录 + 2 个空目录，
+  测试内加 0.35 s/事件延迟）验证预览流动条、计划 8 项、执行分母 3、空目录分母 5、
+  执行中切页再回来进度仍在、完成后目录归位/空夹删除；日志 `tidy-progress-ui.log`。
+- **回归**：新增 T186（固定合成计划：执行分母 4、跳过也计数、空目录 0/1→1/1、
+  文件系统结果、前后端静态接线）。全量 **177/177**（109.58 s），日志
+  `_dev_runtime/diagnostics/trae-20261124i-tidy-progress-smoke.log`。
+- **候选/发布**：候选包 `built_at 22:02:15`（前端 `20261124i`）在 7813 通过版本/健康、
+  壁纸 Esc 与作者排序同步。回滚清单
+  `_dev_runtime/backups/publish-20261124i-20261124-220310.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **15,044,658 字节**）；`dist` 与安装版已替换
+  `vixiq.exe`、`base_library.zip`、`app.js`、`index.html`，三处哈希一致；
+  两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124i-1795528935-1795527753-1795519082`、
+  `built_at 22:02:15`、`frozen=true`、健康正常；整理任务 GET 不存在 ID 返回 404；
+  真实库 1605 作品 / 2108 图 / 433 作者，壁纸库 1180。
+- 第二批剩余：导入、批量 PNG、单张 JPG、以图搜图；GitHub 未提交、未推送。
+
+### 4.53 作者工具栏行距与窄屏方向标记（2026-11-24，前端 `20261124h`，已发布到安装版）
+
+- **两行留白**：作者工具栏第一行继承了 `.field-row` 的上下 12 px 外边距，第二行也有 12 px，
+  导致控件边缘相距 54 px。限定作者页覆盖：`.management-primary.au-row-main { margin:0 }`、
+  `#authors-filters { margin:0 }`、`#tab-authors .management-extra-inner { padding-top:6px }`。
+  两行控件边缘约 6 px，行内 gap 6 px、控件 29 px，总数/页码吸顶位置不变。
+- **窄屏方向重复**：`#authors-sort-word` 漏了 `.au-sort-word` 类，窄屏隐藏规则没命中，
+  按钮同时显示「降序」和「↓」。补类后窄屏只保留箭头，桌面仍显示升降序文字和展开折角；
+  `aria-label` 继续包含字段和方向。另把窄屏排序菜单改为左对齐
+  （`.au-sort-menu { left:0; right:auto; }`），避免 320 px 向左溢出。
+- **复测**：1280 / 1024 / 390 / 320 px 普通态与状态+来源同时生效时两行边缘均约 6 px、
+  无横向溢出；390/320 两种字段（作品数/最后更新）升降序都只留一个箭头；第 2 页改 ID 升序
+  回第 1 页、作品数表头与工具栏同步、关键词+状态+来源改最后更新仍 6 位且筛选数 2、
+  320 px 筛选面板在视口内、Esc 回入口。日志 `author-toolbar-ui.log`。
+- **回归**：T185；全量 **176/176**（121.33 s），日志
+  `_dev_runtime/diagnostics/trae-20261124h-author-menu-spacing-smoke.log`。
+- **候选/发布**：候选包 `built_at 21:42:33`（前端 `20261124h`）在 7813 通过版本/健康、
+  壁纸 Esc 与作者排序同步。回滚清单
+  `_dev_runtime/backups/publish-20261124h-20261124-214327.json`（4 个旧文件按 SHA-256
+  去重，8 个替换项，新增备份 **14,497,715 字节**）；`app.js` 内容未变，仅
+  `vixiq.exe`、`base_library.zip`、`index.html`、`style.css` 替换；三处哈希一致；
+  两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124h-1795520603-1795527753-1795519082`、
+  `built_at 21:42:33`、`frozen=true`、健康正常；真实库 1605 作品 / 2108 图 / 433 作者，
+  壁纸库 1180。
+- 下一步：操作进度第二批；GitHub 未提交、未推送。
+
+### 4.52 作者管理工具栏两行布局（2026-11-24，前端 `20261124g`，已发布到安装版）
+
+- **桌面**：第一行搜索（占剩余宽度、带清除）、搜索按钮、排序「排序：字段 升序/降序 ▾」、收起；
+  第二行状态、来源、清除筛选（有筛选才出现）、右端「查找重复作者」。
+- **窄屏（≤980px）**：第一行搜索 + 更多；第二行排序（字段 + 箭头）、筛选 N ▾。
+  状态/来源/清除收进筛选弹层；「查找重复作者」和收起收进「更多」。
+- **排序**：字段为画师、作者 ID、作品数、最后更新；初始作品数降序；首次改选画师/ID 为升序，
+  作品数/最后更新为降序；同字段可切方向。工具栏与可排序表头共用 `sortAuthors` 状态入口，
+  点表头后工具栏字段/箭头同步，点工具栏后表头箭头同步；改字段/方向回第 1 页，
+  查询词、状态、来源随请求保留。表头同字段点击切换升降序，新字段按该字段默认方向。
+- **筛选**：状态与来源可组合，计数只算这两项；清除筛选只重置筛选，保留关键词与排序。
+- **下拉**：与壁纸同一套交互——点外部/Esc 关闭并回入口，简化菜单里第一次 Esc 只关下拉、
+  第二次才关简化菜单，`e.stopPropagation()` 由下拉先消费；焦点落到可见叠三角。
+- **代码**：`index.html` 作者区块、`app.js` 的 `authorsNextSort / authorsFilterCount /
+  authorsSyncSortUI / authorsSyncFiltersUI / authorsSetSortField / authorsSetSortOrder /
+  authorsClearFilters / initAuthorsToolbarLayout`、`style.css` 的 `.au-*`；
+  保留 `#authors-search-input`、`#authors-f-status`、`#authors-f-source`、`#authors-dupes-btn`、
+  `.management-primary/.management-extra/.management-toggle/.management-pager` 接线。
+- **回归**：新增 T185（静态结构 + Node 纯函数：首次改字段方向、同字段保持、筛选计数）。
+  全量 **176/176**（121.32 s），日志
+  `_dev_runtime/diagnostics/trae-20261124g-author-toolbar-smoke.log`。
+- **浏览器验收**：`_dev_runtime/diagnostics/check_author_toolbar_ui.py`（隔离库，60 位作者、
+  2 页）在 1280 / 1024 / 390 / 320 px 验证两行、工具栏/表头排序同步（画师升序、作品数降序/升序、
+  翻页后点表头回第 1 页）、状态+来源筛选（6 位、计数 2）、切换排序保留筛选、搜索 Enter 后
+  切换排序保留关键词、清除筛选恢复 60 位、排序 Esc 焦点、简化菜单两次 Esc、窄屏更多/筛选弹层
+  在视口内、无横向溢出；日志 `author-toolbar-ui.log`。
+- **候选/发布**：候选包 `built_at 19:43:23`（前端 `20261124g`）在 7813 验证壁纸 Esc 与
+  作者页排序同步。回滚清单
+  `_dev_runtime/backups/publish-20261124g-20261124-194438.json`（5 个旧文件按 SHA-256
+  去重，10 个替换项，新增备份 **15,156,530 字节**）；`dist` 与安装版已替换 `vixiq.exe`、
+  `base_library.zip`、`app.js`、`index.html`、`style.css`，三处哈希一致；
+  两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124g-1795520603-1795520603-1795519082`、
+  `built_at 19:43:23`、`frozen=true`、健康正常；真实库 1605 作品 / 2108 图 / 433 作者，
+  壁纸库 1180（790 原图 + 390 壁纸夹）。
+- 下一步：操作进度第二、第三批；GitHub 未提交、未推送。
+
+### 4.51 简化菜单 Esc 顺序（2026-11-24，前端 `20261124f`，已发布到安装版）
+
+- **现象**：简化工具栏（`main.management-compact.management-peek`）里打开排序菜单后按一次 Esc，
+  排序菜单关闭的同时简化工具栏也被关闭，焦点停在一个高度/透明度都为 0 的排序按钮上。
+- **原因**：`wallpaper-admin.js` 的 Esc 处理器关闭下拉并恢复焦点后继续冒泡，命中
+  `management-toolbar.js` 的 document keydown，再次 `peekClose()`。
+- **修复**：壁纸下拉的 Esc 分支在关闭并恢复入口后调用 `e.stopPropagation()`，由下拉先消费
+  第一次 Esc；第二次 Esc 才冒泡到共享控制器关闭简化菜单。`management-toolbar.js` 的
+  peek Esc 分支改为**先** `peekBtn.focus()`（focus 事件可能重新打开浮层）再 `peekClose()`，
+  焦点留在可见叠三角。
+- **键盘验收**：新增 `_dev_runtime/diagnostics/check_wallpaper_toolbar_esc_ui.py`（隔离库，
+  Selenium 真实键盘）。1024 px 简化菜单：第一次 Esc 只关排序、`management-peek` 保持、
+  焦点回可见 `#wf-sort-btn`；第二次 Esc 关闭简化菜单、`management-compact` 保持、
+  焦点回 `#mgmt-peek`。普通展开态 Esc 只关下拉、不收起工具栏；320 px 筛选 Esc 路径通过。
+  日志 `wallpaper-toolbar-esc-ui.log`。
+- **回归**：T184 结构与纯函数保持；全量 **175/175**（115.90 s），日志
+  `_dev_runtime/diagnostics/trae-20261124f-wallpaper-esc-smoke.log`。
+- **候选/发布**：候选包 `built_at 19:18:02`（前端 `20261124f`）在 7813 用 Selenium 复测
+  普通 Esc 与简化菜单两次 Esc 通过。回滚清单
+  `_dev_runtime/backups/publish-20261124f-20261124-191855.json`（5 个旧文件按 SHA-256
+  去重，10 个替换项，新增备份 **14,432,114 字节**）；`dist` 与安装版已替换 `vixiq.exe`、
+  `base_library.zip`、`index.html`、`management-toolbar.js`、`wallpaper-admin.js`，
+  三处哈希一致；两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124f-1795513412-1795516743-1795519082`、
+  `built_at 19:18:02`、`frozen=true`、健康正常；真实库 1605 作品 / 2108 图，
+  壁纸库 1180（790 原图 + 390 壁纸夹）。
+- 作者管理菜单仍未开始；GitHub 未提交、未推送。
+
+### 4.50 壁纸管理菜单返修：筛选面板与焦点恢复（2026-11-24，前端 `20261124e`，已发布到安装版）
+
+- **筛选按钮打不开**：`#wf-filter-btn` 的 `aria-controls`、`WF_MENUS`、触发映射和
+  `#wf-filters` 的 CSS 选择器原来混用 `wf-filter-menu`，实际面板 ID 是 `wf-filters`，
+  `wfToggleMenu` 查不到面板直接返回。四处统一为 `wf-filters`，桌面与 320 px 的鼠标点击/
+  键盘 Enter 都能打开；`aria-expanded`、`aria-controls` 同步。
+- **关闭下拉恢复焦点**：`_wfMenuTrigger` 原来在 `wfCloseMenus()` 里关闭后清空，Esc 再读已空。
+  现在关闭前记录入口，Esc / 点击外部 / 切换另一个下拉 / 选择筛选或排序项都恢复入口焦点；
+  外部点击只在点到空白或非交互区域时回入口，点到其他输入/按钮保留用户的新焦点；
+  窄屏从「更多」打开已选操作后 Esc 回到可见的 `#wf-batch-btn`。
+- **回归**：T184 增加 `aria-controls="wf-filters"` 与触发映射断言；全量 **175/175**
+  （112.52 s），日志 `_dev_runtime/diagnostics/trae-20261124e-wallpaper-toolbar-recheck-smoke.log`。
+- **真实浏览器逐条验收**：`check_wallpaper_toolbar_ui.py` 在 1024 / 320 px 用实际鼠标点击
+  和键盘 Enter 打开筛选；选择已归属后叠加作品与分组（筛选数 3、结果 1 张）；「未分组」
+  叠加为 0 张；清除筛选恢复 2 张并保留关键词/排序；排序菜单 Esc、外部点击、切换筛选的
+  焦点与 `aria-expanded` 均正确；320 px 面板完整落在视口内并在面板内实际点选；窄屏更多
+  打开已选操作后 Esc 回 `#wf-batch-btn`。日志 `wallpaper-toolbar-ui.log`。
+- **候选/发布**：候选包 `built_at 18:39:03`（前端 `20261124e`）在 7813 用 Selenium 复测
+  筛选打开与 Esc 焦点通过。回滚清单 `_dev_runtime/backups/publish-20261124e-20261124-183952.json`
+  （5 个旧文件按 SHA-256 去重，10 个替换项，新增备份 **14,533,701 字节**）；
+  `dist` 与安装版已替换 `vixiq.exe`、`base_library.zip`、`index.html`、`style.css`、
+  `wallpaper-admin.js`，三处哈希一致；两处 `config/user.json` 未变。
+- **安装版验证**：7810 前端 `20261124e-1795513412-1795516743-1795516743`、
+  `built_at 18:39:03`、`frozen=true`、健康正常；页面 `aria-controls="wf-filters"`；
+  真实库 1605 作品 / 2108 图，壁纸库 1180（790 原图 + 390 壁纸夹）。
+- 作者管理菜单仍未开始；GitHub 未提交、未推送。
+
+### 4.49 壁纸管理工具栏两行布局（2026-11-24，前端 `20261124d`，已发布到安装版）
+
+- **桌面**：顶部保留总数与页码。第一行：搜索框（占剩余宽度、带清除）×、范围「壁纸夹 | 壁纸库」、
+  排序按钮（完整显示「排序：字段 升序/降序 ▾」）、全选本页、收起菜单；第二行：筛选（全部 /
+  已归属 / 未归属 / 重复图片 / 收藏）、作品、分组、清除筛选、扫描 ▾（扫描归属/深度扫描）、
+  整理 ▾（清理副本/管理分组）。壁纸夹路径、扫描状态与统计移到工具栏下方信息区。
+- **窄屏（≤980px）**：第一行搜索 + 更多 ▾；第二行范围下拉、排序（字段 + 箭头）、筛选 N ▾。
+  更多菜单含扫描、整理、全选与收起；有选择时出现「操作（已选 N 张）」。筛选弹层内含状态、
+  作品、分组与清除筛选。
+- **行为**：范围默认壁纸夹；壁纸库 = 壁纸夹文件 + 直接引用原图。切范围保留关键词、排序和作品，
+  清掉状态/分组筛选；壁纸夹空结果提供「到壁纸库搜索」。状态筛选只作用于壁纸夹文件。
+  排序默认文件名升序；首次改选最近修改/文件大小为降序、文件名升序；菜单可直接切方向，
+  文件名自然排序，最近修改/大小同值用文件名升序做稳定次级。排序不计入筛选数。
+  勾选后第二行切换为「已选 N 张 / 取消选择 / 查看信息 / 操作 ▾」，操作菜单保留原有设置、
+  归属、整理与危险删除分组；全选本页只选壁纸夹文件，图库原图仍为预览卡片。
+  下拉菜单点外部或 Esc 关闭并回到入口，滚轮仍滚主列表（`.lib-menu` 已列入可滚动浮层）。
+- **实现**：`index.html` 壁纸区块重构；`wallpaper-admin.js` 新增 `wallFilterEntries /
+  wallSortEntries / wallNextSort / wallFilterCount` 与 `initWallpaperToolbarLayout`、
+  `wallSyncScopeUI / wallSyncFiltersUI / wallSyncSortUI`；隐藏的 `#wf-sort` 保留为状态载体，
+  旧 ID（`#wf-search`、`#wf-work-filter`、`#wf-group-filter`、`#wf-filters`、
+  `#wf-extra-tools`、`#wf-scan-btn` 等）继续接线。`style.css` 新增壁纸工具栏两行/窄屏样式。
+- **回归**：新增 T184（静态结构 + Node 纯函数：范围合并、状态/作品/分组筛选、筛选计数、
+  自然排序、方向与稳定次级、首次改字段规则）。全量 **175/175**（109.76 s），日志
+  `_dev_runtime/diagnostics/trae-20261124d-wallpaper-toolbar-smoke.log`。
+- **浏览器验收**：`_dev_runtime/diagnostics/check_wallpaper_toolbar_ui.py`（隔离临时库）在
+  1280 / 1024 / 390 / 320 px 检查两行排列、无横向溢出、缩小与更多菜单、范围/作品/排序叠加、
+  全选仅壁纸夹、选中行切换、收起与叠三角、切页后搜索/排序/筛选保留、安全模式遮挡；
+  日志 `wallpaper-toolbar-ui.log`。
+- **发布（2026-11-24 17:46）**：候选包 `_dev_runtime/packages/vixiq`
+  （`built_at 17:43:32`，前端 `20261124d`）在 7813 隔离数据通过版本/健康与工具栏结构验收。
+  回滚清单 `_dev_runtime/backups/publish-20261124d-20261124-174615.json`
+  （6 个旧文件按 SHA-256 去重，12 个替换项，新增备份 **15,175,080 字节**）。
+  `dist/vixiq` 与 `D:\Program Files\Vixiq` 已替换 `vixiq.exe`、`base_library.zip`、
+  `app.js`、`index.html`、`style.css`、`wallpaper-admin.js`，部署脚本逐项校验哈希；
+  两处 `config/user.json` 未变。
+- **安装版验证**：7810 `/api/version` 前端 `20261124d-1795513412-1795513412-1795513412`、
+  `built_at 17:43:32`、`frozen=true`，健康正常；真实库 1605 作品 / 2108 图，
+  壁纸库 1180（790 图库原图 + 390 壁纸夹），页面含新工具栏结构。
+- 作者管理菜单尚未开始；GitHub 未提交、未推送。
+
+### 4.48 备份进度返修 + 壁纸库安全分级 + R18 单侧补齐（2026-11-24，前端 `20261124c`，已发布到安装版）
+
+- **备份进度四处返修**（复验单 `trae-backup-progress-review-20261124.md`）：
+  恢复失败按服务端最后真实阶段冻结，失败段静态红色、后续待执行，回滚独立动画结束即停；
+  运行中任务不再被 TTL 回收（只回收已结束任务、从 `finished_at` 起算），前端轮询瞬断
+  退避重试，长期不可查进入「状态未知」并保留任务身份；另存发布改为硬链接/rename
+  原子无覆盖并递增后缀；另存字节条复用同一个 `.op-fill` 只更新宽度/文本。
+- **壁纸库原图安全分级**（复验单第 1 节）：`_wall_library_items()` 不再按历史
+  `wallpaper_usage.artwork_id` 分级，改用当前 `pages.local_path` 的有效登记
+  （页未回收、作品未失效），Windows 路径反斜杠/大小写归一；无登记、多页冲突、
+  分级为空一律 `None`，安全模式下缩略图与大图预览都不请求真实图片。
+- **R18 历史标签单侧补齐**（复验单第 2 节）：`sync_r18_tag()` 分别检查 `tags_json`
+  与关联表，只补缺失的一侧，已有 R-18/R-18G 写法沿用；两侧齐全时不写库。
+- **回归**：新增 T183（壁纸库分级 8 种状态 + Node 真实卡片/预览遮挡）；T180 扩展
+  「仅 JSON / 仅关联表 / 两侧都有」三种历史状态与按标签查询。全量 **174/174**
+  （104.51 s），日志 `_dev_runtime/diagnostics/trae-20261124c-walllib-r18-smoke-20261124.log`。
+- **候选验收（2026-11-24 16:56 打包）**：`_dev_runtime/packages/vixiq` 在 7813 隔离数据
+  通过版本/健康、壁纸库分级（有效普通 0 / 旧记录指向现 R18 为 1 / 无当前页为未知）、
+  R18 单侧补齐与二次保存不重复；脚本 `check_20261124c_candidate.py`。打包为本地自用模式
+  （含 `to-top*` 立绘，不可公开分发）。
+- **发布**：回滚清单 `_dev_runtime/backups/publish-20261124c-20261124-165746.json`
+  （5 个旧文件按 SHA-256 去重，10 个替换项；新增备份 **15,135,881 字节**）。
+  `dist/vixiq` 与 `D:\Program Files\Vixiq` 已替换 `vixiq.exe`、`base_library.zip`、
+  `app.js`、`index.html`、`style.css`，部署脚本逐项哈希校验通过；两处 `config/user.json`
+  哈希在发布前后未变（dist `da8a9c…`，安装版 `388e90…`；后者与上次发布记录不同是用户
+  之后改过配置，本次未触碰）。
+- **安装版验证**：7810 `/api/version` 前端 `20261124c-1795510585-1795510585-1795462925`、
+  `built_at 2026-11-24 16:56:25`、`frozen=true`，`/api/health` ok；真实库 1605 作品 /
+  2108 图、`schema_migrations` 至 031、R18 作品 287；壁纸库 790 条图库原图
+  （716 普通 / 36 R18 / 38 未知）+ 390 壁纸夹 = 1180，与只读元数据核对一致。
+- GitHub 未提交、未推送。
+
+### 4.47 R18 字段同步标签与壁纸库原图（2026-11-24，前端 `20261124b`，已随安装版发布）
+
+- **R18 字段 → 标签（单向，字段为准）**：`PixivDatabase.sync_r18_tag` 在
+  `change_work_status` / `update_artwork`（含批量编辑）以及合并/拆分新建作品后执行：
+  is_r18=1 且没有 R18/R-18/R-18G 任一标签时补 `R18`；is_r18=0 时移除这些标签；
+  其他标签与 tags_json 原样保留；标签不反向改字段。`backfill_r18_tags()` 幂等补齐历史。
+- **真实库补齐（2026-11-24 03:50）**：19 个 is_r18=1 但缺标签的作品（18 个原「涩图/R18」
+  目录 + 新增 miku）已补 `R18`，复查缺 0、R18 关联 20；补齐前备份
+  `F:\Vixiq\data\backups\r18-tag-sync-20261124-035018.db`（2,994,176 字节）。
+  脚本 `_dev_runtime/diagnostics/backfill_r18_tags_20261124.py`。
+- **壁纸库纳入图库原图**：`/api/wallpaper/files` 新增 `library_items`（直接引用原图的
+  设置记录，按路径去重，可预览项限图库根目录内），`stats.library_refs/library_total`
+  沿用「壁纸夹 + 原图引用」口径；壁纸夹未指定时也返回原图。
+  前端新增「壁纸库」筛选（`data-f="library"`），并集展示壁纸夹文件与图库原图，
+  原图卡片标「图库原图」、只提供预览；搜索/分页/作品筛选覆盖两者。
+  排序控件 `#wf-sort` 从 extras 抽屉移到常驻筛选行（不再需要展开菜单）。
+- **验收**：T180（R18 字段同步/去重/移除/backfill 幂等/编辑接口）、T181（原图列表、
+  壁纸夹缺失、统计、静态接线）；全量 **172/172**（108.22 s），日志
+  `_dev_runtime/diagnostics/trae-r18-walllib-smoke-20261124.log`。
+  安装版实测：`/api/wallpaper/files` 返回 390 壁纸夹 + 790 图库原图（壁纸库 1180）、
+  页面含「壁纸库」筛选且排序在筛选行内、`/api/library/items` 已能看到补上的 `R18` 标签。
+- **状态**：两项都已包含在安装版 `20261124b`（`built_at 03:42:05`）；本轮未重新打包/部署。
+  源码未提交、GitHub 未推送。
+
+### 4.46 备份与恢复操作进度（第一批，2026-11-24，前端 `20261124b`，已发布到安装版）
+
+- **依据**：`_dev_runtime/diagnostics/vixiq-operation-progress-design-20261124.md` 第一批，
+  只改备份中心；流动/计数/分段充能三种条，300 ms 出现阈值，禁止按计时器估算百分比。
+- **服务端任务**：`POST /api/library/db-backup/job` 启动内存任务，
+  `GET /api/library/db-backup/job/<id>` 轮询。真实阶段：立即备份
+  `生成数据库副本 → 压缩备份 → 校验并保存`；对比 `校验备份 → 核对差异`；恢复
+  `校验备份 → 等待图库写入结束 → 保存恢复前快照 → 恢复并检查`；另存
+  `正在复制备份（字节数）→ 正在校验副本`；旧图 `保存当前版本 → 切换所选旧图`。
+  `backup_to_zip` / `preview_backup` / `restore_from_zip` 新增 `stage_cb`；
+  `BackupRestoreError` 带 `rolled_back` / `rollback_error`。任务完成才 `mark_dirty`，
+  任务启动/轮询本身不登记数据变化。
+- **前端**：`bkProgressHTML` / `bkRenderProgress` 统一画三种条；备份按钮先变
+  「备份中…」并禁用、旧图先变「切换中…」；对比弹窗先保留所选文件名和流动条；
+  恢复 4 段条放在确认按钮上方，成功/回滚后提供「定位恢复前快照」；关闭弹窗任务继续，
+  重开备份中心能看到上次恢复结果。`backups` 数据域只在备份中心打开且
+  `_backupView.mode==='center'` 时原位刷新，不会覆盖差异预览/恢复视图。
+- **验收**：T179（隔离临时库）覆盖五类任务阶段、确认失效、迁移失败 `rolled_back`；
+  Selenium 无头（隔离临时库 + 1.2~1.4 s 人为延时）验证按钮即时变化、备份充能停留在
+  压缩段、恢复成功/等待写入/异常回滚三条路径、390 px 窄屏无横向溢出、减少动态效果停用
+  循环光带、备份中关闭弹窗再重开仍显示状态、对比期间另一次备份完成不覆盖预览、旧图切换提示。
+  全量 **172/172**（118.59 s，2026-11-24 03:38 复跑；同工作区并行改动 T180/T181 一并纳管）。
+  证据：`_dev_runtime/diagnostics/trae-20261124b-deploy-smoke.log`（172/172）、
+  `backup-progress-ui-success.log`、`backup-progress-ui-rollback.log`，
+  脚本 `check_backup_progress_ui.py`。
+- **部署（2026-11-24 03:43）**：候选包 `_dev_runtime/packages/vixiq`
+  （`built_at 03:42:05`，前端 `20261124b`）在 7813 隔离数据验收：版本/健康、
+  备份任务 3 段、壁纸库 `library_items` 正常。回滚清单
+  `_dev_runtime/backups/publish-20261124b-20261124-034310.json`（6 个旧文件按 SHA-256
+  去重，新增备份 15,124,194 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的
+  `vixiq.exe` / `base_library.zip` / `app.js` / `style.css` / `index.html` /
+  `wallpaper-admin.js` 哈希一致，两处 `config/user.json` 哈希未变；
+  安装版 7810 健康、`/api/version` 前端 `20261124b`、`built_at 03:42:05`；
+  真实库 1605 作品 / 2193 图、`schema_migrations` 至 031，壁纸库
+  390 夹内文件 + 790 图库原图引用。GitHub 未提交。
 
 ### 4.45 第 6 节 备份与恢复（2026-11-23，前端 `20261123e`，已发布到安装版）
 

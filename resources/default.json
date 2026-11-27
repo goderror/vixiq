@@ -96,6 +96,10 @@
     "enabled": false,
     "blur_mode": true
   },
+  "ingest": {
+    "_note": "入库格式 (2026-11-26): auto_png=true 时, 下载/网页上传/文件与文件夹导入/反搜收件箱入库/反搜自动归档/手动磁盘同步实际登记的新图片, 静态 JPG/JPEG/WEBP/BMP/TIF 统一转为 PNG 后再登记; GIF/多帧 WEBP 等动图保留原格式与动画, 转换失败保留原格式并说明原因。默认 false: 保留原始格式、扩展名与原始字节。只影响之后入库的新图, 已有图片继续用手动「批量转 PNG」处理; 补图/修复/重下遇到用户明确选过 JPG 的页仍保持 JPG。仅扫描/预览/匹配已有记录时不改写文件。",
+    "auto_png": false
+  },
   "pixiv_actions": {
     "_note": "对 pixiv 账号的写操作 (下载完成后自动收藏作品)。auto_bookmark=true 时, 单个作品下载成功后会调用 pixiv 网页端的收藏接口 (原网页点 ♡ 红心)。bookmark_private=true 表示非公开收藏 (只有自己可见)。R18 作品一律走非公开收藏, 与 bookmark_private 无关。注意: 「点赞(いいね)」不做 —— pixiv 官方说明点赞无法取消、每作品每天仅一次。已收藏的作品一律跳过, 不改动原有的公开/非公开设置。",
     "auto_bookmark": true,

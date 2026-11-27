@@ -645,7 +645,8 @@ class PixivDownloader:
         失败时旧图字节、路径、状态和转换来源记录一律保持不变。
         """
         import uuid
-        from core.image_format import normalize_to_png, same_pixels, is_readable
+        from core.image_format import apply_ingest_format, same_pixels, is_readable
+        from utils.config import ingest_auto_png
         staging = Path(staging_path)
         dest_path = Path(final_path)
 
@@ -673,8 +674,18 @@ class PixivDownloader:
         # ② 转换到图库内的候选临时文件 (非图片后缀, 不会被对账扫到)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         candidate = dest_path.parent / f".vixiq-new-{uuid.uuid4().hex}.tmp"
-        conv = normalize_to_png(str(staging), out_path=str(candidate),
-                                delete_source=True, overwrite=True)
+        # 入库格式: 全局设置决定是否转 PNG; 该页明确选过 JPG 时尊重用户选择。
+        enabled = ingest_auto_png()
+        if enabled:
+            try:
+                rec = self.db.get_page_conversion(aid, pn)
+            except Exception:
+                rec = None
+            if rec and str(rec.get("format_choice") or "").lower() == "jpg":
+                enabled = False
+        conv = apply_ingest_format(str(staging), out_path=str(candidate),
+                                   enabled=enabled, delete_source=True,
+                                   overwrite=True)
         cur_path = Path(conv.get("current_path") or staging)
         if not conv.get("ok") and conv.get("reason") == "unreadable":
             self._cleanup_staging(candidate)
@@ -687,7 +698,15 @@ class PixivDownloader:
         # 转 PNG 时正式名用 .png; 动图/转换失败回退保持原扩展名
         if conv.get("current_format") == "png":
             dest_path = dest_path.with_suffix(".png")
-        single_frame = (conv.get("current_format") != "gif"
+        elif not conv.get("enabled"):
+            # 关闭自动转 PNG: 按实际格式修正扩展名, 但绝不重新编码
+            _fmt = str(conv.get("current_format") or "").lower()
+            _ext = {"jpg": ".jpg", "jpeg": ".jpg", "webp": ".webp", "gif": ".gif",
+                    "bmp": ".bmp", "tif": ".tif", "tiff": ".tif"}.get(_fmt)
+            if _ext:
+                dest_path = dest_path.with_suffix(_ext)
+        single_frame = (not conv.get("animated")
+                        and conv.get("current_format") != "gif"
                         and "动图" not in (conv.get("note") or "")
                         and "多帧" not in (conv.get("note") or ""))
 
@@ -830,9 +849,12 @@ class PixivDownloader:
             self.reporter.warn(
                 f"⚠ 读取新文件大小/指纹失败: {str(e).splitlines()[0]}")
         try:
+            # 关闭自动转 PNG 时只更新「当前格式」, 不留下任何转换来源字段
+            conv_db = conv if conv.get("enabled") else {
+                "current_format": conv.get("current_format"), "note": ""}
             self.db.store_page_result(
                 aid, pn, rel_path, fmd5, fsize,
-                conversion=conv, replace_conversion=bool(conv.get("ok")))
+                conversion=conv_db, replace_conversion=bool(conv.get("ok")))
         except Exception as e:
             # 事务已回滚: 同路径用可恢复副本恢复; 其他只清理本次创建的目标
             if same_path and bak and Path(bak).is_file():

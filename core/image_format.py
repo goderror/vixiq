@@ -20,6 +20,15 @@ STATIC_TO_PNG = {".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 # 动图/多帧: 继续按原格式处理 (GIF 一律不转, 多帧 WEBP 由运行时检测)
 ANIMATED_KEEP = {".gif"}
 
+# 实际解码格式 → 规范扩展名 (扩展名与真实格式不一致时以实际格式为准)
+FORMAT_EXT = {"jpeg": ".jpg", "jpg": ".jpg", "png": ".png", "gif": ".gif",
+              "webp": ".webp", "bmp": ".bmp", "tiff": ".tif", "tif": ".tif"}
+
+
+def extension_for_format(fmt: str, fallback: str = "") -> str:
+    """实际格式的规范扩展名; 未知格式退回调用方给的 fallback。"""
+    return FORMAT_EXT.get(str(fmt or "").lower(), fallback)
+
 
 def format_of(path: "str | Path") -> str:
     ext = Path(path).suffix.lower().lstrip(".")
@@ -117,6 +126,95 @@ def _publish_new_file(tmp: "str | Path", out: "str | Path") -> None:
         tmp_p.unlink()
 
 
+def apply_ingest_format(src_path: "str | Path", *,
+                        out_path: "str | Path | None" = None,
+                        enabled: bool = True,
+                        delete_source: bool = False,
+                        overwrite: bool = False,
+                        before_publish: "Callable[[], None] | None" = None) -> dict:
+    """按「入库时自动转为 PNG」设置处理一张待入库图片。
+
+    enabled=True: 完全复用 normalize_to_png 的既有入库规则 (静态图转 PNG/动图保留/
+                  校验后发布/转换来源字段), 仅补 enabled=True, record=True。
+    enabled=False: 不重新编码、不改扩展名, 只做可读性检查并按原字节复制到目标;
+                   返回 current_format/source 字段为空, record=False (不写转换记录)。
+                   复制走目标同目录临时文件 + 原子替换, 避免下载暂存与图库跨盘。
+    """
+    if enabled:
+        r = normalize_to_png(src_path, out_path=out_path, delete_source=delete_source,
+                             overwrite=overwrite, before_publish=before_publish)
+        r["enabled"] = True
+        r["record"] = True
+        return r
+
+    src = Path(src_path)
+    out = Path(out_path) if out_path else src
+    result = {
+        "ok": True, "enabled": False, "converted": False, "record": False,
+        "reason": "", "current_path": str(src), "current_format": format_of(src),
+        "current_size": None, "source_format": None, "source_file_size": None,
+        "source_md5": None, "converted_at": None,
+        "note": "保留原始格式", "animated": False,
+    }
+    try:
+        src_size = src.stat().st_size
+    except OSError as e:
+        result.update(ok=False, reason="unreadable",
+                      note=f"源文件不可读：{str(e).splitlines()[0]}")
+        return result
+    result["current_size"] = src_size
+    info = actual_format_info(src)
+    if not info.get("readable"):
+        result.update(ok=False, reason="unreadable",
+                      note=f"源图片无法打开：{info.get('error') or ''}".strip())
+        return result
+    fmt = str(info.get("actual_format") or "").lower() or format_of(src)
+    if fmt == "jpeg":
+        fmt = "jpg"
+    result["current_format"] = fmt
+    result["animated"] = bool(info.get("animated"))
+
+    try:
+        if out.resolve() != src.resolve():
+            if out.exists() and not overwrite:
+                result.update(ok=False, reason="exists", note="目标文件已存在")
+                return result
+            out.parent.mkdir(parents=True, exist_ok=True)
+            if overwrite and out.exists():
+                try:
+                    shutil.copy2(str(out), str(out.with_name(out.name + ".bak")))
+                except Exception:
+                    pass
+            tmp = out.with_name(f".vixiq-keep-{uuid.uuid4().hex}.tmp")
+            cleanup_failed = False
+            try:
+                shutil.copy2(str(src), str(tmp))
+                if overwrite:
+                    os.replace(str(tmp), str(out))
+                else:
+                    _publish_new_file(tmp, out)
+            finally:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    cleanup_failed = True
+            result["current_path"] = str(out)
+            result["current_size"] = out.stat().st_size
+            if delete_source:
+                try:
+                    src.unlink(missing_ok=True)
+                except Exception:
+                    cleanup_failed = True
+            if cleanup_failed:
+                result["cleanup_failed"] = True
+    except FileExistsError:
+        result.update(ok=False, reason="exists", note="目标文件已存在 (发布时检测到)，未覆盖")
+    except Exception as e:
+        result.update(ok=False, reason="copy_failed",
+                      note=f"保留原格式复制失败：{str(e).splitlines()[0]}")
+    return result
+
+
 def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = None,
                      delete_source: bool = False,
                      overwrite: bool = False,
@@ -155,22 +253,23 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
                       note=f"源文件不可读：{str(e).splitlines()[0]}")
         return result
     result["current_size"] = src_size
-    ext = src.suffix.lower()
+    # 实际解码格式才是真源: 扩展名可能是错的 (如 JPEG 字节命名成 .png)
+    info = actual_format_info(src)
+    if not info.get("readable"):
+        result.update(ok=False, reason="unreadable",
+                      note=f"源图片无法打开：{info.get('error') or ''}".strip())
+        return result
+    actual = str(info.get("actual_format") or "").lower()
+    if actual == "jpeg":
+        actual = "jpg"
+    animated = bool(info.get("animated"))
 
-    # ① 原生 PNG: 先完整解码校验, 再登记/复制 (损坏输入不得当成成功)
-    if ext == ".png":
+    def _keep_original(fmt: str, note: str) -> dict:
+        """原生 PNG/动图/不支持格式: 保持原字节; 显式 out_path 时复制到目标。"""
         try:
-            from PIL import Image as _Image
-            with _Image.open(src) as _im:
-                _im.load()
-        except Exception as e:
-            result.update(ok=False, reason="unreadable",
-                          note=f"源图片无法打开：{str(e).splitlines()[0]}")
-            return result
-        try:
-            if out.resolve() != src.resolve():
+            if out_path is not None and out.resolve() != src.resolve():
                 if out.exists() and not overwrite:
-                    result.update(ok=False, reason="exists", note="目标 PNG 已存在")
+                    result.update(ok=False, reason="exists", note="目标文件已存在")
                     return result
                 out.parent.mkdir(parents=True, exist_ok=True)
                 if overwrite and out.exists():
@@ -184,24 +283,39 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
                         src.unlink(missing_ok=True)
                     except Exception:
                         result["cleanup_failed"] = True
-            result["current_path"] = str(out)
-            result["current_format"] = "png"
-            result["current_size"] = out.stat().st_size
+            cur = out if out_path is not None else src
+            result["current_path"] = str(cur)
+            result["current_format"] = fmt
+            result["current_size"] = cur.stat().st_size
+            result["note"] = note
+            result["animated"] = animated
+            return result
         except Exception as e:
             result.update(ok=False, reason="copy_failed",
-                          note=f"PNG 复制失败：{str(e).splitlines()[0]}")
-        return result
+                          note=f"保留原格式复制失败：{str(e).splitlines()[0]}")
+            return result
 
-    # ② 动图/多帧: 保持原格式
-    if ext in ANIMATED_KEEP or is_animated(src):
-        result["note"] = "动图/多帧图片保持原格式"
-        return result
-    if ext not in STATIC_TO_PNG:
-        result["note"] = "非静态图片，保持原格式"
-        return result
+    # ① 原生 PNG: 先完整解码校验, 再登记/复制 (损坏输入不得当成成功)
+    if actual == "png":
+        try:
+            from PIL import Image as _Image
+            with _Image.open(src) as _im:
+                _im.load()
+        except Exception as e:
+            result.update(ok=False, reason="unreadable",
+                          note=f"源图片无法打开：{str(e).splitlines()[0]}")
+            return result
+        return _keep_original("png", "")
+
+    # ② 动图/多帧: 保持原格式 (显式目标时也按原字节复制)
+    if actual == "gif" or animated:
+        return _keep_original(actual or "gif", "动图/多帧图片保持原格式")
+    if actual not in ("jpg", "webp", "bmp", "tiff"):
+        return _keep_original(actual or format_of(src), "非静态图片，保持原格式")
 
     # ③ 静态图 → PNG: 先写临时文件并校验, 再替换目标
-    if out.exists() and out.resolve() != src.resolve():
+    same_target = out.resolve() == src.resolve()
+    if out.exists() and not same_target:
         if not overwrite:
             result.update(ok=False, reason="exists", note="目标 PNG 已存在")
             return result
@@ -244,7 +358,8 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
             # 发布前最后复核 (源身份/页登记), 有问题就地否决, 不碰正式路径
             if before_publish is not None:
                 before_publish()
-            if overwrite:
+            if overwrite or same_target:
+                # 同路径 (如 JPEG 字节命名成 .png): 临时文件已校验通过, 直接原子替换
                 os.replace(str(tmp), str(out))
             else:
                 _publish_new_file(tmp, out)
@@ -278,7 +393,7 @@ def normalize_to_png(src_path: "str | Path", *, out_path: "str | Path | None" = 
         "ok": True, "converted": True, "reason": "",
         "current_path": str(out), "current_format": "png",
         "current_size": out.stat().st_size,
-        "source_format": format_of(src), "source_file_size": src_size,
+        "source_format": actual, "source_file_size": src_size,
         "source_md5": src_md5, "converted_at": _now(), "note": "",
     })
     if cleanup_failed:

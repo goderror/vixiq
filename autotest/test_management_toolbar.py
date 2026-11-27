@@ -256,17 +256,22 @@ class ManagementToolbarTests(unittest.TestCase):
             )
 
         wallpapers = self._toolbar_for("wallpapers")
-        wf_selection = wallpapers.find_descendants(
-            lambda el: el.has_class("management-selection")
+        wf_selection = self.doc.find_by_id("wf-selection-row")
+        self.assertIsNotNone(wf_selection, "missing #wf-selection-row")
+        self.assertTrue(
+            wf_selection.has_class("wf-row-selection"),
+            "#wf-selection-row must be .wf-row-selection",
         )
-        self.assertEqual(len(wf_selection), 1)
-        wf_selection = wf_selection[0]
-        for ident in ("wf-batch", "wf-recycle", "wf-sel-count"):
+        self.assertTrue(
+            any(a is wallpapers for a in wf_selection.ancestors),
+            "#wf-selection-row must be inside wallpapers toolbar",
+        )
+        for ident in ("wf-batch-btn", "wf-batch-menu", "wf-recycle", "wf-sel-count"):
             element = self.doc.find_by_id(ident)
             self.assertIsNotNone(element, "missing #%s" % ident)
             self.assertTrue(
                 any(a is wf_selection for a in element.ancestors),
-                "#%s must be inside wallpapers .management-selection" % ident,
+                "#%s must be inside #wf-selection-row" % ident,
             )
 
     # ------------------------------------------------------------------ #

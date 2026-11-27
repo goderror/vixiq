@@ -13,6 +13,7 @@ import json
 import os
 import re
 import time
+import uuid
 import shutil
 import random
 from pathlib import Path
@@ -462,6 +463,103 @@ class ReverseSearch:
         except Exception as e:
             self.reporter.warn(f"元数据记录失败: {str(e).splitlines()[0]}")
 
+    def _align_archived_extension(self, path: Path) -> Path:
+        """归档文件扩展名与真实格式不符时改名 (内容不动)。
+
+        例: JPEG 字节被命名成 .png → 落到 .jpg。目标已存在时用「(2)」副本名,
+        绝不覆盖。关闭自动转 PNG 时也要执行, 保证图库不留「JPEG 挂 .png」。
+        """
+        from core.image_format import actual_format_info, extension_for_format
+        try:
+            info = actual_format_info(path)
+            ext = extension_for_format(info.get("actual_format"), path.suffix.lower())
+            if not ext or ext == path.suffix.lower():
+                return path
+            target = path.with_suffix(ext)
+            if target.exists():
+                i = 2
+                while True:
+                    cand = target.with_name(f"{target.stem} ({i}){target.suffix}")
+                    if not cand.exists():
+                        target = cand
+                        break
+                    i += 1
+            os.replace(str(path), str(target))
+            self.reporter.warn(
+                f"⚠ 扩展名与真实格式不符，已修正: {path.name} → {target.name}")
+            return target
+        except Exception:
+            return path
+
+    def _maybe_convert_archived(self, path: Path, *, artwork_id=None, page=None,
+                                overwrite: bool = False):
+        """反搜归档后按「入库时自动转为 PNG」设置就地转换。
+
+        返回 (最终路径, 转换结果 dict|None)。关闭设置、该页用户明确选过 JPG、
+        或本来就是 PNG/动图时原样返回。转换失败保留已归档的原格式并 warn。
+        """
+        from core.image_format import actual_format_info, apply_ingest_format
+        from utils.config import ingest_auto_png
+        if not ingest_auto_png():
+            return path, None
+        info = actual_format_info(path)
+        fmt = str(info.get("actual_format") or "").lower()
+        if (not info.get("readable") or info.get("animated")
+                or fmt not in ("jpeg", "webp", "bmp", "tiff")):
+            return path, None
+        if artwork_id not in (None, "") and self.db is not None:
+            try:
+                rec = self.db.get_page_conversion(str(artwork_id), int(page or 0))
+            except Exception:
+                rec = None
+            if rec and str(rec.get("format_choice") or "").lower() == "jpg":
+                return path, None
+        target = Path(path).with_suffix(".png")
+        conv = apply_ingest_format(path, out_path=target, enabled=True,
+                                   delete_source=True, overwrite=overwrite)
+        if conv.get("ok") and conv.get("converted"):
+            return Path(conv["current_path"]), conv
+        if not conv.get("ok"):
+            self.reporter.warn(
+                f"⚠ PNG 转换失败，已保留原格式: {Path(path).name}"
+                f"（{conv.get('note') or ''}）")
+        return path, conv
+
+    def _register_archived_page(self, artwork_id, page: int, path: Path,
+                                conv: "dict | None" = None,
+                                raise_on_error: bool = False,
+                                expect_unregistered: bool = False) -> None:
+        """归档即登记: 当前路径与转换来源记录同次提交 (不等对账)。
+
+        conv 为空表示本次没有转换 (关闭开关/原生 PNG/动图/已选 JPG): 只更新
+        当前格式并清空旧来源, 避免覆盖后仍挂着上一份文件的转换记录。
+        expect_unregistered=True 用于新页/加副本: 该页若已被另一操作抢先登记,
+        条件写入失败, 先到者与其文件保留。
+        """
+        if self.db is None:
+            return
+        try:
+            from core.image_format import format_of
+            from utils.hashutil import md5_of
+            rel = Path(path).relative_to(self.archive_path).as_posix()
+            conversion = conv if conv is not None else {
+                "current_format": format_of(path), "note": ""}
+            self.db.store_page_result(
+                str(artwork_id), int(page), rel, md5_of(str(path)),
+                os.path.getsize(str(path)), conversion=conversion,
+                replace_conversion=True,
+                expect_unregistered=expect_unregistered)
+        except Exception as e:
+            self.reporter.warn(
+                f"⚠ 归档登记/转换记录写入失败（文件已保留）: {str(e).splitlines()[0]}")
+            if raise_on_error:
+                raise
+
+    def _register_archived_png(self, artwork_id, page: int, path: Path,
+                               conv: dict) -> None:
+        """兼容旧调用: 带转换记录登记归档页。"""
+        self._register_archived_page(artwork_id, page, path, conv)
+
     @staticmethod
     def _decide_identity(img_name: str, saucenao_id, db_page):
         """身份信任链 (SauceNAO 识别最不可靠, 绝不让它覆盖既有事实):
@@ -488,12 +586,324 @@ class ReverseSearch:
         return {"action": "archive", "artwork_id": str(saucenao_id) if saucenao_id else None,
                 "page": 0, "trust": "unverified", "filename_id": None}
 
+    def _archive_target_extension(self, img_path: Path, artwork_id, page: int) -> str:
+        """归档最终输出扩展名: 先探测真实格式, 再决定是否会被自动转 PNG。
+
+        真实 JPEG 挂 .png 时按 .jpg 分配路径; 开关开启且可转静态图时为 .png。
+        目标路径必须在执行「跳过/加副本/覆盖」之前就按这里的结果算好。
+        """
+        from core.image_format import actual_format_info, extension_for_format
+        from utils.config import ingest_auto_png
+        info = actual_format_info(img_path)
+        fmt = str(info.get("actual_format") or "").lower()
+        actual_ext = extension_for_format(fmt, img_path.suffix.lower() or ".jpg")
+        if (not info.get("readable") or info.get("animated")
+                or fmt not in ("jpeg", "webp", "bmp", "tiff")):
+            return actual_ext
+        if not ingest_auto_png():
+            return actual_ext
+        if self.db is not None:
+            try:
+                rec = self.db.get_page_conversion(str(artwork_id), int(page or 0))
+            except Exception:
+                rec = None
+            if rec and str(rec.get("format_choice") or "").lower() == "jpg":
+                return actual_ext
+        return ".png"
+
+    def _resolve_archive_target(self, target_dir: Path, artwork_id, page: int,
+                                img_path: Path, existing: str):
+        """按真实格式/最终输出与「已存在」策略决定归档目标。
+
+        返回 (action, path, renamed, overwrite): action = skip/copy/overwrite。
+        冲突判断必须在移动源文件之前完成, 否则伪 PNG 会先落错扩展名再补救。
+        """
+        page = int(page or 0)
+        ext = self._archive_target_extension(img_path, artwork_id, page)
+        canonical = target_dir / f"{artwork_id}_p{page}{ext}"
+        # 占用判断必须同时看「磁盘上的最终格式路径」和「该逻辑页的已有登记」:
+        # 已有 p0.jpg 时, 开启自动 PNG 的 canonical p0.png 并不存在, 但 p0 已被占用。
+        rec_rel = ""
+        if self.db is not None:
+            try:
+                _rec = self.db.get_page_conversion(str(artwork_id), page)
+                rec_rel = str((_rec or {}).get("local_path") or "").replace("\\", "/")
+            except Exception:
+                rec_rel = ""
+        existing_path = (self.archive_path / rec_rel) if rec_rel else None
+        if existing_path is not None and not existing_path.exists():
+            existing_path = None
+        occupied = bool(rec_rel) or canonical.exists()
+        if occupied:
+            if existing == "skip":
+                return "skip", (existing_path or canonical), False, False, existing_path
+            if existing == "overwrite":
+                target = canonical
+                if existing_path is not None \
+                        and existing_path.suffix.lower() == canonical.suffix.lower():
+                    target = existing_path
+                old = (existing_path
+                       if existing_path is not None and existing_path != target else None)
+                return "overwrite", target, target.name != img_path.name, True, old
+            # copy: 从当前逻辑页之后找第一个「磁盘与登记都空闲」的页
+            for p in range(page + 1, page + 10000):
+                if any(target_dir.glob(f"{artwork_id}_p{p}.*")):
+                    continue
+                if self.db is not None:
+                    try:
+                        if self.db.get_page_conversion(str(artwork_id), p):
+                            continue
+                    except Exception:
+                        pass
+                cand = target_dir / f"{artwork_id}_p{p}{ext}"
+                return "copy", cand, cand.name != img_path.name, False, None
+            return "skip", (existing_path or canonical), False, False, existing_path
+        new_path, renamed = self._plan_archive_path(
+            target_dir, artwork_id, page, img_path, out_ext=ext)
+        return "copy", new_path, renamed, False, None
+
+    def _archive_commit(self, target_dir: Path, artwork_id, page: int,
+                        img_path: Path, target: Path, overwrite: bool,
+                        old_target: "Path | None" = None):
+        """先备好并校验归档产物, 再安全替换/登记; 失败回滚目标与登记。
+
+        整个归档按「源 / 临时产物 / 在位目标 / 旧登记」四份身份执行:
+          - 转换期间目标被他人换掉或新建 → 绝不覆盖, 源与后来文件都保留;
+          - 登记失败只在目标仍属本次且旧登记未变时恢复原图; 恢复失败/路径被占时
+            保留校验过的旧图备份, 并在结果里给出可恢复路径, 绝不谎称已保留;
+          - 登记成功后才删源与跨格式旧文件, 且删除前核对它们仍是开始时那一份。
+
+        返回 (ok, final_path, conv, error)。源文件只在登记成功且身份未变时才删除。
+        """
+        from core.image_format import (
+            _publish_new_file, actual_format_info, extension_for_format,
+            normalize_to_png,
+        )
+        from utils.hashutil import md5_of
+        target = Path(target)
+        img_path = Path(img_path)
+        candidate = target_dir / f".vixiq-archive-{uuid.uuid4().hex}.tmp"
+        old_backup = None
+
+        def _drop(p):
+            try:
+                if p is not None:
+                    Path(p).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        def _ident(p):
+            """(大小, MD5) 身份; 读不到返回 None。"""
+            try:
+                st = Path(p).stat()
+                h = md5_of(str(p))
+                return (int(st.st_size), h) if h else None
+            except Exception:
+                return None
+
+        def _same(p, ident) -> bool:
+            return ident is not None and _ident(p) == ident
+
+        def _reg_key(rec):
+            if not rec:
+                return ("", "")
+            return (str(rec.get("local_path") or "").replace("\\", "/"),
+                    str(rec.get("md5") or ""))
+
+        def _reg_now():
+            if self.db is None:
+                return None
+            try:
+                return self.db.get_page_conversion(str(artwork_id), int(page))
+            except Exception:
+                return None
+
+        try:
+            # ① 动手前记录身份: 源 / 在位目标 / 跨格式旧页 / 旧登记
+            src_ident = _ident(img_path)
+            target_existed = target.is_file()
+            target_ident = _ident(target) if target_existed else None
+            if old_target is not None:
+                old_target = Path(old_target)
+                if old_target != target and old_target.is_file():
+                    old_ident = _ident(old_target)
+                else:
+                    old_target, old_ident = None, None
+            else:
+                old_ident = None
+            old_reg_key = _reg_key(_reg_now())
+            page_registered = bool(old_reg_key[0])
+
+            info = actual_format_info(img_path)
+            fmt = str(info.get("actual_format") or "").lower()
+            need_convert = (target.suffix.lower() == ".png"
+                            and fmt in ("jpeg", "webp", "bmp", "tiff")
+                            and not info.get("animated"))
+            conv = None
+            if need_convert:
+                conv = normalize_to_png(
+                    str(img_path), out_path=str(candidate),
+                    delete_source=False, overwrite=True)
+                if not conv.get("ok") or not conv.get("converted"):
+                    _drop(candidate)
+                    return False, None, None, \
+                        (conv.get("note") or "PNG 转换失败，源文件保留在收件箱")
+            else:
+                shutil.copy2(str(img_path), str(candidate))
+            cinfo = actual_format_info(candidate)
+            cext = extension_for_format(
+                cinfo.get("actual_format"), candidate.suffix.lower())
+            if cext != target.suffix.lower():
+                _drop(candidate)
+                return False, None, None, "归档产物格式与目标扩展名不一致"
+            cand_md5 = md5_of(str(candidate))
+            cand_size = candidate.stat().st_size
+            cand_ident = (int(cand_size), cand_md5)
+
+            # ② 发布前复核: 页登记与在位目标必须仍是开始时的同一份
+            if _reg_key(_reg_now()) != old_reg_key:
+                _drop(candidate)
+                return False, None, None, "页登记已被其他操作改变，未覆盖；原图保留"
+            if overwrite and target_existed:
+                if not target.is_file() or _ident(target) != target_ident:
+                    _drop(candidate)
+                    return False, None, None, "目标文件已被其他操作改变，未覆盖；原图保留"
+                old_backup = target_dir / f".vixiq-archive-old-{uuid.uuid4().hex}.tmp"
+                try:
+                    shutil.copy2(str(target), str(old_backup))
+                except Exception as e:
+                    _drop(candidate)
+                    _drop(old_backup)
+                    return False, None, None, \
+                        f"旧图备份失败，未覆盖：{str(e).splitlines()[0]}"
+                if _ident(old_backup) != target_ident:
+                    _drop(candidate)
+                    _drop(old_backup)
+                    return False, None, None, "旧图备份校验失败，未覆盖；原图保留"
+            # ③ 发布: 仅覆盖开始时就存在且未变化的旧目标; 其余一律原子新建
+            try:
+                if overwrite and target_existed:
+                    os.replace(str(candidate), str(target))
+                else:
+                    _publish_new_file(candidate, target)
+            except FileExistsError:
+                _drop(candidate)
+                _drop(old_backup)
+                return False, None, None, "目标文件已存在，未覆盖"
+            except Exception as e:
+                _drop(candidate)
+                _drop(old_backup)
+                return False, None, None, f"归档发布失败：{str(e).splitlines()[0]}"
+            # ④ 登记: 新页/加副本用条件写入, 防另一操作抢先登记
+            try:
+                self._register_archived_page(
+                    artwork_id, page, target, conv, raise_on_error=True,
+                    expect_unregistered=not page_registered)
+            except Exception as e:
+                reason = str(e).splitlines()[0]
+                note = ""
+                keep_backup = old_backup
+                target_rel = ""
+                try:
+                    target_rel = target.relative_to(self.archive_path).as_posix()
+                except Exception:
+                    target_rel = ""
+                if old_backup is not None:
+                    target_ours = _same(target, cand_ident)
+                    now_key = _reg_key(_reg_now())
+                    if page_registered:
+                        # 覆盖既有页: 只有旧登记原封不动才把旧图恢复回去
+                        allow_restore = (now_key == old_reg_key)
+                    else:
+                        # 原本无登记: 页仍空才恢复; 已有人登记本产物则保留文件
+                        allow_restore = (now_key[0] == "")
+                        if now_key[0] == target_rel:
+                            note = "本次登记失败，但已有其他登记指向该文件，文件已保留"
+                    if target_ours and allow_restore:
+                        try:
+                            os.replace(str(old_backup), str(target))
+                            keep_backup = None
+                            if not _same(target, target_ident):
+                                note = f"旧图已恢复到目标但校验异常，请人工确认: {target}"
+                        except Exception as _e2:
+                            note = (f"旧图恢复失败，旧图备份保留在 {old_backup}"
+                                    f"（{str(_e2).splitlines()[0]}）")
+                    elif not target_ours:
+                        note = f"目标已被其他操作改变，未恢复旧图；旧图备份保留在 {old_backup}"
+                    elif not note:
+                        note = f"旧登记已被其他操作改变，未恢复旧图；旧图备份保留在 {old_backup}"
+                else:
+                    if _same(target, cand_ident):
+                        if target_rel and _reg_key(_reg_now())[0] == target_rel:
+                            note = "本次登记失败，但已有其他登记指向该文件，文件已保留"
+                        else:
+                            try:
+                                target.unlink()
+                            except Exception:
+                                pass
+                    else:
+                        note = "本次产物已被其他操作替换，未删除；原图保留"
+                # 备份绝不能在这里删: 恢复成功时它已被换回目标; 未恢复时它就是
+                # 唯一一份旧图, 已在上面的说明里给出可恢复路径
+                if old_backup is not None:
+                    head = ("归档登记失败，已恢复原图与原登记" if keep_backup is None
+                            else "归档登记失败，原登记未变")
+                else:
+                    head = "归档登记失败"
+                tail = f"；{note}" if note else "；原图保留在收件箱"
+                return False, None, None, f"{head}{tail}: {reason}"
+            _drop(old_backup)
+            # ⑤ 覆盖时若旧页是另一种扩展名 (p0.jpg → p0.png), 新页登记成功后才处理旧文件
+            _old_note = None
+            if old_target is not None and old_target != target:
+                if old_target.is_file():
+                    if _same(old_target, old_ident):
+                        try:
+                            old_target.unlink()
+                        except Exception:
+                            try:
+                                self.db.set_pending_recycle(
+                                    artwork_id, page,
+                                    old_target.relative_to(self.archive_path).as_posix(),
+                                    old_ident[1], old_ident[0])
+                            except Exception:
+                                pass
+                            _old_note = "新页已登记，旧格式文件待回收"
+                    else:
+                        _old_note = (f"新页已登记；旧格式文件已被其他操作替换，"
+                                     f"已保留: {old_target}")
+            # ⑥ 源文件: 身份未变才删除; 被换入的新文件必须保留
+            if not img_path.exists():
+                return True, target, conv, _old_note
+            if src_ident is None:
+                _src_note = "已归档并登记；待反搜源身份无法确认，未删除"
+            elif not _same(img_path, src_ident):
+                _src_note = "已归档并登记；待反搜源已被其他操作替换，已保留新文件"
+            else:
+                try:
+                    if Path(os.path.abspath(img_path)) == Path(os.path.abspath(target)):
+                        return True, target, conv, _old_note
+                    img_path.unlink()
+                except Exception:
+                    return True, target, conv, "已归档并登记，待反搜源仍在收件箱"
+                return True, target, conv, _old_note
+            return True, target, conv, (f"{_old_note}；{_src_note}"
+                                        if _old_note else _src_note)
+        except Exception as e:
+            _drop(candidate)
+            if old_backup is not None:
+                return False, None, None, (
+                    f"归档失败：{str(e).splitlines()[0]}；"
+                    f"旧图备份保留在 {old_backup}")
+            return False, None, None, f"归档失败：{str(e).splitlines()[0]}"
+
     @staticmethod
     def _plan_archive_path(target_dir: Path, artwork_id, page: int,
-                           img_path: Path) -> "tuple[Path, bool]":
-        """规范归档命名: {作品ID}_p{页码}{原后缀}; 目标占用 → 页码递增绝不覆盖。
+                           img_path: Path,
+                           out_ext: "str | None" = None) -> "tuple[Path, bool]":
+        """规范归档命名: {作品ID}_p{页码}{最终输出后缀}; 目标占用 → 页码递增绝不覆盖。
         返回 (新路径, 是否发生改名)。矛盾溯源信息由调用方写 reverse_search_history。"""
-        ext = img_path.suffix.lower() or ".jpg"
+        ext = (out_ext or img_path.suffix.lower() or ".jpg")
         page = int(page or 0)
         candidate = target_dir / f"{artwork_id}_p{page}{ext}"
         while candidate.exists():
@@ -646,30 +1056,43 @@ class ReverseSearch:
                     if archive:
                         # 目标名占用按「已存在」选项处理:
                         # copy=页码递增加副本(绝不覆盖) / skip=跳过 / overwrite=覆盖
-                        ext = img_path.suffix.lower() or ".jpg"
                         page = int(decision["page"] or 0)
-                        canonical = target_dir / f"{decision['artwork_id']}_p{page}{ext}"
-                        if canonical.exists() and existing == "skip":
+                        # 先探测真实格式与最终输出, 再决定冲突策略 (伪 PNG 不能先落 .png)
+                        action, new_path, renamed, _overwrite, _old_target = \
+                            self._resolve_archive_target(
+                                target_dir, decision["artwork_id"], page,
+                                img_path, existing)
+                        if action == "skip":
                             self.reporter.warn(
-                                f"⏭ {original_name} 目标 {canonical.name} 已存在, "
+                                f"⏭ {original_name} 目标 {new_path.name} 已存在, "
                                 f"按选项跳过(文件留在待反搜区)")
                             self.results["skipped"].append({
                                 "file": img_path.name,
                                 "artwork_id": decision["artwork_id"],
                                 "reason": "目标文件夹已有同名文件，按「已存在」选项跳过"})
                             continue
-                        if canonical.exists() and existing == "overwrite":
-                            new_path = canonical
-                            renamed = canonical.name != original_name
+                        if action == "overwrite":
                             self.reporter.warn(
-                                f"⚠ {original_name} 覆盖已有文件 {canonical.name}")
-                        else:
-                            new_path, renamed = self._plan_archive_path(
-                                target_dir, decision["artwork_id"],
-                                decision["page"], img_path)
-                            if renamed:
-                                self.reporter.log(f"按规范命名: {original_name} → {new_path.name}")
-                        shutil.move(str(img_path), str(new_path))
+                                f"⚠ {original_name} 覆盖已有文件 {new_path.name}")
+                        elif renamed:
+                            self.reporter.log(f"按规范命名: {original_name} → {new_path.name}")
+                        # 「加副本」可能实际落成 p1: 登记/格式选择都跟着最终文件名
+                        _actual_key = pixiv_natural_key(new_path.name)
+                        actual_page = int(_actual_key[1]) if _actual_key else int(page or 0)
+                        ok, final_path, _conv, _note = self._archive_commit(
+                            target_dir, decision["artwork_id"], actual_page,
+                            img_path, new_path, _overwrite, _old_target)
+                        if not ok:
+                            self.reporter.warn(f"⚠ 归档失败(源保留): {_note}")
+                            self.results["failed"].append({
+                                "file": original_name,
+                                "reason": f"归档失败，源保留在待反搜区: {_note}"})
+                            continue
+                        new_path = final_path
+                        if _note:
+                            self.reporter.warn(f"⚠ {_note}")
+                        if new_path.name != original_name:
+                            renamed = True
                         tag = "双来源互证" if trust == "consistent" else "仅 SauceNAO 参考, 未人工确认"
                         self.reporter.log(
                             f"识别成功({tag}) {new_path.name} → "
@@ -712,10 +1135,13 @@ class ReverseSearch:
                                 "reason": f"目标文件夹 {dest_dir.name} 已有同名文件"})
                         else:
                             shutil.move(str(img_path), str(dest))
+                            dest = self._align_archived_extension(dest)
+                            dest, _ = self._maybe_convert_archived(dest)
                             self.reporter.log(
                                 f"来源识别(外网) {original_name} → {dest_dir.name}")
                         self.results["success"].append({
-                            "file": original_name, "artwork_id": None,
+                            "file": dest.name if dest.exists() else original_name,
+                            "artwork_id": None,
                             "author": f"{site}@{handle}" if handle else site,
                             "dest": str(dest) if dest.exists() else None,
                             "archived": True, "trust": "saucenao", "site": site})
