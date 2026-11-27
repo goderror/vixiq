@@ -2836,8 +2836,8 @@ _WALL_FILES_LOCK = threading.Lock()
 # ── 🖼 壁纸库生成 ──
 # 从图库挑够格的页复制进壁纸夹 (core/wallpaper_lib.py)。上千行判定 + 几百 MB 的复制,
 # 同样不适合放在请求里等 → 后台线程 + 前端轮询, 与上面那份状态一模一样。
-_WALL_LIB = {"status": "idle", "done": 0, "total": 0, "current": "", "error": "",
-             "at": 0.0, "result": None}
+_WALL_LIB = {"status": "idle", "stage": "", "done": 0, "total": 0,
+             "current": "", "error": "", "at": 0.0, "result": None}
 _WALL_LIB_LOCK = threading.Lock()
 
 
@@ -10302,17 +10302,31 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                             "error": "还没指定壁纸夹（设置 → 桌面与壁纸 → 壁纸夹）"}), 400
         with _WALL_LIB_LOCK:
             if _WALL_LIB["status"] == "running":
-                return jsonify({"ok": True, "already": True})
-            _WALL_LIB.update({"status": "running", "done": 0, "total": 0,
-                              "current": "", "error": "", "result": None})
+                return jsonify({"ok": True, "already": True, "dir": str(d),
+                                "task": dict(_WALL_LIB)})
+            _WALL_LIB.update({"status": "running", "stage": "读取图库候选",
+                              "done": 0, "total": 0, "current": "",
+                              "error": "", "result": None})
+            started = dict(_WALL_LIB)
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
 
         def _task():
             from core.wallpaper_lib import generate
             try:
                 def _prog(done, total, name):
+                    # 总数出现前是「读取图库候选」; 检查完最后一张到登记完成之间是
+                    # 「登记壁纸」—— 界面据此在 100% 后继续说明还在登记
+                    if int(total or 0) <= 0:
+                        stage = "读取图库候选"
+                    elif int(done or 0) >= int(total):
+                        stage = "登记壁纸"
+                    else:
+                        stage = "检查图片"
                     with _WALL_LIB_LOCK:
-                        _WALL_LIB.update({"done": done, "total": total, "current": name})
+                        _WALL_LIB.update({"stage": stage,
+                                          "done": int(done or 0),
+                                          "total": int(total or 0),
+                                          "current": name or ""})
 
                 db = _db()
                 try:
@@ -10321,11 +10335,11 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     db.close()
             except Exception as e:
                 with _WALL_LIB_LOCK:
-                    _WALL_LIB.update({"status": "error", "current": "",
+                    _WALL_LIB.update({"status": "error", "stage": "", "current": "",
                                       "error": f"{type(e).__name__}: {e}"})
                 return
             with _WALL_LIB_LOCK:
-                _WALL_LIB.update({"status": "done", "at": time.time(),
+                _WALL_LIB.update({"status": "done", "stage": "", "at": time.time(),
                                   "current": "", "result": res})
             try:
                 audit_log.record("add", "生成壁纸",
@@ -10335,7 +10349,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 pass
 
         threading.Thread(target=_task, daemon=True, name="wall-lib").start()
-        return jsonify({"ok": True, "dir": str(d)})
+        return jsonify({"ok": True, "dir": str(d), "task": started})
 
     @app.route("/api/library/open-folder", methods=["POST"])
     def api_library_open_folder():

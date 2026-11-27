@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127j`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127k`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127j`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127k`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.79 壁纸库「从图库生成壁纸」接入共用进度（2026-11-27，前端 `20261127k`，已发布到安装版）
+
+- **范围**：只接设置页「桌面与壁纸 → 壁纸库」的「从图库生成壁纸」；壁纸副本扫描等
+  入口不变。
+- **后端**：`generate` 在候选数确定时先回调 `(0, total, "")`，每张图片**处理完**
+  （含跳过/缺失/复制失败）再推进 done；`_WALL_LIB` 新增 `stage`，依次为
+  「读取图库候选 → 检查图片 → 登记壁纸」，完成/错误清空。`POST /api/wallpaper/lib/scan`
+  的启动响应与 `already` 响应都带任务快照，运行中重复提交只接回原任务。
+- **前端**：按钮下方新增任务区，复用共用流动/计数条；点击立即禁用并显示「正在生成…」，
+  约 300 ms 后仍准备则显示「正在读取图库候选」；有总数后切「已检查 N／M 张」，100%
+  后仍登记显示「正在登记壁纸」；结果按已检查/已生成/已存在/筛掉/缺失/失败展示。
+  快速完成不闪进度条；轮询只有一套，短暂 GET 失败保留最后进度继续；切页返回或刷新
+  进入设置页从 GET 接回任务。
+- **回归**：新增 `test_wall_lib_progress.cjs` 10 项；T133 扩展回调顺序、三阶段延迟、
+  `already`、空候选、复制失败（独立 DB 打桩）。全量 **189/189**（155.70 s），日志
+  `_dev_runtime/diagnostics/trae-20261127k-wall-lib-progress-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 18:45:04`，前端 `20261127k`）在 7813
+  通过原有 8 项检查、上一轮回收站文件核验，以及新增壁纸库 API/UI 检查（含 420px
+  窄窗与 reduced-motion）；回滚清单
+  `_dev_runtime/backups/publish-20261127k-20261127-185229.json`（4 个旧文件、8 个
+  替换项、15,197,820 字节）。dist 与安装版 exe `f6a18b725362…`、base_library
+  `abf807d74924…`、app.js `56100f032a4e…`、index.html `06bba3304d9b…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127k-1795776304-1795695345-1795519082`、健康正常，壁纸库与回收站 UI 检查通过。
 
 ### 4.78 回收站「全部恢复」文件核验返修：缺失不登记 + 实内容比对（2026-11-27，前端 `20261127j`，已发布到安装版）
 

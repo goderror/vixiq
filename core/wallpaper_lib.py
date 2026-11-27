@@ -106,8 +106,10 @@ def generate(db, wall_dir, img_root, progress_cb=None) -> dict:
     有个同名文件但没登记 (上次复制完登记失败) 会被覆盖 —— 名字是按血缘定的, 内容同一份,
     覆盖等于把上次没收尾的事做完。
 
-    ``progress_cb(done, total, name)`` 每张图前调一次 —— 上千行 + 几百 MB 的复制要跑一阵,
-    没进度的话界面上看着就像卡死。
+    ``progress_cb(done, total, name)``: 候选数一确定先报一次 ``(0, total, "")``,
+    之后每张图片**处理完**再报 ``(i, total, name)`` —— 界面上的 N 表示已检查完的数量,
+    跳过/缺失/失败的图片也照样推进。上千行 + 几百 MB 的复制要跑一阵, 没进度的话
+    界面上看着就像卡死。
 
     返回统计 (给界面显示, 也是「门槛定得对不对」的唯一依据)::
 
@@ -132,43 +134,51 @@ def generate(db, wall_dir, img_root, progress_cb=None) -> dict:
     stat = {"scanned": total, "passed": 0, "added": 0, "skipped_exist": 0,
             "skipped_size": 0, "skipped_ratio": 0, "skipped_ext": 0, "missing": 0}
     t0 = time.time()
-    for i, r in enumerate(rows, 1):
-        if progress_cb:
-            try:
-                progress_cb(i, total, f"{r['artwork_id']}_p{r['page_num']}")
-            except Exception:
-                pass                        # 进度回调是界面的事, 坏了不能连累生成
-        gate = wallpaper_gate(r["width"], r["height"])
-        if gate != "ok":
-            stat["skipped_size" if gate == "size" else "skipped_ratio"] += 1
-            continue
-        stat["passed"] += 1
-        rel = str(r["rel"] or "")
-        src = root / rel
-        if not src.is_file():
-            stat["missing"] += 1            # 记录里那一页的文件已不在盘上 (对账/自检该管的活)
-            continue
-        ext = Path(rel).suffix.lower()
-        if ext not in WALL_EXTS:
-            # 壁纸夹是给 Windows 幻灯片读的, webp/avif 放进去也播不出来, 白占地方
-            stat["skipped_ext"] += 1
-            continue
-        name = wallpaper_file_name(r["artwork_id"], r["page_num"], ext)
-        if name in registered:
-            stat["skipped_exist"] += 1
-            continue
+    if progress_cb:
         try:
-            shutil.copy2(str(src), str(wall / name))
-            size = (wall / name).stat().st_size
-        except Exception as e:
-            if len(errors) < MAX_ERRORS:
-                errors.append(f"{name}: {type(e).__name__}: {e}")
-            continue
-        registered.add(name)
-        items.append({"artwork_id": r["artwork_id"], "page_num": r["page_num"],
-                      "file_name": name, "file_md5": r["md5"], "src_md5": r["md5"],
-                      "file_size_bytes": size,
-                      "width": int(r["width"]), "height": int(r["height"])})
+            progress_cb(0, total, "")       # 候选数确定即报总数, 界面从流动切到计数
+        except Exception:
+            pass                            # 进度回调是界面的事, 坏了不能连累生成
+    for i, r in enumerate(rows, 1):
+        try:
+            gate = wallpaper_gate(r["width"], r["height"])
+            if gate != "ok":
+                stat["skipped_size" if gate == "size" else "skipped_ratio"] += 1
+                continue
+            stat["passed"] += 1
+            rel = str(r["rel"] or "")
+            src = root / rel
+            if not src.is_file():
+                stat["missing"] += 1        # 记录里那一页的文件已不在盘上 (对账/自检该管的活)
+                continue
+            ext = Path(rel).suffix.lower()
+            if ext not in WALL_EXTS:
+                # 壁纸夹是给 Windows 幻灯片读的, webp/avif 放进去也播不出来, 白占地方
+                stat["skipped_ext"] += 1
+                continue
+            name = wallpaper_file_name(r["artwork_id"], r["page_num"], ext)
+            if name in registered:
+                stat["skipped_exist"] += 1
+                continue
+            try:
+                shutil.copy2(str(src), str(wall / name))
+                size = (wall / name).stat().st_size
+            except Exception as e:
+                if len(errors) < MAX_ERRORS:
+                    errors.append(f"{name}: {type(e).__name__}: {e}")
+                continue
+            registered.add(name)
+            items.append({"artwork_id": r["artwork_id"], "page_num": r["page_num"],
+                          "file_name": name, "file_md5": r["md5"], "src_md5": r["md5"],
+                          "file_size_bytes": size,
+                          "width": int(r["width"]), "height": int(r["height"])})
+        finally:
+            # 本张处理完 (含跳过/缺失/失败) 才推进 done, 界面上的 N 才是「已检查」
+            if progress_cb:
+                try:
+                    progress_cb(i, total, f"{r['artwork_id']}_p{r['page_num']}")
+                except Exception:
+                    pass
 
     res = db.add_wallpapers(items)
     stat["added"] = int(res.get("added") or 0)

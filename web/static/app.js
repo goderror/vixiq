@@ -3347,58 +3347,183 @@ async function testAiText() {
 // ===== 🖼 壁纸库  从图库按规则生成壁纸 =====
 // 规则在 core/wallpaper_lib.py (尺寸 + 比例两道门槛, 原样复制不缩放不裁剪)。上千行判定
 // 加上几百 MB 的复制, 放在请求里等不起 → 后端后台线程跑, 这里轮询进度。
+// 进度接设置卡片里的共用控件: 先流动「读取图库候选」, 拿到总数后按「已检查 N／M 张」,
+// 最后一张检查完到登记结束之间显示「正在登记壁纸」。
 let wallLibTimer = null;
+let _wallLibStarting = false;
+let _wallLibLast = null;
+
+function setWallLibBtnBusy(busy) {
+  const btn = $('#wall-lib-run');
+  if (btn) btn.disabled = !!busy;
+}
+
+function ensureWallLibTaskControls() {
+  const host = $('#wall-lib-progress');
+  if (!host) return null;
+  if (host.dataset.ready !== '1') {
+    host.innerHTML = opProgressHtml('wall-lib-flow', {
+        mode: 'flow', text: '正在读取图库候选…' }) +
+      opProgressHtml('wall-lib-count', {
+        mode: 'count', label: '从图库生成壁纸',
+        text: '已检查 0／0 张', hidden: true });
+    host.dataset.ready = '1';
+  }
+  return host;
+}
+
+// 每次新任务重新走约 300ms 出现阈值: 上一轮留下的 op-shown 不能让快速完成闪一下
+function resetWallLibReveal() {
+  const host = $('#wall-lib-progress');
+  if (!host) return;
+  if (host.querySelectorAll) {
+    host.querySelectorAll('.op-progress').forEach(el => {
+      el.classList.remove('op-fade-in', 'op-shown');
+      delete el.dataset.opReveal;
+    });
+  }
+  opRevealProgressIn(host);
+}
+
+function paintWallLibTask(d) {
+  _wallLibLast = d || null;
+  const area = $('#wall-lib-task');
+  const st = $('#wall-lib-state');
+  const running = !!(d && d.status === 'running');
+  if (!running) {
+    if (area) area.classList.add('hidden');
+    setWallLibBtnBusy(false);
+    return;
+  }
+  if (area) area.classList.remove('hidden');
+  setWallLibBtnBusy(true);
+  ensureWallLibTaskControls();
+  const total = Number(d.total || 0);
+  const done = Math.min(Number(d.done || 0), total || Number(d.done || 0));
+  const counting = total > 0;
+  const registering = counting && done >= total;
+  const stage = registering ? '登记壁纸' : (counting ? '检查图片' : '读取图库候选');
+  opProgressPaint('wall-lib-flow', {
+    mode: 'flow', hidden: counting, stage,
+    text: registering ? '正在登记壁纸…'
+      : (counting ? '正在检查图片…' : '正在读取图库候选…'),
+  });
+  opProgressPaint('wall-lib-count', {
+    mode: 'count', hidden: !counting, done, total,
+    label: '从图库生成壁纸', stage,
+    text: `已检查 ${done}／${total} 张`,
+  });
+  if (st) st.textContent = registering ? '正在登记壁纸…' : '正在生成…';
+}
+
+function wallLibResultText(res) {
+  if (!res) return '还没生成过';
+  const scanned = Number(res.scanned || 0);
+  const added = Number(res.added || 0);
+  const exist = Number(res.skipped_exist || 0);
+  if (!scanned) return '图库没有可参与生成的图片';
+  const drop = [];
+  if (res.skipped_size) drop.push('尺寸不合 ' + res.skipped_size);
+  if (res.skipped_ratio) drop.push('比例不合 ' + res.skipped_ratio);
+  if (res.skipped_ext) drop.push('格式不支持 ' + res.skipped_ext);
+  let s = `已检查 ${scanned} 张：已生成 ${added} 张，已存在 ${exist} 张`;
+  if (!Number(res.passed || 0)) {
+    s += '；没有符合条件的图片' + (drop.length ? `（${drop.join('、')}）` : '');
+  } else {
+    if (drop.length) s += '；筛掉：' + drop.join('、');
+    if (res.missing) s += `；文件已不在 ${res.missing} 张`;
+    const errors = Array.isArray(res.errors) ? res.errors : [];
+    if (errors.length) {
+      s += `；失败 ${errors.length} 项` + (errors[0] ? `（${errors[0]}）` : '');
+    }
+  }
+  if (res.elapsed != null) s += `；用时 ${res.elapsed}s`;
+  return s;
+}
+
+function wallLibPaint(d) {
+  const st = $('#wall-lib-state');
+  if (!st) return;
+  if (d && d.status === 'running') return;   // 运行态由 paintWallLibTask 画
+  if (d && d.status === 'error') {
+    st.textContent = '生成失败：' + (d.error || '未知错误');
+    return;
+  }
+  st.textContent = wallLibResultText(d && d.result);
+}
+
+function stopWallLibPolling() {
+  if (wallLibTimer) { clearInterval(wallLibTimer); wallLibTimer = null; }
+}
+
+function startWallLibPolling() {
+  if (wallLibTimer) return;
+  const tick = async () => {
+    let d = null;
+    try { d = await api('/api/wallpaper/lib'); }
+    catch (e) { return; }          // 短暂读取失败: 保留最后进度, 下个 tick 继续
+    if (!d) return;
+    paintWallLibTask(d);
+    if (d.status === 'running') return;
+    stopWallLibPolling();
+    wallLibPaint(d);
+  };
+  tick();
+  wallLibTimer = setInterval(tick, 600);
+}
 
 async function loadWallLib() {
-  if (wallLibTimer) { clearTimeout(wallLibTimer); wallLibTimer = null; }
   const st = $('#wall-lib-state');
   if (!st) return;
   let d = null;
   try { d = await api('/api/wallpaper/lib'); }
-  catch (e) { st.textContent = '读取失败: ' + (e.message || e); return; }
+  catch (e) {
+    // 已在跟踪的运行任务保留最后进度; 没有任务时才如实说读取失败
+    if (!(_wallLibLast && _wallLibLast.status === 'running')) {
+      st.textContent = '读取失败: ' + (e.message || e);
+    }
+    return;
+  }
+  paintWallLibTask(d);
   wallLibPaint(d);
-  if (d.status === 'running') wallLibTimer = setTimeout(loadWallLib, 1000);
+  if (d && d.status === 'running') startWallLibPolling();
+  else stopWallLibPolling();
 }
 
 async function runWallLib() {
-  const btn = $('#wall-lib-run');
-  if (btn) btn.disabled = true;
+  if (_wallLibStarting || (_wallLibLast && _wallLibLast.status === 'running')) return;
+  _wallLibStarting = true;
+  setWallLibBtnBusy(true);
+  const st = $('#wall-lib-state');
+  if (st) st.textContent = '正在生成…';
+  const area = $('#wall-lib-task');
+  if (area) area.classList.remove('hidden');
+  ensureWallLibTaskControls();
+  resetWallLibReveal();
+  opProgressPaint('wall-lib-flow', {
+    mode: 'flow', hidden: false, stage: '读取图库候选',
+    text: '正在读取图库候选…',
+  });
+  opProgressPaint('wall-lib-count', { mode: 'count', hidden: true });
   try {
     const r = await api('/api/wallpaper/lib/scan', { method: 'POST' });
     // 服务端出错时 api() 因为拿得到 JSON 而**不会抛**, 只返回 {ok:false, error} ——
     // 必须显式判 ok, 否则会把错误体当成功 (与 pickWallDir 同一个坑)。
     if (!r || r.ok !== true) throw new Error((r && r.error) || '服务端没有返回结果');
     if (!r.already) toast('开始扫描图库，可先做别的事', 'ok');
-    await loadWallLib();
+    if (r.task) paintWallLibTask(r.task);
+    if (r.task && r.task.status === 'running') startWallLibPolling();
+    else await loadWallLib();
   } catch (e) {
-    const st = $('#wall-lib-state');
+    stopWallLibPolling();
+    _wallLibLast = null;
+    if (area) area.classList.add('hidden');
     if (st) st.textContent = '生成失败：' + (e.message || e);
     toast('生成失败: ' + (e.message || e), 'err');
-  } finally { if (btn) btn.disabled = false; }
-}
-
-function wallLibPaint(d) {
-  const st = $('#wall-lib-state');
-  if (!st) return;
-  const res = d.result || null;
-  if (d.status === 'running') {
-    const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
-    st.textContent = '生成中 ' + pct + '%（' + d.done + '/' + d.total + '）'
-      + (d.current ? ' · ' + d.current : '');
-    return;
+  } finally {
+    _wallLibStarting = false;
+    if (!(_wallLibLast && _wallLibLast.status === 'running')) setWallLibBtnBusy(false);
   }
-  if (d.status === 'error') { st.textContent = '生成失败：' + (d.error || ''); return; }
-  if (!res) { st.textContent = '还没生成过'; return; }
-  let s = '新增 ' + res.added + ' 张 · 壁纸夹里已有 ' + res.skipped_exist + ' 张'
-    + '（扫描 ' + res.scanned + ' 张，过门槛 ' + res.passed + ' 张，用时 ' + res.elapsed + 's）';
-  const drop = [];
-  if (res.skipped_size) drop.push('尺寸不合 ' + res.skipped_size);
-  if (res.skipped_ratio) drop.push('比例不合 ' + res.skipped_ratio);
-  if (res.skipped_ext) drop.push('格式不支持 ' + res.skipped_ext);
-  if (res.missing) drop.push('文件已不在 ' + res.missing);
-  if (drop.length) s += ' · 筛掉：' + drop.join('、');
-  if ((res.errors || []).length) s += ' · 出错 ' + res.errors.length + ' 项';
-  st.textContent = s;
 }
 
 async function clearWallDir() {
