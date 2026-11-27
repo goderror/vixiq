@@ -3146,6 +3146,7 @@ def run_suite() -> SuiteResult:
     suite.add("T200", "🔍 图库以图搜图: 特征提取/加载/检索阶段 + 任务号读取 + 临时图清理 (隔离数据)", t200_library_similar_progress)
     suite.add("T201", "🗑️ 清理缺失作品: 预览核对 + 复核/清理/回收阶段 + 跳过失败与任务归属 (隔离数据)", t201_missing_cleanup_progress)
     suite.add("T202", "🧹 清理临时目录: 扫描→逐顶层项计数 + 跳过/失败/链接保护 + 互斥 (隔离数据)", t202_temp_clean_progress)
+    suite.add("T203", "✏️ 编辑作品: 只保存/记录实际改动 + 无改动不写库不刷新 (隔离数据)", t203_library_edit_actual_changes)
     suite.write_report()
     return suite
 
@@ -10489,7 +10490,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261128d" and _mss.group(1) == "20261128d", \
+    assert _mjs and _mss and _mjs.group(1) == "20261128e" and _mss.group(1) == "20261128e", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10584,7 +10585,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261128d', html) and _re.search(r'app\.js\?v=20261128d', html), \
+    assert _re.search(r'style\.css\?v=20261128e', html) and _re.search(r'app\.js\?v=20261128e', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10992,7 +10993,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html, \
+        assert "style.css?v=20261128e" in html and "app.js?v=20261128e" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13565,7 +13566,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261128d" in _h and "style.css?v=20261128d" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261128e" in _h and "style.css?v=20261128e" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14934,7 +14935,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html
+            assert "style.css?v=20261128e" in html and "app.js?v=20261128e" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -15043,7 +15044,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html
+            assert "style.css?v=20261128e" in html and "app.js?v=20261128e" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -15154,7 +15155,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html
+    assert "style.css?v=20261128e" in html and "app.js?v=20261128e" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -15194,7 +15195,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261128d" in html
+    assert "20261128e" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15905,7 +15906,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261128d" in html
+    assert "同步磁盘索引" in html and "20261128e" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16321,7 +16322,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128d" in html
+    assert "20261128e" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -17055,7 +17056,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128d" in html
+    assert "20261128e" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -19605,7 +19606,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html
+    assert "style.css?v=20261128e" in html and "app.js?v=20261128e" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -19811,7 +19812,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261128d" in html
+    assert "20261128e" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20273,7 +20274,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261128d" in html
+    assert "20261128e" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20381,7 +20382,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261128d" in html
+    assert "20261128e" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20493,7 +20494,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261128d" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128e" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20638,7 +20639,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261128d" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128e" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -21009,7 +21010,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261128d" in html
+    assert "20261128e" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -21035,7 +21036,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128d" in html
+    assert "20261128e" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -21061,7 +21062,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261128d" in html
+    assert "20261128e" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -21087,7 +21088,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128d" in html
+    assert "20261128e" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -21112,7 +21113,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128d" in html
+    assert "20261128e" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -21130,7 +21131,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128d" in html
+    assert "20261128e" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -22821,7 +22822,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261128d" in html
+        assert "20261128e" in html
     finally:
         for _d in dbs:
             try:
@@ -23123,7 +23124,7 @@ def t195_normalize_png_progress() -> None:
             (nr.returncode, nr.stdout, nr.stderr)
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
             encoding="utf-8")
-        assert "app.js?v=20261128d" in html and "style.css?v=20261128d" in html
+        assert "app.js?v=20261128e" in html and "style.css?v=20261128e" in html
     finally:
         cif.normalize_to_png = orig_norm
         ucfg.ingest_auto_png = patched
@@ -23150,7 +23151,7 @@ def t196_jpg_progress_ui() -> None:
         assert token in js, f"单张转 JPG 进度接线缺失: {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
-    assert "app.js?v=20261128d" in html and "style.css?v=20261128d" in html
+    assert "app.js?v=20261128e" in html and "style.css?v=20261128e" in html
 
     node_test = PROJECT_ROOT / "autotest" / "test_jpg_progress_ui.cjs"
     nr = _subprocess.run(
@@ -25811,6 +25812,334 @@ def t202_temp_clean_progress() -> None:
                 "empty": False, "error": "", "root": "", "created_at": 0.0,
                 "finished_at": 0.0, "result": None})
             ws._TEMP_TASK_EVENTS.clear()
+        shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t203_library_edit_actual_changes() -> None:
+    """T203: 单件作品编辑只保存/记录实际改动 (隔离 SQLite + 审计日志)。
+
+    覆盖: 旧全量表单只改标题 → 只写标题、标签关联不重写、作者不处理;
+    完整表单原样/标签顺序变化 → unchanged, 不写 updated_at、不记日志、不刷新;
+    只改标题(差量)保留别处已更新的标签; 清空标签/链接、类型与 R18 归零;
+    作者未变不写、换作者/同名改名仍写; 名称冲突 409 无副作用; Node 前端用例。"""
+    import copy
+    import shutil
+    import subprocess
+    import tempfile
+    import time
+
+    import utils.paths as upaths
+    from utils import audit_log
+    from db.store import PixivDatabase, PSt, WSt
+    import web.server as ws
+
+    tmp = Path(tempfile.mkdtemp(prefix="t203edit_",
+                                dir=str(upaths.temp_root())))
+    db_path = tmp / "pixiv.db"
+    orig_ud, orig_dr = upaths.user_data, upaths.data_root
+    orig_set_tags = PixivDatabase.set_artwork_tags
+    orig_upsert = PixivDatabase.upsert_author
+    orig_ensure = PixivDatabase.ensure_local_author
+    orig_merge = PixivDatabase.merge_author_into
+    orig_gather = ws._gather_works_into_author_folder
+    orig_folder = ws._sync_author_folder
+    orig_fill = ws._fill_author_name_by_id
+    with ws._dirty_lock:
+        dirty0 = {"rev": ws._dirty_state["rev"],
+                  "scopes": copy.deepcopy(ws._dirty_state["scopes"])}
+    counts = {"tags": 0, "authors": 0, "merges": 0,
+              "gather": 0, "folder": 0, "fill": 0}
+
+    def wrap_set_tags(self, aid, tags):
+        counts["tags"] += 1
+        return orig_set_tags(self, aid, tags)
+
+    def wrap_upsert(self, aid, name, **kw):
+        counts["authors"] += 1
+        return orig_upsert(self, aid, name, **kw)
+
+    def wrap_ensure(self, name, **kw):
+        counts["authors"] += 1
+        return orig_ensure(self, name, **kw)
+
+    def wrap_merge(self, src, dst):
+        counts["merges"] += 1
+        return orig_merge(self, src, dst)
+
+    def wrap_gather(db, ids):
+        counts["gather"] += 1
+        return orig_gather(db, ids)
+
+    def wrap_folder(db, aid, name, old_id=None):
+        counts["folder"] += 1
+        return orig_folder(db, aid, name, old_id=old_id)
+
+    def wrap_fill(db, aid):
+        counts["fill"] += 1
+
+    def reset_counts():
+        for k in counts:
+            counts[k] = 0
+
+    def dirty_rev() -> int:
+        with ws._dirty_lock:
+            return int(ws._dirty_state["rev"])
+
+    def get_meta():
+        with PixivDatabase(str(db_path)) as db:
+            return db.get_artwork_metadata("990001")
+
+    def get_tags():
+        with PixivDatabase(str(db_path)) as db:
+            return sorted(r[0] for r in db.conn.execute(
+                "SELECT t.tag_name FROM artwork_tags at "
+                "JOIN tags t ON t.tag_id=at.tag_id "
+                "WHERE at.artwork_id='990001'").fetchall())
+
+    def get_author_name(author_id):
+        with PixivDatabase(str(db_path)) as db:
+            row = db.conn.execute(
+                "SELECT name FROM authors WHERE author_id=?", (author_id,)).fetchone()
+            return row[0] if row else ""
+
+    def get_page_path():
+        with PixivDatabase(str(db_path)) as db:
+            row = db.conn.execute(
+                "SELECT local_path FROM pages WHERE artwork_id='990001' "
+                "ORDER BY page_num LIMIT 1").fetchone()
+            return row[0] if row else ""
+
+    def audit_items():
+        return audit_log.read().get("items") or []
+
+    def audit_count() -> int:
+        return len(audit_items())
+
+    def latest_edit() -> str:
+        for x in audit_items():
+            if x.get("action") == "编辑作品":
+                return str(x.get("detail") or "")
+        return ""
+
+    def post(body):
+        return client.post("/api/library/update", json=body)
+
+    def _fake_user_data(rel):
+        p = tmp / str(rel)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    upaths.user_data = _fake_user_data
+    upaths.data_root = lambda: tmp
+    audit_log.clear()
+    PixivDatabase.set_artwork_tags = wrap_set_tags
+    PixivDatabase.upsert_author = wrap_upsert
+    PixivDatabase.ensure_local_author = wrap_ensure
+    PixivDatabase.merge_author_into = wrap_merge
+    ws._gather_works_into_author_folder = wrap_gather
+    ws._sync_author_folder = wrap_folder
+    ws._fill_author_name_by_id = wrap_fill
+    try:
+        with PixivDatabase(str(db_path)) as db:
+            db.upsert_author("123", "作者甲")
+            db.change_work_status("990001", WSt.DONE, title="原标题",
+                                  author_id="123", total_pages=1)
+            db.mark_page_status("990001", 0, PSt.DONE,
+                                local_path="作者甲/990001_p0.jpg", md5="m203")
+            db.set_artwork_tags("990001", ["标签A", "标签B", "标签C"])
+            db.update_artwork("990001", illust_type=1, is_r18=1,
+                              source="pixiv", source_url="https://x/1")
+            db.upsert_author("777", "冲突作者")
+        client = ws.create_app().test_client()
+        reset_counts()
+        base = get_meta()
+        tags0 = get_tags()
+        page0 = get_page_path()
+        assert "R18" in tags0, tags0
+        full = {
+            "artwork_id": "990001", "title": "原标题",
+            "author_id": "123", "author_name": "作者甲",
+            "illust_type": 1, "is_r18": 1, "source": "pixiv",
+            "source_url": "https://x/1", "tags": list(tags0),
+        }
+
+        # ① 旧全量表单只改标题: 只写标题, 标签关联/作者/路径都不动
+        time.sleep(1.05)
+        body = dict(full, title="新标题")
+        before_rev = dirty_rev()
+        r = post(body)
+        assert r.status_code == 200, r.data
+        j = r.get_json()
+        assert j.get("status") == "ok" and j.get("changed_fields") == ["title"], j
+        meta = get_meta()
+        assert meta["title"] == "新标题", meta
+        assert meta["author_id"] == "123" and meta["illust_type"] == 1, meta
+        assert meta["is_r18"] == 1 and meta["source"] == "pixiv", meta
+        assert meta["source_url"] == "https://x/1", meta
+        assert meta["updated_at"] != base["updated_at"], meta
+        assert get_tags() == tags0, (get_tags(), tags0)
+        assert get_page_path() == page0, "标题编辑不得改文件路径"
+        assert counts == {"tags": 0, "authors": 0, "merges": 0,
+                          "gather": 0, "folder": 0, "fill": 0}, counts
+        assert audit_count() == 1, audit_items()
+        detail = latest_edit()
+        assert "修改标题" in detail, detail
+        for bad in ("修改标签", "修改作者", "修改类型", "修改 R18", "修改来源"):
+            assert bad not in detail, detail
+        assert dirty_rev() > before_rev, "有实际改动应登记数据刷新"
+
+        # ② 完整表单原样提交: unchanged, 不写库、不记日志、不刷新
+        current = get_meta()
+        tags_now = get_tags()
+        reset_counts()
+        before_rev = dirty_rev()
+        before_audit = audit_count()
+        r = post(dict(full, title="新标题", tags=list(tags_now)))
+        assert r.status_code == 200, r.data
+        j = r.get_json()
+        assert j.get("unchanged") is True and j.get("changed_fields") == [], j
+        assert get_meta() == current, (get_meta(), current)
+        assert get_tags() == tags_now
+        assert counts["tags"] == 0 and counts["authors"] == 0, counts
+        assert audit_count() == before_audit, "无改动不得新增操作日志"
+        assert dirty_rev() == before_rev, "无改动不得触发数据刷新"
+
+        # ③ 标签顺序变化且集合相同: 仍无改动
+        reset_counts()
+        before_rev = dirty_rev()
+        r = post(dict(full, title="新标题", tags=list(reversed(tags_now))))
+        j = r.get_json()
+        assert j.get("unchanged") is True, j
+        assert counts["tags"] == 0 and audit_count() == before_audit, counts
+        assert dirty_rev() == before_rev
+
+        # ④ 差量只改标题: 保留别处已更新的标签
+        with PixivDatabase(str(db_path)) as db:
+            db.set_artwork_tags("990001", ["最新标签", "标签A"])
+        reset_counts()
+        time.sleep(1.05)
+        r = post({"artwork_id": "990001", "title": "第三次标题"})
+        j = r.get_json()
+        assert j.get("changed_fields") == ["title"], j
+        assert set(get_tags()) == {"标签A", "最新标签"}, get_tags()
+        assert get_meta()["title"] == "第三次标题"
+        assert counts["tags"] == 0, "未提交标签不得重写关联"
+
+        # ⑤ 删除全部标签 / 清空链接: 明确清空仍生效
+        reset_counts()
+        time.sleep(1.05)
+        r = post({"artwork_id": "990001", "tags": []})
+        j = r.get_json()
+        assert j.get("changed_fields") == ["tags"], j
+        assert get_tags() == [], get_tags()
+        assert "修改标签" in latest_edit(), latest_edit()
+        assert counts["tags"] == 1, counts
+
+        reset_counts()
+        time.sleep(1.05)
+        r = post({"artwork_id": "990001", "source_url": ""})
+        j = r.get_json()
+        assert j.get("changed_fields") == ["source_url"], j
+        assert (get_meta()["source_url"] or "") == ""
+        assert "修改来源链接" in latest_edit(), latest_edit()
+
+        # ⑥ 类型/R18 从非零切到零: 0 必须写入, R18 标签随字段移除
+        reset_counts()
+        time.sleep(1.05)
+        r = post({"artwork_id": "990001", "illust_type": 0, "is_r18": 0})
+        j = r.get_json()
+        assert j.get("changed_fields") == ["illust_type", "is_r18"], j
+        meta = get_meta()
+        assert meta["illust_type"] == 0 and meta["is_r18"] == 0, meta
+        assert "R18" not in get_tags(), get_tags()
+
+        # ⑦ 作者未变(完整表单带当前作者): 不写作者、不查重、不归位
+        current = get_meta()
+        reset_counts()
+        before_rev = dirty_rev()
+        before_audit = audit_count()
+        r = post({
+            "artwork_id": "990001", "title": current["title"],
+            "author_id": "123", "author_name": "作者甲",
+            "illust_type": 0, "is_r18": 0,
+            "source": current.get("source") or "",
+            "source_url": current.get("source_url") or "",
+            "tags": list(get_tags()),
+        })
+        j = r.get_json()
+        assert j.get("unchanged") is True, j
+        assert counts["authors"] == 0 and counts["gather"] == 0, counts
+        assert get_meta() == current, (get_meta(), current)
+        assert audit_count() == before_audit and dirty_rev() == before_rev
+
+        # ⑧ 换作者: 仍写作者并记实际改动; 标签不动
+        reset_counts()
+        time.sleep(1.05)
+        tags_before = get_tags()
+        r = post({"artwork_id": "990001", "author_id": "456",
+                  "author_name": "作者乙"})
+        j = r.get_json()
+        assert j.get("changed_fields") == ["author"], j
+        assert j.get("author_id") == "456", j
+        assert get_meta()["author_id"] == "456", get_meta()
+        assert get_author_name("456") == "作者乙", get_author_name("456")
+        assert get_tags() == tags_before
+        assert "修改作者" in latest_edit(), latest_edit()
+        assert counts["authors"] >= 1, counts
+        assert counts["gather"] >= 1, counts
+
+        # ⑨ 同一 pixiv 作者改名: 仍按实际改动写, 但不搬文件
+        current = get_meta()
+        reset_counts()
+        time.sleep(1.05)
+        r = post({"artwork_id": "990001", "author_id": "456",
+                  "author_name": "作者乙改名"})
+        j = r.get_json()
+        assert j.get("changed_fields") == ["author"], j
+        assert get_meta()["author_id"] == "456", get_meta()
+        assert get_author_name("456") == "作者乙改名"
+        assert counts["authors"] >= 1 and counts["gather"] == 0, counts
+
+        # ⑩ 只是把作者名改成已有同名 pixiv 作者: 409 且无副作用
+        current = get_meta()
+        reset_counts()
+        before_rev = dirty_rev()
+        before_audit = audit_count()
+        r = post({"artwork_id": "990001", "author_name": "冲突作者"})
+        assert r.status_code == 409, r.data
+        assert get_meta() == current, (get_meta(), current)
+        assert counts["authors"] == 0 and counts["merges"] == 0, counts
+        assert audit_count() == before_audit and dirty_rev() == before_rev
+
+        # ⑪ 静态接线 + Node 前端真实函数用例
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+        for token in ("_libEditInit", "collectLibEditChanges", "libEditTagsNow",
+                      "libEditAuthorChanged", "没有改动", "hasChanges",
+                      "r.unchanged"):
+            assert token in js, f"编辑作品差量提交接线缺失: {token}"
+        for token in ("_EDIT_FIELD_LABELS", "_edit_norm_tags", "unchanged",
+                      "实际改动", "changed_fields", "merge_author"):
+            assert token in srv, f"编辑作品差量服务端接线缺失: {token}"
+        node_test = PROJECT_ROOT / "autotest" / "test_library_edit_changes.cjs"
+        nr = subprocess.run(["node", str(node_test)], capture_output=True,
+                            text=True, encoding="utf-8", errors="replace",
+                            timeout=60)
+        assert nr.returncode == 0 and "NODE OK" in (nr.stdout or ""), \
+            (nr.returncode, nr.stdout, nr.stderr)
+    finally:
+        PixivDatabase.set_artwork_tags = orig_set_tags
+        PixivDatabase.upsert_author = orig_upsert
+        PixivDatabase.ensure_local_author = orig_ensure
+        PixivDatabase.merge_author_into = orig_merge
+        ws._gather_works_into_author_folder = orig_gather
+        ws._sync_author_folder = orig_folder
+        ws._fill_author_name_by_id = orig_fill
+        with ws._dirty_lock:
+            ws._dirty_state["rev"] = dirty0["rev"]
+            ws._dirty_state["scopes"] = dirty0["scopes"]
+        upaths.user_data = orig_ud
+        upaths.data_root = orig_dr
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 

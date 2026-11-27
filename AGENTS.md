@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128d`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128e`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128d`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.90 编辑作品只保存并记录实际改动（2026-11-28，前端 `20261128e`，已发布到安装版）
+
+- **前端**：编辑弹窗打开后记录 `_libEditInit`；`collectLibEditChanges` 按业务值比较
+  标题/类型/R18/来源/来源链接/标签集合/作者，只把实际变化项交给原有作者识别与合并
+  流程；仅标签顺序变化、改了又改回、原样保存都不发请求并提示「没有改动」；
+  `doSaveLibEdit` 收到 `unchanged` 不刷列表、不标记「刚编辑的作品」。
+- **后端**：`/api/library/update` 先读当前值与作者姓名，逐字段过滤完整旧表单中的
+  相同值；标签按去重集合比较，未改不重写关联；作者身份/姓名未变不查重、不写作者、
+  不归位；`merge_author_id` 在作者未变时仍校验并执行；无变化返回 `unchanged`，
+  不写 `updated_at`、不记操作日志、不登记数据刷新。操作日志改为「实际改动:
+  修改标题/修改作者/…」，作者变化或合并时刷新 `authors`。
+- **回归**：T203 覆盖旧全量表单只改标题、完整表单/标签顺序 unchanged、差量保存保留
+  别处标签、清空标签/链接、类型/R18 归零、作者未变/换人/同名改名、同名冲突 409；
+  Node 18 项；T148 合并/归位与 T92 作者声明保持通过。全量 **194/194**（169.30 s），
+  日志 `_dev_runtime/diagnostics/trae-20261128e-library-edit-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 03:53:04`，前端 `20261128e`）在 7813
+  通过编辑作品 API/UI 检查，恢复配置后通过既有 **12 项**检查（日志
+  `trae-20261128e-candidate-checks.log`）。回滚清单
+  `_dev_runtime/backups/publish-20261128e-20261128-035531.json`（4 个旧文件、
+  8 个替换项、15,280,667 字节）。dist 与安装版 exe `f933c7bf25f7…`、base_library
+  `0a69a1482342…`、app.js `781d5a5d7a16…`、index.html `66954f8e4080…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261128e-1795809184-1795695345-1795519082`、健康正常，编辑作品/以图搜图/
+  副本扫描/壁纸库/回收站/清理缺失/缩略图/PNG UI 检查通过。
 
 ### 4.89 设置页「清理临时目录」共用进度（2026-11-28，前端 `20261128d`，已发布到安装版）
 

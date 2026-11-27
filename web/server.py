@@ -299,6 +299,9 @@ def _scopes_for_request(path: str, method: str, body: "dict | None",
         return ("backups", "ops"), ids
     if p.startswith("/api/logs"):
         return (), ids
+    if p == "/api/library/update":
+        # 单件编辑按实际改动显式登记; 未修改的完整表单不得触发数据刷新
+        return (), ids
     if p.startswith("/api/library"):
         # 图库写操作: 作品/页/筛选项/统计一律可能变; 来源类再带上 sources
         scopes = ["artworks", "pages", "facets", "stats", "search"]
@@ -6584,6 +6587,55 @@ def _save_path_overrides(body: dict) -> "tuple[dict | None, str]":
     except Exception as e:
         return None, str(e)
     return _paths_snapshot(), ""
+
+
+# ---- 单件作品编辑: 只写/只记实际变化的字段 ----
+_EDIT_CONTROL_FIELDS = {"artwork_id", "author_id", "author_name",
+                        "merge_author_id", "force_new_author"}
+_EDIT_TEXT_FIELDS = ("title", "source", "source_url", "source_author",
+                     "publish_date", "thumb_url")
+_EDIT_INT_FIELDS = ("illust_type", "is_r18", "bookmark_count")
+_EDIT_FIELD_LABELS = {
+    "title": "修改标题",
+    "illust_type": "修改类型",
+    "is_r18": "修改 R18",
+    "source": "修改来源",
+    "source_url": "修改来源链接",
+    "source_author": "修改来源作者",
+    "publish_date": "修改发布日期",
+    "bookmark_count": "修改收藏数",
+    "thumb_url": "修改封面",
+    "tags": "修改标签",
+    "author": "修改作者",
+}
+
+
+def _edit_text(v) -> str:
+    return str(v or "").strip()
+
+
+def _edit_norm_tags(tags) -> "list[str]":
+    return sorted({_edit_text(t) for t in (tags or []) if _edit_text(t)})
+
+
+def _edit_dedupe_tags(tags) -> "list[str]":
+    out: "list[str]" = []
+    seen: "set[str]" = set()
+    for t in (tags or []):
+        name = _edit_text(t)
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _edit_int(v) -> "int | None":
+    if v is None or str(v).strip() == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def create_app() -> Flask:
@@ -13153,74 +13205,138 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
     @app.route("/api/library/update", methods=["POST"])
     def api_library_update():
-        """编辑作品元数据: body: {"artwork_id": "...", "title", "illust_type",
-        "is_r18", "source", "tags"[list], "author_id"(pixiv数字), "author_name"(名字/名字_ID)}"""
+        """编辑作品元数据: 只写入并记录相对当前值真正发生变化的字段。
+
+        body: {"artwork_id", 可选 title/illust_type/is_r18/source/source_url/
+        source_author/publish_date/bookmark_count/thumb_url/tags/author_id/author_name/
+        merge_author_id/force_new_author}。仍接受完整的旧表单, 相同值会被过滤;
+        作者留空=不修改; 明确清空用空串/空数组。"""
         data = request.get_json(silent=True) or {}
         aid = str(data.get("artwork_id") or "")
         if not aid:
             return jsonify({"status": "error", "message": "缺少 artwork_id"}), 400
-        fields = {k: v for k, v in data.items() if k != "artwork_id"}
-        author_id = str(fields.pop("author_id", "") or "").strip()
-        author_name = str(fields.pop("author_name", "") or "").strip()
+        author_id = str(data.get("author_id") or "").strip()
+        author_name = str(data.get("author_name") or "").strip()
         merge_from = str(data.get("merge_author_id") or "").strip()
         merge_res = None
         files_gathered = 0
         with _db() as db:
             old_meta = db.get_artwork_metadata(aid) or {}
             old_author = str(old_meta.get("author_id") or "")
-            # 作者: 纯数字=pixiv ID; 给名字=本地作者 (danbooru/已注销), 同名 pixiv 作者自动复用
-            if author_id.isdigit():
-                if author_name:
-                    db.upsert_author(author_id, author_name)
-                else:
-                    # 只填了 pixiv 作者 ID → 联网补现用名 (否则库里作者名空, 显示裸 ID)
-                    _fill_author_name_by_id(db, author_id)
-                fields["author_id"] = author_id
-            elif author_id:
-                # 已存在的自定义作者（local_/foreign_ 等非数字 ID）: 直接用选中身份。
-                # 以前这里只认纯数字或名字, 下拉选中的 local_xxx 被静默丢掉 ——
-                # 界面提示「已保存」但作者没变 (2026-11-18 用户实测)。
-                row = db.conn.execute(
-                    "SELECT 1 FROM authors WHERE author_id=?", (author_id,)).fetchone()
-                if row is None:
-                    return jsonify({"status": "error",
-                                    "message": f"作者不存在：{author_id}"}), 400
-                fields["author_id"] = author_id
+            old_author_row = db.get_author(old_author) if old_author else None
+            old_author_name = str((old_author_row or {}).get("name") or "")
+            updates: "dict" = {}
+            tags_to_write = None
+            changed: "list[str]" = []
+            labels: "list[str]" = []
+
+            def mark(key: str) -> None:
+                changed.append(key)
+                labels.append(_EDIT_FIELD_LABELS.get(key, f"修改{key}"))
+
+            for key in _EDIT_TEXT_FIELDS:
+                if key not in data or data.get(key) is None:
+                    continue
+                new_v = _edit_text(data.get(key))
+                old_v = _edit_text(old_meta.get(key))
+                if new_v != old_v:
+                    updates[key] = new_v
+                    mark(key)
+            for key in _EDIT_INT_FIELDS:
+                if key not in data:
+                    continue
+                new_v = _edit_int(data.get(key))
+                if new_v is None:
+                    continue
+                old_v = _edit_int(old_meta.get(key))
+                if new_v != (0 if old_v is None else old_v):
+                    updates[key] = new_v
+                    mark(key)
+            if "tags" in data and data.get("tags") is not None:
+                new_tags = _edit_dedupe_tags(data.get("tags"))
+                if _edit_norm_tags(new_tags) != _edit_norm_tags(old_meta.get("tags")):
+                    tags_to_write = new_tags
+                    mark("tags")
+
+            # 作者: 只有身份/姓名真的变化才走查重、合并、归位与写库。
+            author_changed = False
+            if author_id:
+                if author_id != old_author:
+                    author_changed = True
+                elif author_id.isdigit() and author_name:
+                    author_changed = (_edit_text(author_name).lower()
+                                      != _edit_text(old_author_name).lower())
+                # 非数字 ID 的姓名以 authors 表为准; 只改输入框文字不算换作者。
             elif author_name:
-                # 源头查重: 库里已有同名 pixiv 作者时不许默默新建自定义作者。
-                # 同名不等于同一人, 返回 409 让用户选「复用 pixiv / 确认新建 / 取消」。
-                _conf = db.find_author_conflicts(author_name)
-                _pixivs = [c for c in _conf if c["is_pixiv"]]
-                _force_new = bool(data.get("force_new_author"))
-                if _pixivs and not _force_new:
-                    return jsonify({
-                        "status": "conflict",
-                        "message": f"库里已有同名作者：{_pixivs[0]['name']}"
-                                   f"（pixiv {_pixivs[0]['author_id']}）",
-                        "conflicts": _conf,
-                    }), 409
-                fields["author_id"] = db.ensure_local_author(
-                    author_name, force_new=_force_new)
-            if merge_from and fields.get("author_id") \
-                    and merge_from != fields["author_id"]:
-                # 用户确认「自定义作者与 pixiv 作者是同一个人」→ 整个身份并过去
-                # (作品/队列/曾用名/链接), 再做磁盘收尾。同名绝不自动合并, 必须显式传。
+                author_changed = (_edit_text(author_name).lower()
+                                  != _edit_text(old_author_name).lower())
+            if author_changed:
+                if author_id.isdigit():
+                    if author_name:
+                        db.upsert_author(author_id, author_name)
+                    else:
+                        # 只填了 pixiv 作者 ID → 联网补现用名 (否则库里作者名空, 显示裸 ID)
+                        _fill_author_name_by_id(db, author_id)
+                    new_author = author_id
+                elif author_id:
+                    # 已存在的自定义作者（local_/foreign_ 等非数字 ID）: 直接用选中身份。
+                    row = db.conn.execute(
+                        "SELECT 1 FROM authors WHERE author_id=?", (author_id,)).fetchone()
+                    if row is None:
+                        return jsonify({"status": "error",
+                                        "message": f"作者不存在：{author_id}"}), 400
+                    new_author = author_id
+                else:
+                    # 源头查重: 库里已有同名 pixiv 作者时不许默默新建自定义作者。
+                    _conf = db.find_author_conflicts(author_name)
+                    _pixivs = [c for c in _conf if c["is_pixiv"]]
+                    _force_new = bool(data.get("force_new_author"))
+                    if _pixivs and not _force_new:
+                        return jsonify({
+                            "status": "conflict",
+                            "message": f"库里已有同名作者：{_pixivs[0]['name']}"
+                                       f"（pixiv {_pixivs[0]['author_id']}）",
+                            "conflicts": _conf,
+                        }), 409
+                    new_author = db.ensure_local_author(
+                        author_name, force_new=_force_new)
+                updates["author_id"] = new_author
+                mark("author")
+            merge_target = ""
+            if author_changed:
+                merge_target = str(updates.get("author_id") or "")
+            elif merge_from and author_id:
+                # 作者关系未变, 但用户明确确认把另一个作者并入当前/指定作者;
+                # 仍要校验合并 ID 并执行合并 (T148: 不存在的合并 ID 必须报错)。
+                merge_target = author_id
+            if merge_from and merge_target and merge_from != merge_target:
                 if db.get_author(merge_from) is None:
                     return jsonify({"status": "error",
                                     "message": f"要合并的作者不存在：{merge_from}"}), 400
-                merge_res = db.merge_author_into(merge_from, fields["author_id"])
-            db.update_artwork(aid, **fields)
+                merge_res = db.merge_author_into(merge_from, merge_target)
+                if merge_res:
+                    changed.append("merge_author")
+                    labels.append("合并作者")
+
+            if not changed:
+                return jsonify({"status": "ok", "unchanged": True,
+                                "changed_fields": [], "artwork_id": aid})
+            write_fields = dict(updates)
+            if tags_to_write is not None:
+                write_fields["tags"] = tags_to_write
+            db.update_artwork(aid, **write_fields)
             name = None
-            if fields.get("author_id"):
+            if author_changed:
                 row = db.conn.execute(
-                    "SELECT name FROM authors WHERE author_id=?", (fields["author_id"],)).fetchone()
+                    "SELECT name FROM authors WHERE author_id=?",
+                    (updates["author_id"],)).fetchone()
                 name = row[0] if row else author_name
             if merge_res:
-                dst_name = str((db.get_author(fields["author_id"]) or {}).get("name")
+                dst_name = str((db.get_author(merge_target) or {}).get("name")
                                or author_name or name or "")
                 try:
                     merge_res["folder_renamed"] = _sync_author_folder(
-                        db, fields["author_id"], dst_name, old_id=merge_from)
+                        db, merge_target, dst_name, old_id=merge_from)
                 except Exception:
                     merge_res["folder_renamed"] = 0
                 try:
@@ -13231,8 +13347,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 except Exception as e:
                     merge_res["files_gathered"] = 0
                     merge_res["gather_failed"] = [f"{type(e).__name__}: {e}"]
-            elif fields.get("author_id") and old_author \
-                    and old_author != fields["author_id"]:
+            elif author_changed and old_author \
+                    and old_author != updates["author_id"]:
                 # 只改这一张、不合并: 文件也要跟着新作者走, 不能只改库
                 try:
                     _g = _gather_works_into_author_folder(db, [aid])
@@ -13240,12 +13356,19 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 except Exception:
                     files_gathered = 0
         audit_log.record("update", "编辑作品",
-                         f"{_labels_inline([aid])} 改动字段: {', '.join(fields) or '(无)'}"
-                         + (f"（合并作者 {merge_from} → {fields.get('author_id')}）"
+                         f"{_labels_inline([aid])} 实际改动: {'、'.join(labels)}"
+                         + (f"（合并作者 {merge_from} → {merge_target}）"
                             if merge_res else ""),
                          1, ids=[aid])
-        # 回author_id: 前端据此说明"已关联到 pixiv 作者 ID"(名字可能还没联网补上)
-        out = {"status": "ok", "name": name, "author_id": fields.get("author_id")}
+        scopes = ["artworks", "pages", "facets", "stats", "search", "ops"]
+        if author_changed or merge_res:
+            scopes.append("authors")
+        mark_dirty(*scopes, ids=[aid])
+        out = {"status": "ok", "changed_fields": changed}
+        if author_changed:
+            # 回 author_id: 前端据此说明"已关联到 pixiv 作者 ID"(名字可能还没联网补上)
+            out["name"] = name
+            out["author_id"] = updates.get("author_id")
         if merge_res:
             out["merged"] = merge_res
         if files_gathered:

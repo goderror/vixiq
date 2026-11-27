@@ -11546,6 +11546,17 @@ async function openLibEdit(aid) {
   makeEditAuthorCombo($('#lib-e-author'), $('#lib-e-author-combo'));
   makeEditTagSuggest($('#lib-tag-input'), $('#lib-tag-combo'));
   window._libEditW = w;   // 保存时判断「自定义作者 → 同名 pixiv 作者」是否需要合并
+  // 本次弹窗的初始业务值: 保存时只提交真正变化的字段 (看一圈/改回原值都算没改)
+  window._libEditInit = {
+    title: ($('#lib-e-title').value || '').trim(),
+    illust_type: parseInt($('#lib-e-type').value, 10) || 0,
+    is_r18: parseInt($('#lib-e-r18').value, 10) || 0,
+    source: $('#lib-e-source').value || '',
+    source_url: ($('#lib-e-url') ? ($('#lib-e-url').value || '').trim() : ''),
+    tags: libEditTagsNow(),
+    author_id: String((w && w.author_id) || ''),
+    author_name: String((w && w.author_name) || '').trim(),
+  };
 }
 
 // 「作品页已失效」标记的人工纠正 (客观事实自动来自 404; 这里给一条纠错路径)
@@ -11698,6 +11709,12 @@ async function doSaveLibEdit(aid, body) {
     }
     const err = apiErr(r);
     if (err) throw new Error(err);
+    if (r && r.unchanged) {
+      // 完整旧表单也可能走到这里: 后端过滤后确认没有业务变化
+      toast('没有改动', 'ok');
+      closeLibModal();
+      return;
+    }
     const outAid = String(r.author_id || body.author_id || '');
     const isPixiv = /^\d+$/.test(outAid);
     if (r.merged) {
@@ -11723,30 +11740,98 @@ async function doSaveLibEdit(aid, body) {
   } catch (e) { toast('保存失败: ' + e.message, 'err'); }
 }
 
-async function saveLibEdit(aid) {
-  const tags = $$('#lib-tag-editor .tag.big').map(t => t.childNodes[0].textContent.trim());
-  const urlEl = $('#lib-e-url');
-  const auth = resolveAuthorInput(
-    $('#lib-e-author').value, $('#lib-e-author').dataset.authorId);
-  const body = {
-    artwork_id: aid,
-    title: $('#lib-e-title').value.trim(),
+// 编辑作品: 只提交实际改动 (带 artwork_id + 实际修改项)
+function libEditTagsNow() {
+  return $$('#lib-tag-editor .tag.big')
+    .map(t => ((t.childNodes[0] && t.childNodes[0].textContent) || '').trim())
+    .filter(Boolean);
+}
+
+function libEditTagSet(tags) {
+  return Array.from(new Set(
+    (tags || []).map(t => String(t || '').trim()).filter(Boolean))).sort();
+}
+
+function libEditTagsEqual(a, b) {
+  const x = libEditTagSet(a), y = libEditTagSet(b);
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+// 作者输入是否真的换了身份/姓名; 本地作者以库内姓名为准, 只改输入框文字不算改名。
+function libEditAuthorChanged(auth, init) {
+  if (!init) return !!(auth && (auth.author_id || auth.author_name));
+  const curId = String(init.author_id || '');
+  const curName = String(init.author_name || '').trim().toLowerCase();
+  const aid = String((auth && auth.author_id) || '').trim();
+  const aname = String((auth && auth.author_name) || '').trim().toLowerCase();
+  if (!aid && !aname) return false;             // 留空 = 不修改
+  if (aid) {
+    if (!curId || aid !== curId) return true;
+    if (!/^\d+$/.test(curId)) return false;     // 本地作者: 以 authors 表姓名为准
+    if (!aname) return false;
+    return aname !== curName;
+  }
+  return aname !== curName;
+}
+
+function collectLibEditChanges(aid) {
+  const init = window._libEditInit || null;
+  const cur = {
+    title: ($('#lib-e-title').value || '').trim(),
     illust_type: parseInt($('#lib-e-type').value, 10),
     is_r18: parseInt($('#lib-e-r18').value, 10),
-    source: $('#lib-e-source').value,
-    source_url: urlEl ? (urlEl.value || '').trim() : '',
-    tags,
-    ...auth,
+    source: $('#lib-e-source').value || '',
+    source_url: ($('#lib-e-url') ? ($('#lib-e-url').value || '').trim() : ''),
+    tags: libEditTagsNow(),
   };
-  // 从自定义作者切到同名的 pixiv 作者 → 先问"是不是同一个人"，别静默留下两个身份
-  const mergeFrom = sameNameLocalAuthor(window._libEditW, auth);
-  if (mergeFrom) { askAuthorMerge(aid, body, mergeFrom); return; }
-  // 只写了一个库里没有的名字 → 先问"这位是 pixiv 作者吗", 别默默建成自定义作者
-  if (auth.author_name && !auth.author_id) {
-    const nm = String(auth.author_name).toLowerCase();
-    const known = (facetData.authors || [])
-      .some(a => String(a.name || '').toLowerCase() === nm);
-    if (!known) { askIsPixivAuthor(aid, body, auth.author_name); return; }
+  const auth = resolveAuthorInput(
+    $('#lib-e-author').value, $('#lib-e-author').dataset.authorId);
+  const body = { artwork_id: aid };
+  const changed = [];
+  if (!init || cur.title !== String(init.title || '').trim()) {
+    body.title = cur.title; changed.push('title');
+  }
+  const initType = init ? Number(init.illust_type || 0) : 0;
+  if (!init || cur.illust_type !== initType) {
+    body.illust_type = cur.illust_type; changed.push('illust_type');
+  }
+  const initR18 = init ? Number(init.is_r18 || 0) : 0;
+  if (!init || cur.is_r18 !== initR18) {
+    body.is_r18 = cur.is_r18; changed.push('is_r18');
+  }
+  if (!init || cur.source !== String(init.source || '')) {
+    body.source = cur.source; changed.push('source');
+  }
+  if (!init || cur.source_url !== String(init.source_url || '').trim()) {
+    body.source_url = cur.source_url; changed.push('source_url');
+  }
+  if (!init || !libEditTagsEqual(cur.tags, init.tags)) {
+    body.tags = Array.from(new Set(cur.tags)); changed.push('tags');
+  }
+  const authChanged = libEditAuthorChanged(auth, init);
+  if (authChanged) {
+    Object.assign(body, auth);
+    changed.push('author');
+  }
+  return { body, auth, authChanged, changed, hasChanges: changed.length > 0 };
+}
+
+async function saveLibEdit(aid) {
+  const edit = collectLibEditChanges(aid);
+  if (!edit.hasChanges) { toast('没有改动', 'ok'); return; }
+  const body = edit.body;
+  const auth = edit.auth;
+  if (edit.authChanged) {
+    // 从自定义作者切到同名的 pixiv 作者 → 先问"是不是同一个人"，别静默留下两个身份
+    const mergeFrom = sameNameLocalAuthor(window._libEditW, auth);
+    if (mergeFrom) { askAuthorMerge(aid, body, mergeFrom); return; }
+    // 只写了一个库里没有的名字 → 先问"这位是 pixiv 作者吗", 别默默建成自定义作者
+    if (auth.author_name && !auth.author_id) {
+      const nm = String(auth.author_name).toLowerCase();
+      const known = (facetData.authors || [])
+        .some(a => String(a.name || '').toLowerCase() === nm);
+      if (!known) { askIsPixivAuthor(aid, body, auth.author_name); return; }
+    }
   }
   await doSaveLibEdit(aid, body);
 }
