@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127c`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127d`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127c`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127d`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,25 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.72 批量转 PNG 任务复用与弹窗归属返修（2026-11-27，前端 `20261127d`，源码完成，未打包未部署）
+
+- **任务原子登记**：`_normalize_job_claim()` 在同一临界区内完成过期清理、运行任务判断、
+  登记与返回。预览重复请求接回同一任务；执行按「确认清单 + `recycle_old`」指纹复用，
+  不同批次返回 409 `busy`（含运行任务号、总量与 `overlap`），不再把别批结果当成功。
+- **线程启动失败**：`_normalize_job_launch()` 把任务置为 `error` 并允许下次重试；只有
+  新建任务才启动线程。
+- **启动等待与迟到回包**：前端新增 `_normPreviewStart` / `_normApplyStart`，重开入口
+  接回同一次等待，不重复 POST；迟到回包先保存任务状态，只有仍是同一弹窗实例才认领。
+- **完成收尾**：执行完成先保存 `state=done/result`，250 ms 绘制与图库刷新结束后复核
+  owner 与实例号；期间换到其他弹窗则不关闭、不替换。异批 busy 保留本批并提供
+  「重试本批」或「重新预览」。
+- **回归**：T195 新增真实并发预览、同批并发执行、异批 busy 与第二批可处理；
+  `autotest/test_normalize_job_ownership.cjs` 用真实 `app.js` 函数跑 12 个迟到/归属用例。
+  全量 **186/186**（121.73 s），日志
+  `_dev_runtime/diagnostics/trae-20261127d-normalize-job-ownership-smoke.log`。
+- 安装版与候选包仍是 `20261127c`；后续打包需把
+  `check_normalize_progress_candidate.py` 的版本断言升到 `20261127d`。
 
 ### 4.71 其他来源补登记保护 + 批量转 PNG 共用进度（2026-11-27，前端 `20261127c`，已发布到安装版）
 

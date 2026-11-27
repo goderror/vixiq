@@ -5202,8 +5202,12 @@ window.showSyncResult = function () {
 
 // 4B-3: 同步发现的手动 JPG/WEBP/BMP/TIF → 预览确认后转 PNG
 // 批量转 PNG 设计稿第五节: 初步核对用流动, 逐张预览/执行按真实张数计数。
-let _normPreview = null;   // {id,state,stage,done,total,result}; 重开入口接回
+let _normPreview = null;   // {id,state,stage,done,total,result}; 启动等待时暂无 id
 let _normApply = null;     // 执行任务; 关闭弹窗后从原入口接回
+let _normPreviewStart = null;  // 预览启动等待器 {seq}: 重开入口接回同一次等待
+let _normApplyStart = null;    // 执行启动等待器 {seq}
+let _normApplyPending = null;  // 被「另一批执行中」挡下的本批 {items,recycle,total,overlap}
+let _normApplyBusyInfo = null; // {message,overlap}
 
 function normalizePreviewOwner(id) { return 'normalize-preview:' + id; }
 function normalizeApplyOwner(id) { return 'normalize-apply:' + id; }
@@ -5285,6 +5289,7 @@ function normalizeOpenError(owner, msg) {
 
 function normalizePreviewResume() {
   const j = _normPreview;
+  if (!j || !j.id) { normalizePreviewResumeStarting(); return; }
   openLibModal('🖼️ 转为 PNG',
     normalizePreviewProgressHtml() +
     '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
@@ -5294,40 +5299,69 @@ function normalizePreviewResume() {
   normalizePreviewWatch(j.id);
 }
 
+function normalizePreviewResumeStarting() {
+  // 启动请求还在等任务号: 接回同一次等待, 重复点击不再 POST
+  openLibModal('🖼️ 转为 PNG',
+    normalizePreviewProgressHtml() +
+    '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+    { lg: true });
+  opClaimModal('normalize-preview-start');
+  if (_normPreviewStart) _normPreviewStart.seq = opModalSeq();
+  normalizePreviewPaint(_normPreview || { state: 'running' });
+}
+
 async function normalizePreviewStart() {
+  if (_normPreviewStart) { normalizePreviewResumeStarting(); return; }
+  _normPreview = { state: 'running', starting: true,
+                   stage: '核对候选格式与冲突', done: 0, total: 0 };
   openLibModal('🖼️ 转为 PNG',
     normalizePreviewProgressHtml() +
     '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">取消</button></div>',
     { lg: true });
-  const owner = 'normalize-preview-start';
-  opClaimModal(owner);
+  opClaimModal('normalize-preview-start');
+  const seq = opModalSeq();
+  const waiter = { seq: 0 };     // 重开入口会把当前弹窗实例号绑定到这里
+  _normPreviewStart = waiter;
   opProgressPaint('norm-preview-flow', {
     mode: 'flow', stage: '正在核对候选格式与冲突' });
   let start = null;
   try {
     start = await api('/api/library/normalize-pending/preview/job', { method: 'POST' });
   } catch (e) {
-    if (opModalMatches(owner)) normalizeOpenError(owner, '预览失败：' + e.message);
-    return;
-  }
-  if (!start || start.status !== 'ok') {
-    if (opModalMatches(owner)) {
-      normalizeOpenError(owner, '预览失败：' + ((start && start.error) || '未知错误'));
+    if (_normPreviewStart === waiter) _normPreviewStart = null;
+    const msg = '预览失败：' + e.message;
+    _normPreview = { state: 'error', error: msg };
+    if (opModalSame(waiter.seq || seq)) {
+      normalizeOpenError('normalize-preview-start', msg);
     }
     return;
   }
+  if (_normPreviewStart === waiter) _normPreviewStart = null;
+  const waitSeq = waiter.seq || seq;
+  const same = opModalSame(waitSeq);
+  if (!start || start.status !== 'ok' || !start.job_id) {
+    const msg = '预览失败：' + ((start && (start.error || start.message)) || '未知错误');
+    _normPreview = { state: 'error', error: msg };
+    if (same) normalizeOpenError('normalize-preview-start', msg);
+    return;
+  }
   _normPreview = { id: start.job_id, state: 'running',
-                   stage: '核对候选格式与冲突', done: 0, total: 0 };
-  opClaimModal(normalizePreviewOwner(start.job_id));
+                   stage: '核对候选格式与冲突', done: 0,
+                   total: Number(start.total || 0) };
+  // 迟到回包只保存任务状态并从入口接回, 不接管用户后来打开的弹窗
+  if (same) opClaimModal(normalizePreviewOwner(start.job_id));
   normalizePreviewWatch(start.job_id);
 }
 
 window.openNormalizePreview = function () {
-  // 重新进入入口: 执行中 / 预览中 / 最近结果 分别接回
+  // 重新进入入口: 执行中 / 预览中 / 待重试 / 最近结果 分别接回
   if (_normApply && _normApply.state === 'running') { normalizeApplyResume(); return; }
   if (_normPreview && _normPreview.state === 'running') {
-    normalizePreviewResume(); return;
+    if (_normPreview.id) normalizePreviewResume();
+    else normalizePreviewResumeStarting();
+    return;
   }
+  if (_normApplyPending) { normalizeApplyShowBusy(); return; }
   if (_normPreview && _normPreview.state === 'done' && _normPreview.result) {
     normalizePreviewShow(_normPreview.result); return;
   }
@@ -5396,53 +5430,122 @@ function normalizePreviewShow(r) {
     ? normalizePreviewOwner(_normPreview.id) : 'normalize-preview-result');
 }
 
+function normalizeApplyProgressHtml(done, total) {
+  return opProgressHtml('norm-apply-count', {
+    mode: 'count', label: '执行转换',
+    text: `已处理 ${Number(done || 0)}／${Number(total || 0)} 张` });
+}
+
 window.applyNormalizePending = async function () {
   const st = window._normalizePreview;
   if (!st || !st.ready.length) return;
   if (_normApply && _normApply.state === 'running') {
     normalizeApplyResume(); return;
   }
+  if (_normApplyStart) { normalizeApplyResume(); return; }
   const btn = document.getElementById('norm-apply-btn');
   if (btn) { btn.disabled = true; btn.textContent = '转换中…'; }
   const recycleEl = document.getElementById('norm-recycle-old');
   const recycle = !recycleEl || recycleEl.checked;
-  const total = st.ready.length;
-  opProgressPaint('norm-apply-count', {
-    mode: 'count', hidden: false, done: 0, total, label: '执行转换',
-    stage: '执行转换', text: `已处理 0／${total} 张`,
-  });
-  const startOwner = 'normalize-apply-start';
-  opClaimModal(startOwner);
+  return normalizeApplyStart(
+    st.ready.map(x => ({ preview_id: x.preview_id, path: x.path })),
+    recycle, st.ready.length);
+};
+
+async function normalizeApplyStart(items, recycle, total) {
+  if (_normApplyStart) { normalizeApplyResume(); return; }
+  total = Number(total || items.length || 0);
+  _normApply = { state: 'running', starting: true, done: 0, total,
+                 stage: '执行转换' };
+  openLibModal('🖼️ 转为 PNG',
+    '<div class="hint">正在启动转换任务…</div>' +
+    normalizeApplyProgressHtml(0, total) +
+    '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+    { lg: true });
+  opClaimModal('normalize-apply-start');
+  const seq = opModalSeq();
+  const waiter = { seq: 0 };     // 重开入口会把当前弹窗实例号绑定到这里
+  _normApplyStart = waiter;
+  normalizeApplyPaint(_normApply);
   let start = null;
   try {
     start = await api('/api/library/normalize-pending/apply/job', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        items: st.ready.map(x => ({ preview_id: x.preview_id, path: x.path })),
-        recycle_old: recycle,
-      }),
+      body: JSON.stringify({ items, recycle_old: recycle }),
     });
   } catch (e) {
-    toast('转换失败：' + e.message, 'err');
-    normalizeApplyReset(total);
+    if (_normApplyStart === waiter) _normApplyStart = null;
+    const msg = '转换失败：' + e.message;
+    _normApply = { state: 'error', error: msg };
+    if (opModalSame(waiter.seq || seq)) {
+      normalizeOpenError('normalize-apply-start', msg);
+    }
     return;
   }
-  if (!start || start.status !== 'ok') {
-    toast('转换失败：' + ((start && start.error) || '未知错误'), 'err');
-    normalizeApplyReset(total);
+  if (_normApplyStart === waiter) _normApplyStart = null;
+  const waitSeq = waiter.seq || seq;
+  const same = opModalSame(waitSeq);
+  if (start && start.busy) {
+    // 另一批正在执行: 本批尚未开始, 保留清单与选项供稍后重试
+    _normApply = null;
+    _normApplyPending = { items, recycle, total,
+                          overlap: !!start.overlap };
+    _normApplyBusyInfo = {
+      message: start.message || '已有另一批转换正在执行',
+      overlap: !!start.overlap,
+    };
+    if (same) normalizeApplyShowBusy();
+    return;
+  }
+  if (!start || start.status !== 'ok' || !start.job_id) {
+    const msg = (start && (start.error || start.message)) || '未知错误';
+    _normApply = { state: 'error', error: '转换失败：' + msg };
+    if (same) {
+      normalizeOpenError('normalize-apply-start', '转换失败：' + msg);
+    }
     return;
   }
   _normApply = { id: start.job_id, state: 'running', done: 0,
-                 total: Number(start.total || total), stage: '执行转换' };
+                 total: Number(start.total || total || items.length),
+                 stage: '执行转换' };
   _normPreview = null;   // 预览令牌已被本次执行消费, 入口再进时重新预览
-  opClaimModal(normalizeApplyOwner(start.job_id));
+  // 迟到回包只保存任务状态并继续跟踪, 不认领用户后来打开的弹窗
+  if (same) opClaimModal(normalizeApplyOwner(start.job_id));
   normalizeApplyWatch(start.job_id);
+}
+
+function normalizeApplyShowBusy() {
+  const info = _normApplyBusyInfo || {};
+  const p = _normApplyPending;
+  const canRetry = !!(p && !info.overlap);
+  openLibModal('⚠ 另一批转换正在执行', `
+    <div class="hint err-text">${esc(info.message || '已有另一批转换正在执行')}</div>
+    <div class="hint">${canRetry
+      ? '本批尚未开始。等那一批完成后可点「重试本批」，不用重新预览。'
+      : '本批与正在执行的任务共用同一份预览，等它完成后请重新预览再确认。'}</div>
+    <div class="modal-actions">
+      ${canRetry ? '<button class="btn accent" onclick="normalizeApplyRetryPending()">🔄 重试本批</button>' : ''}
+      <button class="btn ${canRetry ? 'ghost' : 'accent'}" onclick="normalizeRestartPreview()">重新预览</button>
+      <button class="btn ghost" onclick="closeLibModal()">关闭</button>
+    </div>`, { lg: true });
+  opClaimModal('normalize-apply-busy');
+}
+
+window.normalizeApplyRetryPending = function () {
+  const p = _normApplyPending;
+  if (!p) { openNormalizePreview(); return; }
+  _normApplyPending = null;
+  _normApplyBusyInfo = null;
+  _normApply = null;
+  normalizeApplyStart(p.items, p.recycle, p.total);
 };
 
 // 结果页/计划页的「重新预览」: 清掉最近结果, 从入口重新核对候选
 window.normalizeRestartPreview = function () {
   _normApply = null;
   _normPreview = null;
+  _normApplyPending = null;
+  _normApplyBusyInfo = null;
   normalizePreviewStart();
 };
 
@@ -5467,17 +5570,28 @@ function normalizeApplyPaint(j) {
 }
 
 function normalizeApplyResume() {
+  if (!_normApply || !_normApply.id) { normalizeApplyResumeStarting(); return; }
   const j = _normApply;
   openLibModal('🖼️ 转为 PNG',
     '<div class="hint">正在执行转换，分母为本次确认转换的数量。</div>' +
-    opProgressHtml('norm-apply-count', {
-      mode: 'count', label: '执行转换',
-      text: `已处理 0／${Number(j.total || 0)} 张` }) +
+    normalizeApplyProgressHtml(j.done, j.total) +
     '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
     { lg: true });
   opClaimModal(normalizeApplyOwner(j.id));
   normalizeApplyPaint(j);
   normalizeApplyWatch(j.id);
+}
+
+function normalizeApplyResumeStarting() {
+  const j = _normApply || { state: 'running', done: 0, total: 0 };
+  openLibModal('🖼️ 转为 PNG',
+    '<div class="hint">正在启动转换任务…</div>' +
+    normalizeApplyProgressHtml(j.done, j.total) +
+    '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+    { lg: true });
+  opClaimModal('normalize-apply-start');
+  if (_normApplyStart) _normApplyStart.seq = opModalSeq();
+  normalizeApplyPaint(j);
 }
 
 function normalizeApplyWatch(jobId) {
@@ -5492,16 +5606,19 @@ function normalizeApplyWatch(jobId) {
     },
     onDone: async j => {
       if (!_normApply || _normApply.id !== jobId) return;
-      _normApply = { ...j };
+      const modalSeq = opModalSeq();
       const shown = opModalMatches(owner);
+      _normApply = { ...j, state: 'done', result: j.result || {} };
       if (shown) {
         normalizeApplyPaint(_normApply);
         await new Promise(r => setTimeout(r, 250));
       }
-      _normApply = { ..._normApply, state: 'done', result: j.result || {} };
       await libSync(false, false);
       loadLibrary(); loadStats(); loadLibFacets();
-      if (shown) normalizeApplyShowResult(j.result || {}, false);
+      // 绘制与图库刷新期间可能换了弹窗: 只更新仍属于本任务的同一个实例
+      if (shown && opModalMatches(owner) && opModalSame(modalSeq)) {
+        normalizeApplyShowResult(j.result || {}, false);
+      }
     },
     onError: e => {
       if (!_normApply || _normApply.id !== jobId) return;

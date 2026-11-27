@@ -10310,37 +10310,69 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     # ---- 批量转 PNG 共用任务: 初步核对/逐张预览/逐张执行都报真实状态 ----
     _normalize_jobs: "dict[str, dict]" = {}
     _normalize_jobs_lock = threading.Lock()
+    _NORMALIZE_JOB_TTL = 7200
 
-    def _normalize_running_job(kind: str):
-        with _normalize_jobs_lock:
-            for _j in _normalize_jobs.values():
-                if _j.get("state") == "running" and _j.get("kind") == kind:
-                    return _j
-        return None
+    def _normalize_job_purge_locked(now: float) -> None:
+        for jid, old in list(_normalize_jobs.items()):
+            if (old.get("state") != "running"
+                    and now - (old.get("finished_at") or now) > _NORMALIZE_JOB_TTL):
+                _normalize_jobs.pop(jid, None)
 
-    def _normalize_job_register(kind: str, stage: str, total: int) -> dict:
-        job_id = uuid.uuid4().hex
+    def _normalize_job_claim(kind: str, stage: str, total: int,
+                             batch_key: str = "", extra: "dict | None" = None):
+        """在同一个临界区内判断并登记任务, 返回 (job, created|reused|busy)。
+
+        预览任务总是接回运行中的那一个; 执行任务只接回同一批清单与选项,
+        其他批次返回 busy, 由前端保留本批并提示稍后重试。"""
         now = time.time()
         with _normalize_jobs_lock:
-            for jid, old in list(_normalize_jobs.items()):
-                if (old.get("state") != "running"
-                        and now - (old.get("finished_at") or now) > 7200):
-                    _normalize_jobs.pop(jid, None)
-            job = {"id": job_id, "kind": kind, "state": "running",
+            _normalize_job_purge_locked(now)
+            for old in _normalize_jobs.values():
+                if old.get("state") != "running" or old.get("kind") != kind:
+                    continue
+                if kind == "preview" or old.get("batch_key") == batch_key:
+                    return old, "reused"
+                return old, "busy"
+            job = {"id": uuid.uuid4().hex, "kind": kind, "state": "running",
                    "stage": stage, "done": 0, "total": int(total or 0),
-                   "created_at": now, "finished_at": None,
-                   "result": None, "error": None}
-            _normalize_jobs[job_id] = job
-        return job
+                   "batch_key": batch_key, "created_at": now,
+                   "finished_at": None, "result": None, "error": None}
+            if extra:
+                job.update(extra)
+            _normalize_jobs[job["id"]] = job
+            return job, "created"
+
+    def _normalize_job_launch(job: dict, run) -> "str | None":
+        """只对新建任务启动一次线程; 启动失败要终结状态, 让下次请求可以重试。"""
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except Exception as e:
+            with _normalize_jobs_lock:
+                job["state"] = "error"
+                job["error"] = f"无法启动后台任务：{str(e).splitlines()[0]}"
+                job["finished_at"] = time.time()
+            return job["error"]
+        return None
+
+    def _normalize_apply_batch_key(req_items, recycle_old: bool) -> str:
+        """本次确认内容 + 回收选项的稳定指纹; 同批重复请求才允许接回任务。"""
+        norm = []
+        for raw in req_items:
+            item = raw if isinstance(raw, dict) else {}
+            norm.append([str(item.get("preview_id") or ""),
+                         str(item.get("path") or "").replace("\\", "/")])
+        norm.sort()
+        return json.dumps({"items": norm, "recycle_old": bool(recycle_old)},
+                          ensure_ascii=False, sort_keys=True)
 
     @app.route("/api/library/normalize-pending/preview/job", methods=["POST"])
     def api_library_normalize_pending_preview_job():
         """后台生成预览: 初步核对用流动, 逐张预览按真实张数推进。"""
-        running = _normalize_running_job("preview")
-        if running:
-            return jsonify({"status": "ok", "job_id": running["id"],
-                            "reused": True})
-        job = _normalize_job_register("preview", "核对候选格式与冲突", 0)
+        job, mode = _normalize_job_claim("preview", "核对候选格式与冲突", 0)
+        if mode == "reused":
+            return jsonify({"status": "ok", "job_id": job["id"],
+                            "reused": True,
+                            "total": int(job.get("total") or 0)})
 
         def _progress(ev: dict) -> None:
             with _normalize_jobs_lock:
@@ -10365,7 +10397,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     job["error"] = str(e) or e.__class__.__name__
                     job["finished_at"] = time.time()
 
-        threading.Thread(target=_run, daemon=True).start()
+        err = _normalize_job_launch(job, _run)
+        if err:
+            return jsonify({"status": "error", "error": err}), 500
         return jsonify({"status": "ok", "job_id": job["id"]})
 
     @app.route("/api/library/normalize-pending/preview/job/<job_id>", methods=["GET"])
@@ -10680,11 +10714,25 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         recycle_old = bool(data.get("recycle_old", True))
         if not isinstance(req_items, list) or not req_items:
             return jsonify({"status": "error", "error": "没有要处理的文件"}), 400
-        running = _normalize_running_job("apply")
-        if running:
-            return jsonify({"status": "ok", "job_id": running["id"],
-                            "reused": True})
-        job = _normalize_job_register("apply", "执行转换", len(req_items))
+        batch_key = _normalize_apply_batch_key(req_items, recycle_old)
+        request_ids = {str((x or {}).get("preview_id") or "")
+                       for x in req_items if isinstance(x, dict)}
+        request_ids.discard("")
+        job, mode = _normalize_job_claim(
+            "apply", "执行转换", len(req_items), batch_key,
+            extra={"preview_ids": sorted(request_ids)})
+        if mode == "reused":
+            return jsonify({"status": "ok", "job_id": job["id"],
+                            "reused": True,
+                            "total": int(job.get("total") or 0)})
+        if mode == "busy":
+            running_ids = set(job.get("preview_ids") or [])
+            return jsonify({
+                "status": "error", "busy": True, "job_id": job["id"],
+                "total": int(job.get("total") or 0),
+                "overlap": bool(request_ids & running_ids),
+                "message": "已有另一批转换正在执行，请等待完成后再试本批",
+            }), 409
 
         def _progress(ev: dict) -> None:
             with _normalize_jobs_lock:
@@ -10710,7 +10758,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     job["error"] = str(e) or e.__class__.__name__
                     job["finished_at"] = time.time()
 
-        threading.Thread(target=_run, daemon=True).start()
+        err = _normalize_job_launch(job, _run)
+        if err:
+            return jsonify({"status": "error", "error": err}), 500
         return jsonify({"status": "ok", "job_id": job["id"],
                         "total": len(req_items)})
 
