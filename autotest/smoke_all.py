@@ -3144,6 +3144,7 @@ def run_suite() -> SuiteResult:
     suite.add("T198", "♻️ 回收站全部恢复: 作品/图片两视图共用进度 + 成功/跳过/搬回失败 (隔离数据)", t198_trash_restore_all_progress)
     suite.add("T199", "🧹 壁纸副本扫描: 核对→计数阶段 + 读取失败统计 + 只读 (隔离数据)", t199_wall_dupes_progress)
     suite.add("T200", "🔍 图库以图搜图: 特征提取/加载/检索阶段 + 任务号读取 + 临时图清理 (隔离数据)", t200_library_similar_progress)
+    suite.add("T201", "🗑️ 清理缺失作品: 预览核对 + 复核/清理/回收阶段 + 跳过失败与任务归属 (隔离数据)", t201_missing_cleanup_progress)
     suite.write_report()
     return suite
 
@@ -10487,7 +10488,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261127q" and _mss.group(1) == "20261127q", \
+    assert _mjs and _mss and _mjs.group(1) == "20261128a" and _mss.group(1) == "20261128a", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10582,7 +10583,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261127q', html) and _re.search(r'app\.js\?v=20261127q', html), \
+    assert _re.search(r'style\.css\?v=20261128a', html) and _re.search(r'app\.js\?v=20261128a', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10990,7 +10991,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261127q" in html and "app.js?v=20261127q" in html, \
+        assert "style.css?v=20261128a" in html and "app.js?v=20261128a" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13563,7 +13564,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261127q" in _h and "style.css?v=20261127q" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261128a" in _h and "style.css?v=20261128a" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14932,7 +14933,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261127q" in html and "app.js?v=20261127q" in html
+            assert "style.css?v=20261128a" in html and "app.js?v=20261128a" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -15041,7 +15042,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261127q" in html and "app.js?v=20261127q" in html
+            assert "style.css?v=20261128a" in html and "app.js?v=20261128a" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -15152,7 +15153,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261127q" in html and "app.js?v=20261127q" in html
+    assert "style.css?v=20261128a" in html and "app.js?v=20261128a" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -15192,7 +15193,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261127q" in html
+    assert "20261128a" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15903,7 +15904,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261127q" in html
+    assert "同步磁盘索引" in html and "20261128a" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16319,7 +16320,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127q" in html
+    assert "20261128a" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -17053,7 +17054,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127q" in html
+    assert "20261128a" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -19603,7 +19604,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261127q" in html and "app.js?v=20261127q" in html
+    assert "style.css?v=20261128a" in html and "app.js?v=20261128a" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -19809,7 +19810,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261127q" in html
+    assert "20261128a" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20271,7 +20272,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261127q" in html
+    assert "20261128a" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20379,7 +20380,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261127q" in html
+    assert "20261128a" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20491,7 +20492,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261127q" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128a" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20636,7 +20637,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261127q" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128a" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -21007,7 +21008,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261127q" in html
+    assert "20261128a" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -21033,7 +21034,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127q" in html
+    assert "20261128a" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -21059,7 +21060,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261127q" in html
+    assert "20261128a" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -21085,7 +21086,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127q" in html
+    assert "20261128a" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -21110,7 +21111,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127q" in html
+    assert "20261128a" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -21128,7 +21129,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127q" in html
+    assert "20261128a" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -22819,7 +22820,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261127q" in html
+        assert "20261128a" in html
     finally:
         for _d in dbs:
             try:
@@ -23121,7 +23122,7 @@ def t195_normalize_png_progress() -> None:
             (nr.returncode, nr.stdout, nr.stderr)
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
             encoding="utf-8")
-        assert "app.js?v=20261127q" in html and "style.css?v=20261127q" in html
+        assert "app.js?v=20261128a" in html and "style.css?v=20261128a" in html
     finally:
         cif.normalize_to_png = orig_norm
         ucfg.ingest_auto_png = patched
@@ -23148,7 +23149,7 @@ def t196_jpg_progress_ui() -> None:
         assert token in js, f"单张转 JPG 进度接线缺失: {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
-    assert "app.js?v=20261127q" in html and "style.css?v=20261127q" in html
+    assert "app.js?v=20261128a" in html and "style.css?v=20261128a" in html
 
     node_test = PROJECT_ROOT / "autotest" / "test_jpg_progress_ui.cjs"
     nr = _subprocess.run(
@@ -24981,6 +24982,269 @@ def t200_library_similar_progress() -> None:
             ws._config["paths"].pop("feature_db_subdir", None)
         else:
             ws._config["paths"]["feature_db_subdir"] = _feat_sub
+        shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t201_missing_cleanup_progress() -> None:
+    """T201: 清理缺失作品共用进度 (隔离 SQLite/合成文件/回收替身)。
+
+    覆盖预览只读、空清单、扫描不完整、图库不可用; 确认批次后台复核 → 清理记录 →
+    可选回收残留文件; 每件作品结算才推进 N; 恢复/已处理/无法核实分别跳过;
+    记录已清理但回收失败明确报告; 同批重复提交接回、新批次替换旧任务;
+    任务号读取与旧同步接口保留。"""
+    import shutil
+    import subprocess
+    import tempfile
+    import time
+
+    import utils.paths as upaths
+    import web.server as ws
+    from db.store import PixivDatabase, PSt, ReconcileReport, WSt
+
+    tmp = Path(tempfile.mkdtemp(prefix="t201miss_"))
+    img = tmp / "img"
+    (img / "restored").mkdir(parents=True)
+    (img / "residual").mkdir()
+    (img / "restored" / "991005_p0.jpg").write_bytes(b"RESTORED")
+    res1 = img / "residual" / "991004_p0.jpg"
+    res2 = img / "residual" / "991004_p1.jpg"
+    res1.write_bytes(b"RES1")
+    res2.write_bytes(b"RES2")
+
+    orig_ud = upaths.user_data
+    orig_sub = ws._config["paths"]["img_subdir"]
+    orig_recon = ws._cached_reconcile
+    orig_recycle = ws._recycle_files
+    orig_paths = PixivDatabase.get_local_paths_by_artwork
+    upaths.user_data = lambda rel: tmp / str(rel)
+    ws._config["paths"]["img_subdir"] = "img"
+    with ws._MISS_TASK_LOCK:
+        ws._MISS_TASK.update({
+            "id": "", "status": "idle", "stage": "", "done": 0, "total": 0,
+            "cleaned": 0, "skipped": 0, "failed": 0, "recycled": 0,
+            "cleaned_ids": [], "skipped_items": [], "failed_items": [],
+            "recycle_failed": [], "errors": [], "current": "", "error": "",
+            "recycle_files": False, "ids": [], "scan_incomplete": False,
+            "batch_key": "", "created_at": 0.0, "finished_at": 0.0,
+            "result": None})
+    try:
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            db.upsert_author("1", "作者甲")
+
+            def add(aid: str, pages) -> None:
+                if isinstance(pages, str):
+                    pages = [(0, pages)]
+                db.change_work_status(aid, WSt.DONE, title=f"作品{aid}",
+                                      author_id="1", total_pages=len(pages))
+                for pn, rel in pages:
+                    db.mark_page_status(aid, pn, PSt.DONE, local_path=rel,
+                                        md5=f"md5_{aid}_{pn}")
+
+            for aid in ("991001", "991002", "991003", "991008", "991009",
+                        "991010", "991011", "991012", "991013"):
+                add(aid, f"gone/{aid}_p0.jpg")
+            add("991004", [(0, "residual/991004_p0.jpg"),
+                           (1, "residual/991004_p1.jpg")])
+            add("991005", "restored/991005_p0.jpg")
+
+        fake = {"rep": None}
+
+        def set_rep(missing=(), root=True, incomplete=False, dirs=()) -> None:
+            fake["rep"] = ReconcileReport(
+                missing_ids=list(missing), empty_dirs=[], corrupt_files=[],
+                scanned_images=0, new_pages_linked=0, db_artwork_count=0,
+                root_available=root, scan_incomplete=incomplete,
+                unreadable_dirs=list(dirs))
+
+        def fake_reconcile(force=False, write=True, skip_rels=None, **kw):
+            return fake["rep"]
+
+        ws._cached_reconcile = fake_reconcile
+        client = ws.create_app().test_client()
+
+        def post_task(ids, recycle=False):
+            return client.post("/api/library/clean-missing/task",
+                               json={"ids": ids, "recycle_files": recycle})
+
+        def wait_task(tid: str, timeout=30):
+            end = time.time() + timeout
+            states = []
+            got = {}
+            while time.time() < end:
+                resp = client.get(f"/api/library/clean-missing/task?id={tid}")
+                if resp.status_code == 404:
+                    return resp.get_json(), states
+                got = (resp.get_json() or {}).get("task") or {}
+                states.append((got.get("status"), got.get("stage"),
+                               int(got.get("done") or 0),
+                               int(got.get("total") or 0)))
+                if got.get("status") != "running":
+                    return got, states
+                time.sleep(0.02)
+            raise AssertionError(f"清理任务超时: {got}")
+
+        # ① 预览只读: 缺失项/残留文件数/扫描不完整范围
+        set_rep(["991001", "991002", "991003", "991004"],
+                incomplete=True, dirs=["X图/locked"])
+        r = client.get("/api/library/missing-items")
+        assert r.status_code == 200, r.data
+        j = r.get_json()
+        assert j["scan_incomplete"] is True, j
+        assert j["unreadable_dirs"] == ["X图/locked"], j
+        items = {x["artwork_id"]: x for x in j["items"]}
+        assert set(items) == {"991001", "991002", "991003", "991004"}, items
+        assert items["991004"]["existing_files"] == 2, items["991004"]
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            assert db.get_artwork_metadata("991001") is not None
+        assert res1.read_bytes() == b"RES1" and res2.read_bytes() == b"RES2"
+
+        # ② 正常清理: 只处理确认的缺失作品, 新发现的缺失留到下次预览
+        set_rep(["991001", "991002", "991003", "991008"])
+        r = post_task(["991001", "991002", "991003"])
+        assert r.status_code == 200, r.data
+        j = r.get_json()
+        assert j["status"] == "ok", j
+        t0 = j["task"]
+        assert t0["status"] == "running" and t0["stage"] == "checking", t0
+        assert t0["total"] == 3, t0
+        tid1 = t0["id"]
+        assert client.get("/api/library/clean-missing/task?id=wrong").status_code == 404
+        done, states = wait_task(tid1)
+        assert done["status"] == "done", done
+        assert done["result"]["cleaned"] == 3, done
+        assert done["result"]["skipped"] == 0 and done["result"]["failed"] == 0, done
+        assert done["result"]["recycled"] == 0, done
+        assert done["stage"] == "", done
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            for aid in ("991001", "991002", "991003"):
+                assert db.get_artwork_metadata(aid) is None, aid
+            assert db.get_artwork_metadata("991008") is not None, "未勾选的新缺失不得被清理"
+        assert res1.read_bytes() == b"RES1" and res2.read_bytes() == b"RES2"
+
+        # ③ 回收模式: 记录已清理, 回收部分失败如实报告
+        set_rep(["991004"])
+        calls = []
+        PixivDatabase.get_local_paths_by_artwork = \
+            lambda self, ids: {str(a): ["residual/991004_p0.jpg",
+                                        "residual/991004_p1.jpg"] for a in ids}
+        ws._recycle_files = lambda paths: (calls.append(list(paths)) or (1, [str(res2)]))
+        r = post_task(["991004"], recycle=True)
+        done, _ = wait_task(r.get_json()["task"]["id"])
+        assert done["status"] == "done", done
+        assert done["result"]["cleaned"] == 1, done
+        assert done["result"]["recycled"] == 1, done
+        assert done["result"]["recycle_failed"] == [str(res2)], done
+        assert calls and calls[0] == [str(res1), str(res2)], calls
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            assert db.get_artwork_metadata("991004") is None
+        assert res1.is_file() and res2.is_file(), "回收替身不直接 unlink"
+        PixivDatabase.get_local_paths_by_artwork = orig_paths
+        ws._recycle_files = orig_recycle
+
+        # ④ 已恢复 / 记录不存在 / 扫描不完整分别跳过并说明原因
+        set_rep([])
+        r = post_task(["991005", "999999"])
+        done, _ = wait_task(r.get_json()["task"]["id"])
+        reasons = {x["artwork_id"]: x["reason"]
+                   for x in (done["result"]["skipped_items"] or [])}
+        assert done["result"]["cleaned"] == 0, done
+        assert "已恢复" in reasons.get("991005", ""), reasons
+        assert "已不存在" in reasons.get("999999", ""), reasons
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            assert db.get_artwork_metadata("991005") is not None
+        assert (img / "restored" / "991005_p0.jpg").read_bytes() == b"RESTORED"
+
+        set_rep([], incomplete=True, dirs=["X图/locked"])
+        r = post_task(["991010"])
+        done, _ = wait_task(r.get_json()["task"]["id"])
+        assert done["result"]["skipped"] == 1, done
+        assert done["result"]["scan_incomplete"] is True, done
+        assert "扫描不完整" in done["result"]["skipped_items"][0]["reason"], done
+
+        # ⑤ 图库不可用: 任务明确失败, 记录不动
+        set_rep([], root=False)
+        r = post_task(["991009"])
+        done, _ = wait_task(r.get_json()["task"]["id"])
+        assert done["status"] == "error", done
+        assert "图库不可用" in (done["error"] or ""), done
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            assert db.get_artwork_metadata("991009") is not None
+
+        # ⑥ 同一批仍在运行: 重复提交接回当前任务
+        set_rep(["991011"])
+
+        def slow_reconcile(force=False, write=True, skip_rels=None, **kw):
+            time.sleep(0.4)
+            return fake["rep"]
+
+        ws._cached_reconcile = slow_reconcile
+        r1 = post_task(["991011"])
+        tid_a = r1.get_json()["task"]["id"]
+        time.sleep(0.05)
+        r2 = post_task(["991011"])
+        j2 = r2.get_json()
+        assert j2.get("already") is True, j2
+        assert j2["task"]["id"] == tid_a, j2
+        done, _ = wait_task(tid_a)
+        assert done["result"]["cleaned"] == 1, done
+
+        # ⑦ 新批次替换旧任务: 旧任务号失效, 旧任务不得继续删记录
+        set_rep(["991012", "991013"])
+        r1 = post_task(["991012"])
+        tid_b = r1.get_json()["task"]["id"]
+        time.sleep(0.05)
+        r2 = post_task(["991013"])
+        tid_c = r2.get_json()["task"]["id"]
+        assert tid_c != tid_b
+        assert client.get(f"/api/library/clean-missing/task?id={tid_b}").status_code == 404
+        done, _ = wait_task(tid_c)
+        assert done["result"]["cleaned"] == 1, done
+        assert done["result"]["cleaned_ids"] == ["991013"], done
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            assert db.get_artwork_metadata("991012") is not None, \
+                "旧任务被替换后不得继续删记录"
+            assert db.get_artwork_metadata("991013") is None
+        ws._cached_reconcile = fake_reconcile
+
+        # ⑧ 空清单预览与空 ids 启动
+        set_rep([])
+        r = client.get("/api/library/missing-items")
+        assert r.status_code == 200 and r.get_json()["items"] == [], r.data
+        r = post_task([])
+        assert r.status_code == 400, r.data
+
+        # ⑨ 静态接线 + 前端真实函数用例
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+        for token in ("miss-flow", "miss-count", "renderMissTask",
+                      "startMissPolling", "loadMissTask", "missResetToPreview",
+                      "clean-missing/task", "正在核对缺失作品", "正在复核所选作品",
+                      "正在清理索引记录", "正在回收残留文件", "已处理 ",
+                      "重新预览", "recycle_failed", "已清理 "):
+            assert token in js, f"缺失清理进度接线缺失: {token}"
+        for token in ("_MISS_TASK", "_miss_run", "clean-missing/task",
+                      "skipped_items", "recycle_failed"):
+            assert token in srv, f"缺失清理服务端接线缺失: {token}"
+        assert 'id="lib-sync-btn"' in html, "图库入口缺少同步按钮"
+        node_test = PROJECT_ROOT / "autotest" / "test_missing_cleanup_progress.cjs"
+        nr = subprocess.run(["node", str(node_test)], capture_output=True,
+                            text=True, encoding="utf-8", errors="replace",
+                            timeout=60)
+        assert nr.returncode == 0 and "NODE OK" in (nr.stdout or ""), \
+            (nr.returncode, nr.stdout, nr.stderr)
+    finally:
+        ws._cached_reconcile = orig_recon
+        ws._recycle_files = orig_recycle
+        PixivDatabase.get_local_paths_by_artwork = orig_paths
+        ws._config["paths"]["img_subdir"] = orig_sub
+        upaths.user_data = orig_ud
+        with ws._MISS_TASK_LOCK:
+            ws._MISS_TASK.update({"id": "", "status": "idle", "stage": "",
+                                  "result": None, "error": "",
+                                  "skipped_items": [], "failed_items": [],
+                                  "cleaned_ids": [], "recycle_failed": [],
+                                  "errors": [], "ids": []})
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 

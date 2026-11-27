@@ -5779,30 +5779,327 @@ window.dismissCheckBar = async function () {
   } catch (e) { toast('收起失败: ' + e.message, 'err'); }
 };
 
-// 清理缺失: 先预览、勾选具体作品; 「只清理索引」与「同时回收残留文件」是两个明确动作。
-// 旧 cleanMissing() 保留为入口别名, 不再直接清全库。
-async function cleanMissing() { return openMissingCleanup(); }
+// 清理缺失: 预览只读; 确认后由后台任务复核、清理记录并（可选）回收残留文件。
+// 进度与结果都放在原弹窗里; 关闭后任务继续, 重开凭会话任务号接回。
+const MISS_TASK_KEY = 'vixiq.miss.task';
+let _missTaskId = '';
+try { _missTaskId = sessionStorage.getItem(MISS_TASK_KEY) || ''; } catch (e) {}
+let _missTimer = null;
+let _missGen = 0;
+let _missInFlight = false;
+let _missStarting = false;
+let _missStartSeq = 0;
+let _missLast = null;
+let _missRefreshedFor = '';
 
-window.openMissingCleanup = async function () {
-  openLibModal('🗑️ 清理缺失记录', '<div class="hint">正在读取缺失作品…</div>', { lg: true });
+function missSessionSet(id) {
+  try {
+    if (id) sessionStorage.setItem(MISS_TASK_KEY, id);
+    else sessionStorage.removeItem(MISS_TASK_KEY);
+  } catch (e) {}
+}
+
+function missModalAlive() {
+  const m = $('#lib-modal');
+  return !!(m && m.style.display !== 'none' && $('#miss-progress'));
+}
+
+function stopMissPolling() {
+  _missGen += 1;
+  if (_missTimer) { clearTimeout(_missTimer); _missTimer = null; }
+  _missInFlight = false;
+}
+
+function ensureMissControls() {
+  const host = $('#miss-progress');
+  if (!host) return null;
+  if (host.dataset.ready !== '1') {
+    host.innerHTML = opProgressHtml('miss-flow', {
+        mode: 'flow', text: '正在复核所选作品…' }) +
+      opProgressHtml('miss-count', {
+        mode: 'count', label: '清理缺失作品',
+        text: '已处理 0／0 个作品', hidden: true });
+    host.dataset.ready = '1';
+  }
+  return host;
+}
+
+function resetMissReveal() {
+  const host = $('#miss-progress');
+  if (!host) return;
+  if (host.querySelectorAll) {
+    host.querySelectorAll('.op-progress').forEach(el => {
+      el.classList.remove('op-fade-in', 'op-shown');
+      delete el.dataset.opReveal;
+    });
+  }
+  opRevealProgressIn(host);
+}
+
+function showMissFlow(text) {
+  const area = $('#miss-task');
+  if (area) area.classList.remove('hidden');
+  ensureMissControls();
+  opProgressPaint('miss-flow', {
+    mode: 'flow', hidden: false, stage: text, text,
+  });
+  opProgressPaint('miss-count', { mode: 'count', hidden: true });
+}
+
+function missTaskShell(initialText) {
+  openLibModal('🗑️ 清理缺失记录',
+    '<div id="miss-task" class="hidden"><div id="miss-progress"></div></div>'
+    + '<div id="miss-note" class="hint"></div>'
+    + '<div id="miss-result"></div>', { lg: true });
+  opClaimModal('library-missing');
+  ensureMissControls();
+  resetMissReveal();
+  showMissFlow(initialText || '正在复核所选作品…');
+}
+
+function missRunningHint(task) {
+  const stage = task && task.stage;
+  if (stage === 'checking') return '正在重新核对磁盘与所选作品…';
+  if (stage === 'cleaning') {
+    const parts = [];
+    if (Number(task.cleaned || 0)) parts.push(`已清理 ${task.cleaned}`);
+    if (Number(task.skipped || 0)) parts.push(`跳过 ${task.skipped}`);
+    if (Number(task.failed || 0)) parts.push(`失败 ${task.failed}`);
+    return parts.length ? parts.join(' · ') : '正在清理索引记录…';
+  }
+  if (stage === 'recycling') {
+    return Number(task.recycled || 0)
+      ? `已回收残留文件 ${task.recycled} 个…`
+      : '正在回收残留文件…';
+  }
+  return '';
+}
+
+function missPaintTask(task) {
+  const area = $('#miss-task');
+  const note = $('#miss-note');
+  const running = !!(task && task.status === 'running');
+  if (!running) {
+    if (area) area.classList.add('hidden');
+    return;
+  }
+  if (area) area.classList.remove('hidden');
+  ensureMissControls();
+  const stage = task.stage || 'checking';
+  const total = Number(task.total || 0);
+  const done = Math.min(Number(task.done || 0),
+                        total || Number(task.done || 0));
+  let text = '正在复核所选作品…';
+  if (stage === 'cleaning') text = '正在清理索引记录…';
+  else if (stage === 'recycling') text = '正在回收残留文件…';
+  opProgressPaint('miss-flow', {
+    mode: 'flow', hidden: false, stage: text, text,
+  });
+  opProgressPaint('miss-count', {
+    mode: 'count', hidden: !(total > 0 && done > 0), done, total,
+    label: '清理缺失作品', stage: '清理作品',
+    text: `已处理 ${done}／${total} 个作品`,
+  });
+  if (note) note.textContent = missRunningHint(task);
+}
+
+function missPaintResult(task) {
+  const note = $('#miss-note');
+  const list = $('#miss-result');
+  if (!note || !list) return;
+  const res = (task && task.result) || {};
+  const cleaned = Number(res.cleaned || 0);
+  const skipped = res.skipped_items || [];
+  const failed = res.failed_items || [];
+  const recycled = Number(res.recycled || 0);
+  const rfail = res.recycle_failed || [];
+  let html = `<div class="hint"><b>已清理 ${cleaned} 条缺失记录</b>`
+    + ` · 跳过 ${skipped.length} 个 · 失败 ${failed.length} 个`;
+  if (res.recycle_files) html += ` · 已回收残留文件 ${recycled} 个`;
+  html += '</div>';
+  if (res.scan_incomplete) {
+    html += '<div class="hint">⚠ 本次扫描不完整，部分范围未能核实；未纳入候选的缺失作品请下次预览处理。</div>';
+  }
+  if (cleaned && res.recycle_files && rfail.length) {
+    html += `<div class="hint err-text">记录已清理，但 ${rfail.length} 个残留文件`
+      + '未能送入 Windows 回收站，需要在磁盘上手动处理。</div>';
+  }
+  if (failed.length) {
+    html += '<div class="hint">失败原因：</div><ul>'
+      + failed.map(x => `<li><b>#${esc(x.artwork_id)}</b> ${esc(x.reason || '')}</li>`).join('')
+      + '</ul>';
+  }
+  if (skipped.length) {
+    html += '<div class="hint">已跳过：</div><ul>'
+      + skipped.map(x => `<li><b>#${esc(x.artwork_id)}</b> ${esc(x.reason || '')}</li>`).join('')
+      + '</ul>';
+  }
+  if (rfail.length) {
+    html += '<div class="hint">未能回收的文件：</div><ul>'
+      + rfail.slice(0, 20).map(p => `<li><code>${esc(p)}</code></li>`).join('')
+      + '</ul>';
+  }
+  html += '<div class="btn-row">'
+    + '<button class="btn accent" onclick="missResetToPreview()">重新预览</button>'
+    + '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>';
+  note.innerHTML = html;
+  list.innerHTML = '';
+  if (task && task.id && _missRefreshedFor !== task.id) {
+    _missRefreshedFor = task.id;
+    try {
+      libSelected.clear();
+      void libSync();
+      loadLibrary(); loadStats(); loadLibFacets();
+    } catch (e) {}
+  }
+}
+
+function missPaintError(task) {
+  const note = $('#miss-note');
+  const list = $('#miss-result');
+  if (!note || !list) return;
+  note.innerHTML = `清理失败：${esc((task && task.error) || '未知错误')}`
+    + '<div class="btn-row">'
+    + '<button class="btn ghost" onclick="missResetToPreview()">重新预览</button>'
+    + '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>';
+  list.innerHTML = '';
+}
+
+function renderMissTask(task) {
+  if (!missModalAlive()) return;
+  missPaintTask(task);
+  if (task && task.status === 'running') return;
+  if (task && task.status === 'error') missPaintError(task);
+  else missPaintResult(task);
+}
+
+async function loadMissTask(force) {
+  if (!missModalAlive()) return;
+  if (!force && (_missStarting || _missTimer || _missInFlight)) return;
+  if (!_missTaskId) {
+    missSessionSet('');
+    missPaintError({ error: '上次清理任务已失效，请重新预览' });
+    return;
+  }
+  const gen = ++_missGen;
+  _missInFlight = true;
+  let d = null;
+  try {
+    d = await opFetchJson('/api/library/clean-missing/task?id='
+                          + encodeURIComponent(_missTaskId), 5000);
+  } catch (e) {
+    if (gen !== _missGen) return;
+    _missInFlight = false;
+    if (!missModalAlive()) { stopMissPolling(); return; }
+    if (!_missLast) _missLast = { status: 'error', stage: '', result: null,
+                                  error: '读取清理状态失败：' + (e.message || e) };
+    renderMissTask(_missLast);
+    if (!_missTimer) {
+      _missTimer = setTimeout(() => { _missTimer = null; loadMissTask(true); }, 1000);
+    }
+    return;
+  }
+  if (gen !== _missGen) return;
+  _missInFlight = false;
+  if (!missModalAlive()) { stopMissPolling(); return; }
+  if (!d || d.status !== 'ok' || !d.task) {
+    missSessionSet('');
+    _missTaskId = '';
+    missPaintError({ error: '上次清理任务已失效，请重新预览' });
+    stopMissPolling();
+    return;
+  }
+  _missLast = d.task;
+  renderMissTask(d.task);
+  if (d.task.status === 'running') startMissPolling();
+}
+
+function startMissPolling() {
+  if (_missTimer || _missInFlight) return;
+  const gen = ++_missGen;
+  const tick = async () => {
+    _missTimer = null;
+    if (gen !== _missGen) return;
+    if (!missModalAlive()) { stopMissPolling(); return; }
+    _missInFlight = true;
+    let d = null;
+    try {
+      d = await opFetchJson('/api/library/clean-missing/task?id='
+                            + encodeURIComponent(_missTaskId), 5000);
+    } catch (e) {
+      if (gen !== _missGen) return;
+      _missInFlight = false;
+      if (!missModalAlive()) { stopMissPolling(); return; }
+      _missTimer = setTimeout(tick, 1000);   // 保留最后进度, 继续查
+      return;
+    }
+    if (gen !== _missGen) return;
+    _missInFlight = false;
+    if (!missModalAlive()) { stopMissPolling(); return; }
+    if (!d || d.status !== 'ok' || !d.task) {
+      missSessionSet('');
+      _missTaskId = '';
+      missPaintError({ error: '上次清理任务已失效，请重新预览' });
+      stopMissPolling();
+      return;
+    }
+    _missLast = d.task;
+    renderMissTask(d.task);
+    if (d.task.status === 'running') {
+      _missTimer = setTimeout(tick, 800);
+      return;
+    }
+    stopMissPolling();
+  };
+  tick();
+}
+
+async function openMissingPreview() {
+  stopMissPolling();
+  _missTaskId = '';
+  missSessionSet('');
+  _missLast = null;
+  _missStarting = false;
+  openLibModal('🗑️ 清理缺失记录',
+    '<div id="miss-preview-progress">'
+    + opProgressHtml('miss-preview-flow', {
+        mode: 'flow', text: '正在核对缺失作品…' })
+    + '</div><div class="hint">正在读取缺失作品…</div>', { lg: true });
+  opClaimModal('library-missing');
   let r = null;
   try {
     r = await api('/api/library/missing-items');
   } catch (e) {
     $('#lib-modal-body').innerHTML =
-      `<div class="hint">读取失败：${esc(e.message || '未知错误')}</div>`;
+      `<div class="hint">读取失败：${esc(e.message || '未知错误')}</div>`
+      + '<div class="btn-row">'
+      + '<button class="btn ghost" onclick="openMissingPreview()">重试</button>'
+      + '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>';
+    return;
+  }
+  if (r && r.root_available === false) {
+    $('#lib-modal-body').innerHTML =
+      '<div class="hint">⚠ 图库不可用：磁盘未连接或图库目录无法访问。</div>'
+      + '<div class="btn-row">'
+      + '<button class="btn ghost" onclick="openMissingPreview()">重试</button>'
+      + '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>';
     return;
   }
   const err = apiErr(r);
-  if (err || (r && r.root_available === false)) {
+  if (err) {
     $('#lib-modal-body').innerHTML =
-      `<div class="hint">⚠ ${esc(err || '图库不可用：磁盘未连接或图库目录无法访问')}</div>`;
+      `<div class="hint">读取失败：${esc(err)}</div>`
+      + '<div class="btn-row">'
+      + '<button class="btn ghost" onclick="openMissingPreview()">重试</button>'
+      + '<button class="btn ghost" onclick="closeLibModal()">关闭</button></div>';
     return;
   }
   const items = (r && r.items) || [];
   window._missingPreview = items;
   if (!items.length) {
-    $('#lib-modal-body').innerHTML = '<div class="hint">当前没有被判定为「文件缺失」的作品。</div>';
+    $('#lib-modal-body').innerHTML =
+      '<div class="hint">当前没有被判定为「文件缺失」的作品。</div>'
+      + '<div class="btn-row"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>';
     return;
   }
   const rows = items.map(it => {
@@ -5818,9 +6115,10 @@ window.openMissingCleanup = async function () {
       <div class="hint">${fileHint}</div>
     </li>`;
   }).join('');
+  const dirs = (r.unreadable_dirs || []).slice(0, 8).join('、');
   $('#lib-modal-body').innerHTML = `
     <div class="hint">只清理勾选的作品。执行前会重新核对，文件已恢复的会自动跳过。</div>
-    ${r.scan_incomplete ? '<div class="hint">⚠ 本次扫描不完整，部分目录的缺失判定已暂缓；建议确认磁盘读取正常后再清理。</div>' : ''}
+    ${r.scan_incomplete ? `<div class="hint">⚠ 本次扫描不完整，受影响范围：${esc(dirs || '部分目录')}；相应缺失判定已暂缓，仅列出可确证缺失的作品。</div>` : ''}
     <div class="hint" style="margin:8px 0">
       <label><input type="checkbox" id="miss-clean-all" checked onchange="toggleMissingAll(this.checked)"> 全选（${items.length} 个作品）</label>
     </div>
@@ -5828,38 +6126,81 @@ window.openMissingCleanup = async function () {
     <div class="btn-row">
       <button class="btn danger" onclick="applyMissingCleanup(false)">只清理索引记录</button>
       <button class="btn danger" onclick="applyMissingCleanup(true)">清理索引并回收残留文件</button>
+      <button class="btn ghost" onclick="openMissingPreview()">重新读取</button>
       <button class="btn ghost" onclick="closeLibModal()">取消</button>
     </div>`;
+}
+
+window.missResetToPreview = function () {
+  stopMissPolling();
+  _missTaskId = '';
+  missSessionSet('');
+  _missLast = null;
+  _missStarting = false;
+  void openMissingPreview();
 };
+
+async function attachMissTask() {
+  missTaskShell('正在读取清理任务…');
+  const note = $('#miss-note');
+  if (note) note.textContent = '正在读取清理任务…';
+  await loadMissTask(true);
+}
+
+window.openMissingCleanup = async function () {
+  if (_missTaskId) { await attachMissTask(); return; }
+  await openMissingPreview();
+};
+
+// 旧 cleanMissing() 保留为入口别名, 不再直接清全库。
+async function cleanMissing() { return openMissingCleanup(); }
 
 window.toggleMissingAll = function (on) {
   $$('.miss-clean-cb').forEach(cb => { cb.checked = !!on; });
 };
 
 window.applyMissingCleanup = async function (recycleFiles) {
+  if (_missStarting) return;
   const ids = $$('.miss-clean-cb').filter(cb => cb.checked).map(cb => cb.value);
   if (!ids.length) { toast('请先勾选要清理的作品', 'err'); return; }
   const tip = recycleFiles
-    ? `清理 ${ids.length} 个缺失作品的索引记录，并把残留文件送进 Windows 回收站（可还原）？`
-    : `只清理 ${ids.length} 个缺失作品的索引记录？磁盘文件不动。`;
+    ? `清理 ${ids.length} 个缺失作品的索引记录，并把残留文件送进 Windows 回收站（可还原）？\n\n确认后仍会重新核对；文件已恢复的作品会自动跳过。`
+    : `只清理 ${ids.length} 个缺失作品的索引记录？\n\n磁盘文件不动；执行前会重新核对，文件已恢复的作品会自动跳过。`;
   if (!confirm(tip)) return;
+  if (_missStarting) return;
+  _missStarting = true;
+  const startSeq = ++_missStartSeq;
+  stopMissPolling();
+  missSessionSet('');
+  _missTaskId = '';
+  _missLast = null;
+  missTaskShell('正在提交清理任务…');
+  const note = $('#miss-note');
+  if (note) note.textContent = '正在提交清理任务…';
   try {
-    const r = await api('/api/library/clean-missing', {
+    const r = await api('/api/library/clean-missing/task', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids, recycle_files: !!recycleFiles }),
     });
+    if (startSeq !== _missStartSeq) return;
     const err = apiErr(r);
-    if (err) throw new Error(err);
-    closeLibModal();
-    const parts = [`已清理 ${r.cleaned || 0} 条缺失记录`];
-    if (r.files_recycled) parts.push(`回收残留文件 ${r.files_recycled} 个`);
-    if ((r.recycle_failed || []).length) parts.push(`${r.recycle_failed.length} 个文件没能进回收站`);
-    if ((r.skipped || []).length) parts.push(`${r.skipped.length} 个已恢复/不缺失，已跳过`);
-    toast(parts.join(' · '), (r.recycle_failed || []).length ? 'err' : 'ok');
-    libSelected.clear();
-    await libSync();
-    loadLibrary(); loadStats(); loadLibFacets();
-  } catch (e) { toast('清理失败: ' + e.message, 'err'); }
+    if (err || !r || r.status !== 'ok' || !r.task) {
+      throw new Error(err || '任务启动失败');
+    }
+    _missTaskId = r.task.id;
+    missSessionSet(_missTaskId);
+    _missLast = r.task;
+    renderMissTask(r.task);
+    if (r.task.status === 'running') startMissPolling();
+  } catch (e) {
+    if (startSeq !== _missStartSeq) return;
+    stopMissPolling();
+    _missLast = { status: 'error', stage: '', result: null,
+                  error: (e.message || String(e)) };
+    renderMissTask(_missLast);
+  } finally {
+    if (startSeq === _missStartSeq) _missStarting = false;
+  }
 };
 
 // 同步磁盘索引结果: 分别展示新增/重连/缺失/待确认/失败, 缺失进入勾选清理

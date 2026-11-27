@@ -15,6 +15,7 @@ Flask 后端: 复用 core/db 全部能力, 通过 SSE 把进度实时推到浏�
 from __future__ import annotations
 
 import atexit
+import copy
 import hashlib
 import hmac
 import json
@@ -287,6 +288,9 @@ def _scopes_for_request(path: str, method: str, body: "dict | None",
         return (), ids
     if p.startswith("/api/library/similar"):
         # 以图搜图/建特征库是只读检索, 不改图库数据, 不触发全库刷新
+        return (), ids
+    if p.startswith("/api/library/clean-missing/task"):
+        # 清理任务启动/轮询本身不改数据; 线程真正清理后由 _miss_run 登记数据域
         return (), ids
     if p.startswith("/api/library/backup") or p.startswith("/api/library/db-backup"):
         # 备份/恢复/删除只影响备份清单; 恢复是"用旧文件覆盖当前图" → 图库那几张也要重画
@@ -3021,6 +3025,194 @@ def _sim_run(task_id: str, query_path: str) -> None:
                           "result": {"items": items, "build": build}})
 
 
+def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
+    """后台执行一批缺失作品清理; 每件作品结算后才推进 N。"""
+    def upd(**kw):
+        with _MISS_TASK_LOCK:
+            if _MISS_TASK["id"] == task_id:
+                _MISS_TASK.update(kw)
+
+    def is_current() -> bool:
+        with _MISS_TASK_LOCK:
+            return _MISS_TASK["id"] == task_id
+
+    def note_error(msg: str) -> None:
+        with _MISS_TASK_LOCK:
+            if _MISS_TASK["id"] == task_id and len(_MISS_TASK["errors"]) < 50:
+                _MISS_TASK["errors"].append(msg)
+
+    def settle(aid: str, outcome: str, reason: str = "") -> bool:
+        with _MISS_TASK_LOCK:
+            if _MISS_TASK["id"] != task_id:
+                return False
+            _MISS_TASK["done"] = int(_MISS_TASK["done"]) + 1
+            _MISS_TASK["current"] = aid
+            if outcome == "cleaned":
+                _MISS_TASK["cleaned"] = int(_MISS_TASK["cleaned"]) + 1
+                _MISS_TASK["cleaned_ids"].append(aid)
+            elif outcome == "skipped":
+                _MISS_TASK["skipped"] = int(_MISS_TASK["skipped"]) + 1
+                _MISS_TASK["skipped_items"].append(
+                    {"artwork_id": aid, "reason": reason})
+            else:
+                _MISS_TASK["failed"] = int(_MISS_TASK["failed"]) + 1
+                _MISS_TASK["failed_items"].append(
+                    {"artwork_id": aid, "reason": reason})
+                if len(_MISS_TASK["errors"]) < 50:
+                    _MISS_TASK["errors"].append(f"#{aid}：{reason}")
+            return True
+
+    upd(stage="checking", done=0, total=len(ids), current="", error="",
+        finished_at=0.0, result=None)
+    try:
+        rep = _cached_reconcile(force=True)
+    except Exception as e:
+        upd(status="error", stage="", finished_at=time.time(),
+            error=f"复核所选作品失败：{type(e).__name__}: {e}")
+        return
+    if not getattr(rep, "root_available", True):
+        upd(status="error", stage="", finished_at=time.time(),
+            error="图库不可用：磁盘未连接或图库目录无法访问")
+        return
+
+    scan_incomplete = bool(getattr(rep, "scan_incomplete", False))
+    verified = {str(x) for x in (rep.missing_ids or [])}
+    upd(scan_incomplete=scan_incomplete)
+    try:
+        with _db() as db:
+            exists = {aid: db.get_artwork_metadata(aid) is not None for aid in ids}
+    except Exception as e:
+        reason = f"读取作品记录失败：{type(e).__name__}: {e}"
+        for aid in ids:
+            if not is_current():
+                return
+            settle(aid, "failed", reason)
+        upd(status="done", stage="", current="", finished_at=time.time(),
+            result={"total": len(ids), "cleaned": 0, "skipped": 0,
+                    "failed": len(ids), "cleaned_ids": [],
+                    "skipped_items": [], "failed_items": [
+                        {"artwork_id": a, "reason": reason} for a in ids],
+                    "recycled": 0, "recycle_failed": [],
+                    "recycle_files": recycle_files,
+                    "scan_incomplete": scan_incomplete})
+        return
+
+    to_clean: "list[str]" = []
+    for aid in ids:
+        if not is_current():
+            return
+        if aid in verified:
+            to_clean.append(aid)
+            continue
+        if not exists.get(aid):
+            reason = "记录已不存在（可能已由其他操作处理）"
+        elif scan_incomplete:
+            reason = "扫描不完整，无法核实是否仍缺失"
+        else:
+            reason = "文件已恢复或已不缺失"
+        settle(aid, "skipped", reason)
+
+    img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+    rel_map: "dict[str, list[str]]" = {}
+    labels = ""
+    cleaned_ids: "list[str]" = []
+    if to_clean:
+        if not is_current():
+            return
+        upd(stage="cleaning", current="")
+        try:
+            with _db() as db:
+                rel_map = db.get_local_paths_by_artwork(to_clean)
+            labels = _labels_inline(to_clean)   # 删库前取标题/作者
+            with _db() as db:
+                db.delete_artworks(to_clean)    # 批次事务: 保留原有语义
+        except Exception as e:
+            reason = f"清理记录失败：{type(e).__name__}: {e}"
+            for aid in to_clean:
+                if not is_current():
+                    return
+                settle(aid, "failed", reason)
+            to_clean = []
+        if to_clean:
+            with _db() as db:
+                for aid in to_clean:
+                    if not is_current():
+                        return
+                    if db.get_artwork_metadata(aid) is None:
+                        settle(aid, "cleaned")
+                        cleaned_ids.append(aid)
+                    else:
+                        settle(aid, "failed",
+                               "记录未删除（可能被其他操作占用）")
+
+    recycled, recycle_failed = 0, []
+    if recycle_files and cleaned_ids:
+        upd(stage="recycling", current="")
+        existing: "list[str]" = []
+        for aid in cleaned_ids:
+            for rel in rel_map.get(aid, []) or []:
+                try:
+                    f = Path(img_root) / rel
+                    if f.is_file():
+                        existing.append(str(f))
+                except OSError:
+                    continue
+        if existing:
+            try:
+                n, bad = _recycle_files(existing)
+                recycled = int(n or 0)
+                recycle_failed = [str(x) for x in (bad or [])]
+            except Exception as e:
+                recycle_failed = list(existing)
+                note_error(f"回收残留文件失败：{type(e).__name__}: {e}")
+
+    if cleaned_ids:
+        extra = ""
+        if recycle_files:
+            extra = f"（残留文件回收 {recycled} 个"
+            if recycle_failed:
+                extra += f"，{len(recycle_failed)} 个失败"
+            extra += "）"
+        try:
+            audit_log.record("delete", "清理缺失记录",
+                             f"清理 {len(cleaned_ids)} 个「磁盘文件已丢失」的作品记录："
+                             f"{labels}{extra}", len(cleaned_ids), ids=cleaned_ids)
+        except Exception:
+            pass
+        try:
+            mark_dirty("artworks", "pages", "authors", "facets", "stats",
+                       "search", "ops", ids=cleaned_ids)
+        except Exception:
+            pass
+
+    with _MISS_TASK_LOCK:
+        if _MISS_TASK["id"] != task_id:
+            return
+        skipped_items = list(_MISS_TASK["skipped_items"])
+        failed_items = list(_MISS_TASK["failed_items"])
+        result = {
+            "total": len(ids),
+            "cleaned": len(cleaned_ids),
+            "skipped": len(skipped_items),
+            "failed": len(failed_items),
+            "cleaned_ids": list(cleaned_ids),
+            "skipped_items": skipped_items,
+            "failed_items": failed_items,
+            "recycled": recycled,
+            "recycle_failed": list(recycle_failed),
+            "recycle_files": bool(recycle_files),
+            "scan_incomplete": scan_incomplete,
+        }
+        _MISS_TASK.update({
+            "status": "done", "stage": "", "current": "",
+            "done": len(cleaned_ids) + len(skipped_items) + len(failed_items),
+            "cleaned": len(cleaned_ids), "skipped": len(skipped_items),
+            "failed": len(failed_items), "recycled": recycled,
+            "recycle_failed": list(recycle_failed),
+            "finished_at": time.time(), "result": result,
+        })
+
+
 def _wall_dupes_for(aid: str, page_md5: str = "",
                     target_wh: "tuple[int, int] | None" = None,
                     deep: bool = True, page_num: "int | None" = None) -> "list[dict]":
@@ -4486,6 +4678,23 @@ _SIM_TASK = {
     "finished_at": 0.0, "result": None,
 }
 _SIM_ERROR_LIMIT = 20
+
+# 🗑️ 清理缺失作品: 预览后确认的批次在后台执行 (复核 → 清理记录 → 回收残留文件)。
+# 同一时间只保留最新一条任务; 结果凭任务 id 读取, 关弹窗后线程继续。
+_MISS_TASK_LOCK = threading.Lock()
+_MISS_TASK = {
+    "id": "", "status": "idle", "stage": "", "done": 0, "total": 0,
+    "cleaned": 0, "skipped": 0, "failed": 0, "recycled": 0,
+    "cleaned_ids": [], "skipped_items": [], "failed_items": [],
+    "recycle_failed": [], "errors": [], "current": "", "error": "",
+    "recycle_files": False, "ids": [], "scan_incomplete": False,
+    "batch_key": "", "created_at": 0.0, "finished_at": 0.0, "result": None,
+}
+
+
+def _miss_snapshot_locked() -> dict:
+    return copy.deepcopy(_MISS_TASK)
+
 
 # 设置页三个缩略图缓存操作共用一条可重开的任务状态
 _thumb_task_lock = threading.Lock()
@@ -11756,6 +11965,72 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             "scan_incomplete": bool(getattr(rep, "scan_incomplete", False)),
             "unreadable_dirs": getattr(rep, "unreadable_dirs", []) or [],
         })
+
+    @app.route("/api/library/clean-missing/task", methods=["POST"])
+    def api_library_clean_missing_task_start():
+        """启动一批缺失作品清理 (body: {ids, recycle_files})。
+
+        同一批仍在运行时重复提交接回同一任务; 新批次替换旧任务。预览只读,
+        真正的复核/删记录/回收都在后台线程完成, 结果凭任务 id 读取。
+        """
+        data = request.get_json(silent=True) or {}
+        ids = list(dict.fromkeys(
+            str(x) for x in (data.get("ids") or []) if str(x).strip()))
+        if not ids:
+            return jsonify({"status": "error",
+                            "message": "未选择要清理的作品"}), 400
+        recycle_files = bool(data.get("recycle_files"))
+        batch_key = ",".join(sorted(ids)) + "|" + ("1" if recycle_files else "0")
+        with _MISS_TASK_LOCK:
+            if (_MISS_TASK["status"] == "running"
+                    and _MISS_TASK["batch_key"] == batch_key):
+                return jsonify({"status": "ok", "already": True,
+                                "task": _miss_snapshot_locked()})
+            tid = uuid.uuid4().hex
+            _MISS_TASK.update({
+                "id": tid, "status": "running", "stage": "checking",
+                "done": 0, "total": len(ids), "cleaned": 0, "skipped": 0,
+                "failed": 0, "recycled": 0, "cleaned_ids": [],
+                "skipped_items": [], "failed_items": [], "recycle_failed": [],
+                "errors": [], "current": "", "error": "",
+                "recycle_files": recycle_files, "ids": list(ids),
+                "scan_incomplete": False, "batch_key": batch_key,
+                "created_at": time.time(), "finished_at": 0.0, "result": None,
+            })
+            started = _miss_snapshot_locked()
+
+        def _task():
+            try:
+                _miss_run(tid, ids, recycle_files)
+            except Exception as e:
+                with _MISS_TASK_LOCK:
+                    if _MISS_TASK["id"] == tid:
+                        _MISS_TASK.update({
+                            "status": "error", "stage": "",
+                            "finished_at": time.time(),
+                            "error": f"清理任务异常：{type(e).__name__}: {e}"})
+
+        try:
+            threading.Thread(target=_task, daemon=True,
+                             name="clean-missing").start()
+        except Exception as e:
+            msg = f"无法启动清理线程：{type(e).__name__}: {e}"
+            with _MISS_TASK_LOCK:
+                if _MISS_TASK["id"] == tid:
+                    _MISS_TASK.update({"status": "error", "stage": "",
+                                       "finished_at": time.time(),
+                                       "error": msg})
+            return jsonify({"status": "error", "message": msg}), 500
+        return jsonify({"status": "ok", "task": started})
+
+    @app.route("/api/library/clean-missing/task", methods=["GET"])
+    def api_library_clean_missing_task_status():
+        """读取当前清理任务; 不带 id 或 id 过期一律不返回结果。"""
+        tid = str(request.args.get("id") or "").strip()
+        with _MISS_TASK_LOCK:
+            if not tid or _MISS_TASK["id"] != tid:
+                return jsonify({"status": "idle", "task": None}), 404
+            return jsonify({"status": "ok", "task": _miss_snapshot_locked()})
 
     @app.route("/api/library/clean-missing", methods=["POST"])
     def api_library_clean_missing():

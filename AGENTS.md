@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127q`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128a`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127q`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128a`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.86 清理缺失作品接入共用进度（2026-11-28，前端 `20261128a`，已发布到安装版）
+
+- **后端任务**：新增 `POST/GET /api/library/clean-missing/task`，`_MISS_TASK`
+  单条状态；同批运行中重复提交接回，新批次替换旧任务。阶段 checking → cleaning
+  → recycling；删记录仍一次批次事务，随后逐作品核对，清理/跳过/失败都带原因，
+  每件结算后才推进 N。确认后新发现的缺失不处理；图库不可用直接 error；
+  回收文件与记录清理独立计数，回收失败明确返回；旧同步接口保留。
+- **前端**：预览即时显示「正在核对缺失作品」共用流动条（约 300 ms、减少动效），
+  区分空清单/图库不可用/扫描不完整/请求失败且只读。确认后固定 ids/模式/数量，
+  取消不建任务；执行区显示复核流动、批次/回收等待与真实计数；结果列清理、跳过、
+  失败原因和回收/回收失败数。任务号存 `vixiq.miss.task`，关闭重开/刷新接回；
+  串行查询、5 s 超时、短暂失败重试、迟到回包保护，其他弹窗打开即停止轮询。
+- **回归**：新增 T201（总数 **192**）与 `test_missing_cleanup_progress.cjs`
+  **12 项**。全量 **192/192**（191.80 s），日志
+  `_dev_runtime/diagnostics/trae-20261128a-missing-cleanup-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 00:19:47`，前端 `20261128a`）在 7813
+  隔离图库通过清理缺失 API/UI 检查，恢复配置后通过既有 **12 项**检查（日志
+  `trae-20261128a-candidate-checks.log`）。回滚清单
+  `_dev_runtime/backups/publish-20261128a-20261128-002302.json`（4 个旧文件、
+  8 个替换项、15,232,239 字节）。dist 与安装版 exe `3de29c001322…`、base_library
+  `64641d8da4f3…`、app.js `7dd2547e14e9…`、index.html `e7c8e2280fd1…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261128a-1795796387-1795695345-1795519082`、健康正常，清理缺失/以图搜图/
+  副本扫描/壁纸库/回收站 UI 检查通过。
 
 ### 4.85 以图搜图文件身份核验与旧缓存迁移（2026-11-27，前端 `20261127q`，已发布到安装版）
 
