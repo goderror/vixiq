@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127m`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127n`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127m`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127n`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,28 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.82 壁纸副本扫描返修：启动归属 + 线程失败可重试（2026-11-27，前端 `20261127n`，已发布到安装版）
+
+- **启动归属**：`wallDupesScan` 捕获 `opModalSeq()` 与 `_wallDupesStartSeq` 批次号；
+  打开/关闭/重开弹窗都会递增批次。POST 的成功、失败、finally 都校验弹窗实例与批次，
+  旧回包不能改新弹窗进度/结果、不能停新轮询、不能弹旧通知、不能清新一轮受理标记；
+  后端任务保留，重开由 GET 接回。
+- **线程失败**：`Thread.start()` 包 try/except；失败时把 `_WALL_DUPES` 收束为 error，
+  返回 500 + 原因，GET 同步看到失败；不再卡在 scanning，随后可正常发起新任务。
+  实际运行中的重复提交仍返回 already。
+- **回归**：Node 扩到 **16 项**（旧 POST 成功/失败、新一轮挂起时旧回包结束等）；
+  T199 新增 `Thread.start` 抛错、GET 终态与重试成功，保留路径不可读/任务抛错用例。
+  全量 **190/190**（148.07 s），日志
+  `_dev_runtime/diagnostics/trae-20261127n-wall-dupes-rework-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 21:51:12`，前端 `20261127n`）在 7813
+  通过全部 12 项检查；回滚清单
+  `_dev_runtime/backups/publish-20261127n-20261127-215258.json`（4 个旧文件、8 个
+  替换项、15,211,694 字节）。dist 与安装版 exe `7e89dd652f49…`、base_library
+  `b6d089ed3614…`、app.js `154a44d738d8…`、index.html `34545897a19d…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127n-1795787472-1795695345-1795519082`、健康正常，副本扫描/壁纸库/回收站
+  UI 检查通过。
 
 ### 4.81 壁纸副本扫描接入共用进度（2026-11-27，前端 `20261127m`，已发布到安装版）
 

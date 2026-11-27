@@ -62,11 +62,24 @@ function harnessBody() {
     if (v >= 1024) return (v / 1024).toFixed(1) + ' KB';
     return v + ' B';
   }
+  let modalSeq = 0;
   function openLibModal(title, html) {
+    modalSeq += 1;
     els['#lib-modal'].style.display = '';
+    els['#lib-modal'].dataset.opSeq = String(modalSeq);
     els['#lib-modal-body'].innerHTML = html;
   }
   function closeLibModal() { els['#lib-modal'].style.display = 'none'; }
+  function opClaimModal(owner) {
+    els['#lib-modal'].dataset.opOwner = owner || '';
+  }
+  function opModalSeq() {
+    return Number(els['#lib-modal'].dataset.opSeq || 0);
+  }
+  function opModalSame(seq) {
+    return els['#lib-modal'].style.display !== 'none'
+      && String(els['#lib-modal'].dataset.opSeq || '') === String(seq);
+  }
   function apiErr(r) {
     if (r && r.status === 'ok') return '';
     return (r && (r.msg || r.error)) || '请求失败';
@@ -146,6 +159,8 @@ function harnessBody() {
     _wallDupesGen = 0;
     _wallDupesInFlight = false;
     _wallDupesStarting = false;
+    _wallDupesStartSeq = 0;
+    modalSeq = 0;
     modalOwner = true;
     els['#lib-modal'].style.display = 'none';
     Object.values(els).forEach(el => {
@@ -442,6 +457,103 @@ function harnessBody() {
     assert.ok(els['#wall-dupes-task'].classList.contains('hidden'));
     assert.ok(headText().includes('发现 1 张副本'));
     assert.strictEqual(timerCount(), 0);
+  });
+
+  // 14. 旧启动成功回包不接管重开的新弹窗
+  test('旧启动成功回包不接管重开的新弹窗', async () => {
+    reset();
+    await openIdle();
+    let resolveOld;
+    let posts = 0;
+    apiHandler = (url, opts) => {
+      if (opts && opts.method === 'POST') {
+        posts += 1;
+        return new Promise(r => { resolveOld = r; });
+      }
+      return runningTask('扫描壁纸', 1, 3);
+    };
+    const oldP = wallDupesScan(makeEl('old'));
+    await flush();
+    wallDupesClose();
+    await wallDupesOpen();
+    await flush();
+    assert.strictEqual(timerCount(), 1, '重开后应接回新任务轮询');
+    const countBefore = lastPaint('wall-dupes-count');
+    assert.ok(countBefore && countBefore.text.includes('已扫描 1／3 张'));
+    const headBefore = headHtml();
+    resolveOld({ status: 'ok', task: runningTask('核对壁纸夹与图库索引', 0, 0) });
+    await oldP; await flush();
+    assert.strictEqual(headHtml(), headBefore);
+    const countAfter = lastPaint('wall-dupes-count');
+    assert.ok(countAfter && countAfter.text.includes('已扫描 1／3 张'));
+    assert.strictEqual(timerCount(), 1, '旧成功回包不能停新轮询');
+    assert.strictEqual(posts, 1);
+    assert.strictEqual(toastLog.length, 0);
+  });
+
+  // 15. 旧启动失败回包不改新弹窗也不弹旧错误
+  test('旧启动失败回包不改新弹窗也不弹旧错误', async () => {
+    reset();
+    await openIdle();
+    let resolveOld;
+    apiHandler = (url, opts) => {
+      if (opts && opts.method === 'POST') {
+        return new Promise(r => { resolveOld = r; });
+      }
+      return runningTask('扫描壁纸', 1, 3);
+    };
+    const oldP = wallDupesScan(makeEl('old'));
+    await flush();
+    wallDupesClose();
+    await wallDupesOpen();
+    await flush();
+    assert.strictEqual(timerCount(), 1);
+    const headBefore = headHtml();
+    resolveOld({ status: 'error', msg: '旧网络错误' });
+    await oldP; await flush();
+    assert.strictEqual(headHtml(), headBefore);
+    assert.ok(!headText().includes('扫描失败'));
+    assert.strictEqual(timerCount(), 1, '旧失败不能停新轮询');
+    assert.strictEqual(toastLog.length, 0, '旧失败不能弹旧通知');
+    assert.strictEqual(_wallDupesStarting, false);
+  });
+
+  // 16. 新一轮启动仍挂起时旧 POST 结束: 不清新受理标记
+  test('新一轮启动挂起时旧 POST 结束不清新受理标记', async () => {
+    reset();
+    await openIdle();
+    let resolveOld, resolveNew;
+    let posts = 0;
+    let statusMode = 'idle';
+    apiHandler = (url, opts) => {
+      if (opts && opts.method === 'POST') {
+        posts += 1;
+        if (posts === 1) return new Promise(r => { resolveOld = r; });
+        return new Promise(r => { resolveNew = r; });
+      }
+      return statusMode === 'idle'
+        ? { status: 'idle', result: null }
+        : runningTask('扫描壁纸', 1, 3);
+    };
+    const oldP = wallDupesScan(makeEl('old'));
+    await flush();
+    wallDupesClose();
+    await wallDupesOpen();
+    await flush();
+    const newP = wallDupesScan(makeEl('new'));
+    await flush();
+    assert.strictEqual(_wallDupesStarting, true);
+    assert.strictEqual(posts, 2);
+    resolveOld({ status: 'error', msg: '旧网络错误' });
+    await oldP; await flush();
+    assert.strictEqual(_wallDupesStarting, true, '旧 finally 不能清新一轮受理标记');
+    assert.strictEqual(headHtml(), '');
+    assert.strictEqual(toastLog.length, 0);
+    statusMode = 'running';
+    resolveNew({ status: 'ok', task: runningTask('核对壁纸夹与图库索引', 0, 0) });
+    await newP; await flush();
+    assert.strictEqual(_wallDupesStarting, false);
+    assert.ok(timerCount() >= 1);
   });
 
   (async () => {

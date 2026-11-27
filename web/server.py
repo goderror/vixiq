@@ -9911,7 +9911,16 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                                     "at": time.time(), "current": "",
                                     "result": res})
 
-        threading.Thread(target=_task, daemon=True, name="wall-dupes").start()
+        try:
+            threading.Thread(target=_task, daemon=True, name="wall-dupes").start()
+        except Exception as e:
+            # 线程都没起来 (资源耗尽/被安全软件拦): 不能把状态留在 scanning,
+            # 否则下一次 POST 会一直返回 already, 用户永远无法重试。
+            msg = f"无法启动扫描线程：{type(e).__name__}: {e}"
+            with _WALL_DUPES_LOCK:
+                _WALL_DUPES.update({"status": "error", "stage": "",
+                                    "error": msg, "current": ""})
+            return jsonify({"status": "error", "msg": msg}), 500
         return jsonify({"status": "ok", "task": started})
 
     @app.route("/api/wallpaper/dupes/recycle", methods=["POST"])

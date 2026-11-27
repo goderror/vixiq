@@ -940,6 +940,7 @@ let wallDupesTimer = null, wallDupesSel = new Set(), wallDupesLast = null;
 let _wallDupesGen = 0;
 let _wallDupesInFlight = false;
 let _wallDupesStarting = false;
+let _wallDupesStartSeq = 0;   // 启动批次: 旧弹窗/旧一轮的 POST 回包不得影响当前轮
 
 function wallDupesModalAlive() {
   const m = $('#lib-modal');
@@ -1152,18 +1153,22 @@ async function loadWallDupes(force) {
 
 async function wallDupesOpen() {
   wallDupesSel = new Set();
+  _wallDupesStartSeq += 1;     // 旧弹窗里还没回来的启动请求就此作废
   _wallDupesStarting = false;
   stopWallDupesPolling();
   openLibModal('🧹 壁纸副本清理',
     '<div id="wall-dupes-task" class="hidden"><div id="wall-dupes-progress"></div></div>'
     + '<div id="wall-dupes-head" class="hint">正在读取扫描结果…</div>'
     + '<div id="wall-dupes-list"></div>', { lg: true });
+  opClaimModal('wall-dupes');
   showWallDupesFlow('正在读取扫描状态…');
   resetWallDupesReveal();
   await loadWallDupes(true);
 }
 
 function wallDupesClose() {
+  _wallDupesStartSeq += 1;     // 关闭后旧 POST 的成功/失败/收尾全部失效
+  _wallDupesStarting = false;
   stopWallDupesPolling();
   closeLibModal();
 }
@@ -1171,6 +1176,9 @@ function wallDupesClose() {
 async function wallDupesScan(btn) {
   if (_wallDupesStarting || _wallDupesInFlight) return;
   if (!wallDupesModalAlive()) return;
+  // 启动请求归属到这次弹窗实例 + 这一轮启动; 之后旧回包一律不认
+  const seq = opModalSeq();
+  const startId = ++_wallDupesStartSeq;
   _wallDupesStarting = true;
   if (btn) btn.disabled = true;
   stopWallDupesPolling();
@@ -1182,6 +1190,7 @@ async function wallDupesScan(btn) {
   if (list) list.innerHTML = '';
   try {
     const r = await api('/api/wallpaper/dupes/scan', { method: 'POST' });
+    if (startId !== _wallDupesStartSeq || !opModalSame(seq)) return;
     if (!r || r.status !== 'ok') {
       throw new Error((r && (r.msg || r.error)) || '启动扫描失败');
     }
@@ -1192,16 +1201,19 @@ async function wallDupesScan(btn) {
     if (r.task && r.task.status === 'scanning') startWallDupesPolling();
     else await loadWallDupes(true);
   } catch (e) {
+    if (startId !== _wallDupesStartSeq || !opModalSame(seq)) return;
     stopWallDupesPolling();
     wallDupesLast = { status: 'error', stage: '', result: null,
                       error: (e.message || String(e)) };
     if (wallDupesModalAlive()) wallDupesPaint(wallDupesLast);
     toast('扫描失败: ' + (e.message || e), 'err');
   } finally {
-    _wallDupesStarting = false;
-    if (wallDupesModalAlive()
-        && !(wallDupesLast && wallDupesLast.status === 'scanning')) {
-      wallDupesPaint(wallDupesLast || { status: 'idle', result: null });
+    if (startId === _wallDupesStartSeq) {
+      _wallDupesStarting = false;
+      if (opModalSame(seq)
+          && !(wallDupesLast && wallDupesLast.status === 'scanning')) {
+        wallDupesPaint(wallDupesLast || { status: 'idle', result: null });
+      }
     }
   }
 }
