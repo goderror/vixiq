@@ -933,6 +933,355 @@ async function wallCopyLink(aid) {
     window.prompt('复制失败，请手动复制：', url);
   }
 }
+// ============ 🔍 图库以图搜图 (共用进度) ============
+// 查询图 → 后台任务: 检查/增量提取特征 → 加载到内存 → 检索。结果只能凭任务 id 读取;
+// 同一时间一条任务, 新的选择会取代旧任务; 关闭弹窗后台继续, 重开接回。
+const SIM_TASK_KEY = 'vixiq.sim.task';
+let _simTaskId = '';
+try { _simTaskId = sessionStorage.getItem(SIM_TASK_KEY) || ''; } catch (e) {}
+let _simTimer = null;
+let _simGen = 0;
+let _simInFlight = false;
+let _simStarting = false;
+let _simStartSeq = 0;
+let _simLast = null;
+
+function simSessionSet(id) {
+  try {
+    if (id) sessionStorage.setItem(SIM_TASK_KEY, id);
+    else sessionStorage.removeItem(SIM_TASK_KEY);
+  } catch (e) {}
+}
+
+function simModalAlive() {
+  const m = $('#lib-modal');
+  return !!(m && m.style.display !== 'none' && $('#sim-progress'));
+}
+
+function stopSimPolling() {
+  _simGen += 1;
+  if (_simTimer) { clearTimeout(_simTimer); _simTimer = null; }
+  _simInFlight = false;
+}
+
+function ensureSimControls() {
+  const host = $('#sim-progress');
+  if (!host) return null;
+  if (host.dataset.ready !== '1') {
+    host.innerHTML = opProgressHtml('sim-flow', {
+        mode: 'flow', text: '正在检查图库特征…' }) +
+      opProgressHtml('sim-count', {
+        mode: 'count', label: '正在提取特征',
+        text: '已处理 0／0 张', hidden: true });
+    host.dataset.ready = '1';
+  }
+  return host;
+}
+
+function resetSimReveal() {
+  const host = $('#sim-progress');
+  if (!host) return;
+  if (host.querySelectorAll) {
+    host.querySelectorAll('.op-progress').forEach(el => {
+      el.classList.remove('op-fade-in', 'op-shown');
+      delete el.dataset.opReveal;
+    });
+  }
+  opRevealProgressIn(host);
+}
+
+function showSimFlow(text) {
+  const area = $('#sim-task');
+  if (area) area.classList.remove('hidden');
+  ensureSimControls();
+  opProgressPaint('sim-flow', {
+    mode: 'flow', hidden: false, stage: text, text,
+  });
+  opProgressPaint('sim-count', { mode: 'count', hidden: true });
+}
+
+function simOpenModal(initialText) {
+  openLibModal('🔍 以图搜图',
+    '<div id="sim-task" class="hidden"><div id="sim-progress"></div></div>'
+    + '<div id="sim-note" class="hint"></div>'
+    + '<div id="sim-list"></div>');
+  opClaimModal('library-similar');
+  ensureSimControls();
+  resetSimReveal();
+  showSimFlow(initialText || '正在检查图库特征…');
+}
+
+function simBuildHint(build) {
+  if (!build || !Number(build.total)) {
+    if (build && Number(build.index_size)) {
+      return `特征库已就绪（${build.index_size} 张）。`;
+    }
+    return '';
+  }
+  let s = `特征库：已提取 ${Number(build.extracted || 0)} 张，`
+    + `跳过 ${Number(build.skipped || 0)} 张，`
+    + `失败 ${Number(build.failed || 0)} 张`;
+  const err = ((build.errors || [])[0]) || '';
+  if (err) s += `（${esc(err)}）`;
+  return s + '。';
+}
+
+function simRunningHint(task) {
+  const stage = task && task.stage;
+  if (stage === 'extracting') {
+    const parts = [];
+    parts.push(`已提取 ${Number(task.extracted || 0)} 张`);
+    if (task.skipped) parts.push(`跳过 ${task.skipped} 张`);
+    if (task.failed) parts.push(`失败 ${task.failed} 张`);
+    const err = ((task.errors || [])[0]) || '';
+    return parts.join(' · ') + (err ? `（${esc(err)}）` : '');
+  }
+  if (stage === 'loading') return '正在把已有特征读入内存…';
+  if (stage === 'searching') return '正在比对图库特征…';
+  if (stage === 'checking') return '首次使用需要为图库准备特征库，完成后自动开始检索。';
+  return '';
+}
+
+function simRescanHtml() {
+  return ' <button class="btn ghost" onclick="simPickFile()">重新选图</button>';
+}
+
+function simPaintTask(task) {
+  const area = $('#sim-task');
+  const note = $('#sim-note');
+  const running = !!(task && task.status === 'running');
+  if (!running) {
+    if (area) area.classList.add('hidden');
+    return;
+  }
+  if (area) area.classList.remove('hidden');
+  ensureSimControls();
+  const stage = task.stage || 'checking';
+  const total = Number(task.total || 0);
+  const done = Math.min(Number(task.done || 0), total || Number(task.done || 0));
+  const extracting = stage === 'extracting' && total > 0;
+  let text = '正在检查图库特征…';
+  if (stage === 'loading') text = '正在加载图像特征…';
+  else if (stage === 'searching') text = '正在查找相似图…';
+  else if (extracting) text = '正在提取特征';
+  opProgressPaint('sim-flow', {
+    mode: 'flow', hidden: extracting, stage: text, text,
+  });
+  opProgressPaint('sim-count', {
+    mode: 'count', hidden: !extracting, done, total,
+    label: '正在提取特征', stage: '提取特征',
+    text: `已处理 ${done}／${total} 张`,
+  });
+  if (note) note.textContent = simRunningHint(task);
+}
+
+function simResultItemsHtml(items) {
+  return `<div class="works-grid">` + (items || []).map(it => `
+    <div class="work-card" style="cursor:pointer"
+         onclick="closeLibModal();switchTab('library');$('#lib-search-input').value='${esc(it.artwork_id || '')}';loadLibrary()">
+      <img class="thumb" src="${esc(safeThumb(it.thumb, it))}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="w-body">
+        <div class="w-title">${esc(it.title || '（无标题）')}</div>
+        <div class="w-author">${esc(it.author || '')} · ${esc(it.artwork_id || '')}</div>
+        <div class="w-meta">相似度 ${(Number(it.fusion_score || 0) * 100).toFixed(1)}%</div>
+        <div class="w-path" title="${esc(it.rel)}">📁 ${esc(it.rel)}</div>
+      </div>
+    </div>`).join('') + `</div>`;
+}
+
+function simPaintResult(task) {
+  const note = $('#sim-note');
+  const list = $('#sim-list');
+  if (!note || !list) return;
+  const res = (task && task.result) || {};
+  const items = res.items || [];
+  const hint = simBuildHint(res.build);
+  if (items.length) {
+    note.innerHTML = `找到 ${items.length} 张相似图片（按相似度降序），`
+      + `点卡片在图库中定位该作品：` + (hint ? `<div class="muted">${hint}</div>` : '')
+      + simRescanHtml();
+    list.innerHTML = simResultItemsHtml(items);
+  } else {
+    note.innerHTML = `没有找到相似图片`
+      + (res.build && Number(res.build.index_size)
+          ? '' : '（特征库为空或图库图片过少）')
+      + (hint ? `<div class="muted">${hint}</div>` : '')
+      + simRescanHtml();
+    list.innerHTML = '';
+  }
+}
+
+function simPaintError(task) {
+  const note = $('#sim-note');
+  const list = $('#sim-list');
+  if (!note || !list) return;
+  note.innerHTML = `以图搜图失败：${esc((task && task.error) || '未知错误')}`
+    + simRescanHtml();
+  list.innerHTML = '';
+}
+
+function renderSimTask(task) {
+  if (!simModalAlive()) return;
+  simPaintTask(task);
+  if (task && task.status === 'running') return;
+  if (task && task.status === 'error') simPaintError(task);
+  else simPaintResult(task);
+}
+
+async function loadSimTask(force) {
+  if (!simModalAlive()) return;
+  if (!force && (_simStarting || _simTimer || _simInFlight)) return;
+  if (!_simTaskId) {
+    simSessionSet('');
+    simPaintError({ error: '上次检索已失效，请重新选图' });
+    return;
+  }
+  const gen = ++_simGen;
+  _simInFlight = true;
+  let d = null;
+  try {
+    d = await opFetchJson('/api/library/similar/task?id='
+                          + encodeURIComponent(_simTaskId), 5000);
+  } catch (e) {
+    if (gen !== _simGen) return;
+    _simInFlight = false;
+    if (!simModalAlive()) { stopSimPolling(); return; }
+    // 短暂失败: 保留最后状态, 稍后重试
+    if (!_simLast) _simLast = { status: 'error', stage: '', result: null,
+                                error: '读取检索状态失败：' + (e.message || e) };
+    renderSimTask(_simLast);
+    if (!_simTimer) {
+      _simTimer = setTimeout(() => { _simTimer = null; loadSimTask(true); }, 1000);
+    }
+    return;
+  }
+  if (gen !== _simGen) return;
+  _simInFlight = false;
+  if (!simModalAlive()) { stopSimPolling(); return; }
+  if (!d || d.status !== 'ok' || !d.task) {
+    simSessionSet('');
+    _simTaskId = '';
+    simPaintError({ error: '上次检索已失效，请重新选图' });
+    return;
+  }
+  _simLast = d.task;
+  renderSimTask(d.task);
+  if (d.task.status === 'running') startSimPolling();
+}
+
+function startSimPolling() {
+  if (_simTimer || _simInFlight) return;
+  const gen = ++_simGen;
+  const tick = async () => {
+    _simTimer = null;
+    if (gen !== _simGen) return;
+    if (!simModalAlive()) { stopSimPolling(); return; }
+    _simInFlight = true;
+    let d = null;
+    try {
+      d = await opFetchJson('/api/library/similar/task?id='
+                            + encodeURIComponent(_simTaskId), 5000);
+    } catch (e) {
+      if (gen !== _simGen) return;
+      _simInFlight = false;
+      if (!simModalAlive()) { stopSimPolling(); return; }
+      _simTimer = setTimeout(tick, 1000);   // 保留最后进度, 继续查
+      return;
+    }
+    if (gen !== _simGen) return;
+    _simInFlight = false;
+    if (!simModalAlive()) { stopSimPolling(); return; }
+    if (!d || d.status !== 'ok' || !d.task) {
+      simSessionSet('');
+      _simTaskId = '';
+      simPaintError({ error: '上次检索已失效，请重新选图' });
+      stopSimPolling();
+      return;
+    }
+    _simLast = d.task;
+    renderSimTask(d.task);
+    if (d.task.status === 'running') {
+      _simTimer = setTimeout(tick, 800);
+      return;
+    }
+    stopSimPolling();
+  };
+  tick();
+}
+
+function simPickFile() {
+  const inp = $('#lib-similar-file');
+  if (!inp) return;
+  inp.value = '';
+  inp.click();
+}
+
+async function simFileChosen(file) {
+  if (!file || _simStarting) return;
+  stopSimPolling();
+  simSessionSet('');
+  _simTaskId = '';
+  _simLast = null;
+  _simStarting = true;
+  const startId = ++_simStartSeq;
+  const gen = ++_simGen;
+  simOpenModal('正在检查图库特征…');
+  const note = $('#sim-note');
+  if (note) note.textContent = '正在上传查询图…';
+  try {
+    const fd = new FormData();
+    fd.append('image', file);
+    let resp, data = null;
+    try {
+      resp = await fetch('/api/library/similar/task', { method: 'POST', body: fd });
+    } catch (e) {
+      throw new Error('上传查询图失败：' + (e.message || e));
+    }
+    try { data = await resp.json(); } catch (e) { data = null; }
+    if (gen !== _simGen) return;
+    if (!resp.ok || !data || data.status !== 'ok' || !data.task) {
+      throw new Error((data && (data.message || data.error))
+                      || ('HTTP ' + resp.status));
+    }
+    _simTaskId = data.task.id;
+    simSessionSet(_simTaskId);
+    _simLast = data.task;
+    renderSimTask(data.task);
+    if (data.task.status === 'running') startSimPolling();
+    else await loadSimTask(true);
+  } catch (e) {
+    if (gen !== _simGen) return;
+    stopSimPolling();
+    _simLast = { status: 'error', stage: '', result: null,
+                 error: (e.message || String(e)) };
+    renderSimTask(_simLast);
+  } finally {
+    if (startId === _simStartSeq) _simStarting = false;
+  }
+}
+
+async function attachSimTask() {
+  if (!_simTaskId) { simPickFile(); return; }
+  simOpenModal('正在读取检索状态…');
+  await loadSimTask(true);
+}
+
+(function initLibrarySimilar() {
+  const btn = $('#lib-similar-btn');
+  const inp = $('#lib-similar-file');
+  if (!btn || !inp) return;
+  btn.addEventListener('click', () => {
+    if (_simTaskId) attachSimTask();
+    else simPickFile();
+  });
+  inp.addEventListener('change', function () {
+    const file = this.files && this.files[0];
+    if (!file) return;
+    void simFileChosen(file);
+  });
+  window.simPickFile = simPickFile;
+})();
+
 // ============ 🧹 壁纸副本清理 (「省空间」) —— 2026-09-24 ============
 // 壁纸夹里有 784 张和图库某页**字节一致**的副本 (约 5.37 GB): 删掉壁纸夹里那份不丢任何东西。
 // 两条硬规矩就落在这里 —— ① 绝不自动删, 逐条勾选; ② 只走 Windows 电脑回收站, 可还原。
@@ -12959,41 +13308,7 @@ function bind() {
   // 图库同步按钮 + 「仅看缺失文件」筛选 (走后端, 与缺元数据 AND)
   // 手动同步复用智能刷新的后台进度条: 阶段/计数/失败重试与自动核对一致
   $('#lib-sync-btn').addEventListener('click', () => manualSyncDisk());
-  // 🔍 本地以图搜图 (ORB+颜色): 上传一张图 → 图库相似结果弹窗
-  $('#lib-similar-btn').addEventListener('click', () => $('#lib-similar-file').click());
-  $('#lib-similar-file').addEventListener('change', async function () {
-    const file = this.files && this.files[0];
-    if (!file) return;
-    openLibModal('🔍 以图搜图', '<div class="hint">正在检索…（首次使用需先构建特征库：扫描全库图片提取特征，可能需要几分钟）</div>');
-    const fd = new FormData();
-    fd.append('image', file);
-    try {
-      const r = await fetch('/api/library/similar', { method: 'POST', body: fd });
-      const data = await r.json();
-      if (!r.ok || data.status === 'error') throw new Error(data.message || ('HTTP ' + r.status));
-      const items = data.items || [];
-      if (!items.length) {
-        $('#lib-modal-body').innerHTML = '<div class="hint">没有找到相似图片（特征库为空或图库图片过少）。</div>';
-        return;
-      }
-      $('#lib-modal-body').innerHTML =
-        `<div class="hint" style="margin-bottom:8px">找到 ${items.length} 张相似图片（按相似度降序），点卡片在图库中定位该作品：</div>
-         <div class="works-grid">` + items.map(it => `
-        <div class="work-card" style="cursor:pointer"
-             onclick="closeLibModal();switchTab('library');$('#lib-search-input').value='${esc(it.artwork_id || '')}';loadLibrary()">
-          <img class="thumb" src="${esc(safeThumb(it.thumb, it))}" alt="" onerror="this.style.visibility='hidden'">
-          <div class="w-body">
-            <div class="w-title">${esc(it.title || '（无标题）')}</div>
-            <div class="w-author">${esc(it.author || '')} · ${esc(it.artwork_id || '')}</div>
-            <div class="w-meta">相似度 ${(it.fusion_score * 100).toFixed(1)}%</div>
-            <div class="w-path" title="${esc(it.rel)}">📁 ${esc(it.rel)}</div>
-          </div>
-        </div>`).join('') + `</div>`;
-    } catch (e) {
-      $('#lib-modal-body').innerHTML = `<div class="hint">以图搜图失败：${esc(e.message)}</div>`;
-    }
-    this.value = '';
-  });
+  // 🔍 本地以图搜图: 入口与共用进度逻辑见「图库以图搜图」区块
   // 📁 导入 ▾: 一个入口, 展开后选「导入文件夹 / 导入图片」
   (function initLibImportMenu() {
     const btn = $('#lib-import-btn');

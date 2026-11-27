@@ -285,6 +285,9 @@ def _scopes_for_request(path: str, method: str, body: "dict | None",
     if p.startswith("/api/library/trash/restore/task"):
         # 全部恢复任务启动/轮询本身不改数据; 完成时由任务线程登记
         return (), ids
+    if p.startswith("/api/library/similar"):
+        # 以图搜图/建特征库是只读检索, 不改图库数据, 不触发全库刷新
+        return (), ids
     if p.startswith("/api/library/backup") or p.startswith("/api/library/db-backup"):
         # 备份/恢复/删除只影响备份清单; 恢复是"用旧文件覆盖当前图" → 图库那几张也要重画
         if "/restore" in p:
@@ -2866,6 +2869,128 @@ def _wall_orb_candidates(f: Path, img_root: Path) -> "list[dict]":
     return out
 
 
+def _sim_items(results: "list[dict]") -> "list[dict]":
+    """检索器结果 → 前端卡片字段 (同步接口与后台任务共用同一套映射)。"""
+    with _db() as db:
+        items = []
+        for r in results or []:
+            rel = r.get("name") or ""
+            if not isinstance(rel, str):  # 防御: npz 加载路径可能带 numpy 类型
+                rel = rel.decode('utf-8', 'replace') if isinstance(rel, bytes) else str(rel)
+            rel = rel.replace("\\", "/")
+            if not rel:
+                continue
+            row = db.conn.execute(
+                "SELECT artwork_id FROM pages WHERE local_path=? LIMIT 1", (rel,)).fetchone()
+            title = author = ""
+            if row:
+                art = db.conn.execute(
+                    "SELECT a.title, COALESCE(au.name, a.author_id) AS author_name "
+                    "FROM artworks a LEFT JOIN authors au ON au.author_id = a.author_id "
+                    "WHERE a.artwork_id=?", (str(row["artwork_id"]),)).fetchone()
+                if art:
+                    title = art["title"] or ""
+                    author = art["author_name"] or ""
+            items.append({
+                "rel": rel,
+                "fusion_score": round(float(r.get("fusion_score") or 0), 4),
+                "orb_score": round(float(r.get("orb_score") or 0), 4),
+                "color_score": round(float(r.get("color_score") or 0), 4),
+                "artwork_id": str(row["artwork_id"]) if row else None,
+                "thumb": f"/api/local-img?p={quote(rel)}&thumb=1",
+                "title": title,
+                "author": author,
+            })
+    return items
+
+
+def _sim_run(task_id: str, query_path: str) -> None:
+    """后台跑「准备特征库 → 检索」; 所有状态更新都先核对仍是当前任务。"""
+    from core.local_search import QueryImageError
+
+    build_total = [0]
+
+    def _upd(**kw):
+        with _SIM_TASK_LOCK:
+            if _SIM_TASK["id"] == task_id:
+                _SIM_TASK.update(kw)
+
+    def _cb(stage, done=0, total=0, outcome="", detail=""):
+        with _SIM_TASK_LOCK:
+            if _SIM_TASK["id"] != task_id:
+                return
+            if stage == "extract_plan":
+                build_total[0] = int(total or 0)
+                if total:
+                    _SIM_TASK.update({"stage": "extracting", "done": 0,
+                                      "total": int(total)})
+            elif stage == "extract":
+                if outcome == "ok":
+                    _SIM_TASK["extracted"] += 1
+                elif outcome == "skip":
+                    _SIM_TASK["skipped"] += 1
+                else:
+                    _SIM_TASK["failed"] += 1
+                    if len(_SIM_TASK["errors"]) < _SIM_ERROR_LIMIT:
+                        _SIM_TASK["errors"].append(detail or "特征提取失败")
+                _SIM_TASK.update({"stage": "extracting",
+                                  "done": int(done or 0),
+                                  "total": int(total or 0)})
+            elif stage in ("load_start", "load_plan", "load"):
+                _SIM_TASK.update({"stage": "loading", "done": 0, "total": 0})
+            elif stage == "search_start" or stage == "search":
+                _SIM_TASK.update({"stage": "searching", "done": 0, "total": 0})
+
+    global _ls_searcher
+    _upd(stage="checking", done=0, total=0, current="", error="",
+         finished_at=0.0)
+    # 壁纸深扫/别的检索可能正占着同一份特征库 → 这里只显示「正在检查图库特征」
+    with _ls_lock:
+        searcher = _ls_searcher
+        if searcher is None:
+            try:
+                from core.local_search import ImageSearcher
+                from utils.reporter import PrintReporter
+                img_root = str(Path(paths.user_data(_config["paths"]["img_subdir"])))
+                searcher = ImageSearcher(library_path=img_root,
+                                         reporter=PrintReporter(),
+                                         config=_config, progress_cb=_cb)
+                _ls_searcher = searcher
+            except Exception as e:
+                _upd(status="error", stage="", finished_at=time.time(),
+                     error=f"构建特征库失败：{type(e).__name__}: {e}")
+                return
+        _upd(stage="searching", done=0, total=0)
+        try:
+            results = searcher.search(query_path, top_k=12,
+                                      progress_cb=_cb, strict_query=True)
+        except QueryImageError as e:
+            _upd(status="error", stage="", finished_at=time.time(),
+                 error=str(e))
+            return
+        except Exception as e:
+            _upd(status="error", stage="", finished_at=time.time(),
+                 error=f"检索失败：{type(e).__name__}: {e}")
+            return
+
+    with _SIM_TASK_LOCK:
+        if _SIM_TASK["id"] != task_id:
+            return                      # 已被新选择取代: 旧结果不许覆盖新任务
+        build = {"total": build_total[0],
+                 "extracted": _SIM_TASK["extracted"],
+                 "skipped": _SIM_TASK["skipped"],
+                 "failed": _SIM_TASK["failed"],
+                 "errors": list(_SIM_TASK["errors"]),
+                 "index_size": len(searcher.db_names)}
+    items = _sim_items(results)
+    with _SIM_TASK_LOCK:
+        if _SIM_TASK["id"] != task_id:
+            return
+        _SIM_TASK.update({"status": "done", "stage": "", "done": 0, "total": 0,
+                          "finished_at": time.time(),
+                          "result": {"items": items, "build": build}})
+
+
 def _wall_dupes_for(aid: str, page_md5: str = "",
                     target_wh: "tuple[int, int] | None" = None,
                     deep: bool = True, page_num: "int | None" = None) -> "list[dict]":
@@ -4320,6 +4445,17 @@ _thumb_warm_thread = None
 # 本地以图搜图 (ORB+颜色) 单例: 首次构建特征库较慢, 之后常驻秒回
 _ls_lock = threading.Lock()
 _ls_searcher = None
+
+# 🔍 图库以图搜图: 建库/加载/检索全程后台任务; 同一时间只保留最新一条任务状态。
+# 结果只能凭任务 id 读取 (不提供列表), 临时查询图只留在后端、任务结束即删。
+_SIM_TASK_LOCK = threading.Lock()
+_SIM_TASK = {
+    "id": "", "status": "idle", "stage": "", "done": 0, "total": 0,
+    "extracted": 0, "skipped": 0, "failed": 0, "errors": [],
+    "current": "", "error": "", "query_name": "", "created_at": 0.0,
+    "finished_at": 0.0, "result": None,
+}
+_SIM_ERROR_LIMIT = 20
 
 # 设置页三个缩略图缓存操作共用一条可重开的任务状态
 _thumb_task_lock = threading.Lock()
@@ -8907,10 +9043,89 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                         "is_extra": is_extra, "total_pages": tp,
                         "target_title": (tinfo or {}).get("title") or ""})
 
+    @app.route("/api/library/similar/task", methods=["POST"])
+    def api_library_similar_task_start():
+        """启动一次后台以图搜图 (准备特征库 + 检索), 返回任务快照。
+
+        只保留最新一条任务; 结果只能凭任务 id 读取。临时查询图由任务线程在
+        正常/异常路径统一删除。
+        """
+        f = request.files.get("image")
+        if not f or not f.filename:
+            return jsonify({"status": "error", "message": "缺少图片"}), 400
+        tmpdir = paths.user_data("tmp")
+        os.makedirs(str(tmpdir), exist_ok=True)
+        ext = os.path.splitext(f.filename)[1].lower()
+        tmp = os.path.join(
+            str(tmpdir),
+            f"sim_query_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+            f"{ext or '.png'}")
+        try:
+            f.save(tmp)
+        except Exception as e:
+            return jsonify({"status": "error",
+                            "message": f"保存查询图失败：{e}"}), 500
+        tid = uuid.uuid4().hex
+        with _SIM_TASK_LOCK:
+            _SIM_TASK.update({
+                "id": tid, "status": "running", "stage": "checking",
+                "done": 0, "total": 0, "extracted": 0, "skipped": 0,
+                "failed": 0, "errors": [], "current": "", "error": "",
+                "query_name": f.filename, "created_at": time.time(),
+                "finished_at": 0.0, "result": None})
+            started = {k: (list(v) if isinstance(v, list) else v)
+                       for k, v in _SIM_TASK.items()}
+
+        def _task():
+            try:
+                _sim_run(tid, tmp)
+            except Exception as e:
+                with _SIM_TASK_LOCK:
+                    if _SIM_TASK["id"] == tid:
+                        _SIM_TASK.update({
+                            "status": "error", "stage": "",
+                            "finished_at": time.time(),
+                            "error": f"任务异常：{type(e).__name__}: {e}"})
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+        try:
+            threading.Thread(target=_task, daemon=True,
+                             name="library-similar").start()
+        except Exception as e:
+            msg = f"无法启动检索线程：{type(e).__name__}: {e}"
+            with _SIM_TASK_LOCK:
+                if _SIM_TASK["id"] == tid:
+                    _SIM_TASK.update({"status": "error", "stage": "",
+                                      "finished_at": time.time(),
+                                      "error": msg})
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return jsonify({"status": "error", "message": msg}), 500
+        return jsonify({"status": "ok", "task": started})
+
+    @app.route("/api/library/similar/task", methods=["GET"])
+    def api_library_similar_task_status():
+        """读当前检索任务; 不带 id 或 id 过期一律不返回结果。"""
+        tid = str(request.args.get("id") or "").strip()
+        if not tid:
+            return jsonify({"status": "idle", "task": None}), 404
+        with _SIM_TASK_LOCK:
+            if _SIM_TASK["id"] != tid:
+                return jsonify({"status": "idle", "task": None}), 404
+            task = {k: (list(v) if isinstance(v, list) else v)
+                    for k, v in _SIM_TASK.items()}
+        return jsonify({"status": "ok", "task": task})
+
     @app.route("/api/library/similar", methods=["POST"])
     def api_library_similar():
-        """本地以图搜图: 上传一张图 → ORB+颜色融合 → 返回图库里最相似的 N 张。
-        首次调用会先构建特征库 (扫描全部图片提取 ORB/颜色特征, 可能几分钟), 之后秒回。"""
+        """本地以图搜图 (同步旧接口): 上传一张图 → ORB+颜色融合 → 最相似的 N 张。
+        首次调用会先构建特征库 (可能几分钟), 之后秒回; 新前端走 /similar/task。"""
         f = request.files.get("image")
         if not f or not f.filename:
             return jsonify({"status": "error", "message": "缺少图片"}), 400
@@ -8937,37 +9152,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 os.remove(tmp)
             except Exception:
                 pass
-        with _db() as db:
-            items = []
-            for r in results:
-                rel = r.get("name") or ""
-                if not isinstance(rel, str):  # 防御: npz 加载路径可能带 numpy 类型
-                    rel = rel.decode('utf-8', 'replace') if isinstance(rel, bytes) else str(rel)
-                rel = rel.replace("\\", "/")
-                if not rel:
-                    continue
-                row = db.conn.execute(
-                    "SELECT artwork_id FROM pages WHERE local_path=? LIMIT 1", (rel,)).fetchone()
-                title = author = ""
-                if row:
-                    art = db.conn.execute(
-                        "SELECT a.title, COALESCE(au.name, a.author_id) AS author_name "
-                        "FROM artworks a LEFT JOIN authors au ON au.author_id = a.author_id "
-                        "WHERE a.artwork_id=?", (str(row["artwork_id"]),)).fetchone()
-                    if art:
-                        title = art["title"] or ""
-                        author = art["author_name"] or ""
-                items.append({
-                    "rel": rel,
-                    "fusion_score": round(float(r.get("fusion_score") or 0), 4),
-                    "orb_score": round(float(r.get("orb_score") or 0), 4),
-                    "color_score": round(float(r.get("color_score") or 0), 4),
-                    "artwork_id": str(row["artwork_id"]) if row else None,
-                    "thumb": f"/api/local-img?p={quote(rel)}&thumb=1",
-                    "title": title,
-                    "author": author,
-                })
-        return jsonify({"status": "ok", "items": items})
+        return jsonify({"status": "ok", "items": _sim_items(results)})
 
     @app.route("/api/library/recent")
     def api_library_recent():

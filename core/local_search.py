@@ -36,12 +36,18 @@ def _rel_to_str(rel) -> str:
         return str(rel)
 
 
+class QueryImageError(Exception):
+    """查询图本身不可用 (读不出 / 特征不足)。与「索引失败」「没有匹配」分开报。"""
+
+
 class ImageSearcher:
     def __init__(self, library_path: "str | None" = None,
                  reporter: "Reporter | None" = None,
-                 config: "dict | None" = None):
+                 config: "dict | None" = None,
+                 progress_cb=None):
         self.config = config or load_config()
         self.reporter = reporter or PrintReporter()
+        self.progress_cb = progress_cb
         lcfg = self.config["local_search"]
         self.library_path = library_path or lcfg["library_path"]
 
@@ -58,6 +64,15 @@ class ImageSearcher:
         self.build_db(self.feature_dir, self.library_path)
         self._load_to_memory()
 
+    def _emit(self, stage, done=0, total=0, outcome="", detail=""):
+        cb = getattr(self, "progress_cb", None)
+        if not cb:
+            return
+        try:
+            cb(stage, done, total, outcome, detail)
+        except Exception:
+            pass                    # 进度回调坏了不能连累建库/检索
+
     def _load_to_memory(self):
         """一次性加载所有特征到内存,之后搜索不再碰磁盘"""
         self.db_des = []   # 所有 ORB 特征
@@ -68,10 +83,12 @@ class ImageSearcher:
 
         if not feat_files:
             self.reporter.log("特征库为空,请先构建数据库")
+            self._emit("load_done")
             return
 
         if os.path.exists(self.cache_file):
             self.reporter.log("从缓存加载...")
+            self._emit("load_start", 0, 0, "", "缓存")
             try:
                 with open(self.cache_file, 'rb') as f:
                     cache = pickle.load(f)
@@ -79,12 +96,14 @@ class ImageSearcher:
                     self.db_hist = cache['hist']
                     self.db_names = cache['names']
                 self.reporter.log(f"缓存加载完成:{len(self.db_names)} 张图片")
+                self._emit("load_done")
                 return  # 缓存加载成功,跳过文件扫描
             except Exception as e:
                 self.reporter.warn(f"缓存损坏,重新扫描文件: {e}")
 
         self.reporter.log(f"首次加载 {len(feat_files)} 个特征文件到内存...")
         total = len(feat_files)
+        self._emit("load_plan", 0, total)
         for i, feat_file in enumerate(feat_files, 1):
             self.reporter.progress(i, total, "加载到内存")
             data = np.load(os.path.join(self.feature_dir, feat_file))
@@ -92,6 +111,7 @@ class ImageSearcher:
             self.db_hist.append(data['color_hist'])
             # npz 内嵌 rel 相对路径 (本库图片在 X图/作者_ID/... 嵌套目录, 相对路径才能反查作品)
             self.db_names.append(_rel_to_str(data['rel']))
+            self._emit("load", i, total)
 
         try:
             with open(self.cache_file, 'wb') as f:
@@ -105,6 +125,7 @@ class ImageSearcher:
             self.reporter.warn(f"缓存保存失败: {e}")
 
         self.reporter.log(f"就绪:{len(self.db_names)} 张图片")
+        self._emit("load_done")
 
     def cv_imread(self, file_path):
         """中文路径安全读图(cv2.imread 不支持中文,用 imdecode+fromfile 规避)"""
@@ -256,18 +277,22 @@ class ImageSearcher:
                 self.reporter.log("数据库有变动,清除旧缓存")
         if not to_process:
             self.reporter.log("特征库已是最新")
+            self._emit("extract_plan", 0, 0)
             return
 
-        self.reporter.log(f"处理 {len(to_process)} 张新图片...")
         total = len(to_process)
+        self._emit("extract_plan", 0, total)
+        self.reporter.log(f"处理 {total} 张新图片...")
         for i, rel in enumerate(to_process, 1):
             self.reporter.progress(i, total, "提取特征")
-            img_path = os.path.join(library_path, *rel.split("/"))
+            outcome, detail = "fail", ""
             try:
+                img_path = os.path.join(library_path, *rel.split("/"))
                 img_color = self.cv_imread(img_path)
                 img_gray = self.cv_imread_gray(img_path)
 
                 if img_color is None or img_gray is None:
+                    outcome, detail = "skip", f"{rel}: 无法读取图片"
                     continue
 
                 # 提取 ORB,失败则增强重试
@@ -289,15 +314,27 @@ class ImageSearcher:
                         color_hist=color_hist,
                         rel=rel.encode("utf-8"),
                     )
+                    outcome, detail = "ok", ""
                 else:
+                    outcome, detail = "skip", f"{rel}: 特征不足"
                     self.reporter.warn(f"跳过 {rel}: 特征不足")
 
             except Exception as e:
+                outcome, detail = "fail", f"{rel}: {type(e).__name__}: {e}"
                 self.reporter.warn(f"处理 {rel} 失败: {e}")
+            finally:
+                # 无论成功/跳过/失败, 这张都检查完了 —— N 只在这里加一次
+                self._emit("extract", i, total, outcome, detail)
 
-    def search(self, query_img_path, top_k: "int | None" = None) -> list:
+    def search(self, query_img_path, top_k: "int | None" = None,
+               progress_cb=None, strict_query: bool = False) -> list:
         if top_k is None:
             top_k = self.config["local_search"]["top_k"]
+        if progress_cb:
+            try:
+                progress_cb("search_start", 0, 0, "", "")
+            except Exception:
+                pass
 
         if not self.db_names:
             self.reporter.warn("特征库为空,无法搜索")
@@ -308,6 +345,8 @@ class ImageSearcher:
 
         if query_color is None or query_gray is None:
             self.reporter.error("无法读取目标图片")
+            if strict_query:
+                raise QueryImageError("无法读取目标图片（可能不是有效图片）")
             return []
 
         kp, des = self.orb.detectAndCompute(query_gray, None)
@@ -317,12 +356,16 @@ class ImageSearcher:
             kp, des = self.orb.detectAndCompute(enhanced, None)
         if des is None or len(des) == 0:
             self.reporter.warn("ORB 特征不足")
+            if strict_query:
+                raise QueryImageError("查询图特征不足，无法检索")
             return []
         query_des = np.ascontiguousarray(des.astype(np.uint8))
 
         query_hist = self.extract_color_hist(query_color)
         if query_hist is None:
             self.reporter.warn("颜色特征提取失败")
+            if strict_query:
+                raise QueryImageError("查询图颜色特征提取失败")
             return []
 
         # 批量颜色匹配
@@ -330,12 +373,15 @@ class ImageSearcher:
             self.safe_compare_hist(query_hist, h) for h in self.db_hist
         ])
 
-        # 快速筛选 Top-N 候选
+        # 快速筛选 Top-N 候选 (小图库时候选池可能 >= 总数, argpartition 的 kth 会越界)
         n = min(self.candidate_pool, len(color_scores))
         if n == 0:
             self.reporter.warn("特征库为空")
             return []
-        candidate_indices = np.argpartition(-color_scores, n)[:n]
+        if n >= len(color_scores):
+            candidate_indices = np.arange(len(color_scores))
+        else:
+            candidate_indices = np.argpartition(-color_scores, n)[:n]
 
         # 只对候选做 ORB 匹配
         results = []
@@ -353,6 +399,11 @@ class ImageSearcher:
                 "color_score": color_score,
                 "match_count": match_count
             })
+            if progress_cb:
+                try:
+                    progress_cb("search", i, total, "", "")
+                except Exception:
+                    pass
 
         if not results:
             self.reporter.warn("无匹配结果")

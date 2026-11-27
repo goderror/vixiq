@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127n`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127o`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127n`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127o`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,34 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.83 图库「以图搜图」接入共用进度（2026-11-27，前端 `20261127o`，已发布到安装版）
+
+- **核心事件**：`core.local_search` 新增 `QueryImageError` 与 `progress_cb`；
+  `extract_plan` / `extract(done,total,outcome,detail)` / `load_*` / `search_*`
+  均来自实际建库与检索过程；每张处理完在 finally 推进 N，成功/跳过/失败分开，
+  失败带样例。小图库候选池 ≥ 特征数时 `np.argpartition` 越界改用 `np.arange`。
+- **后台任务**：新增 `POST/GET /api/library/similar/task`，`_SIM_TASK` 单条状态、
+  `_ls_lock` 单例复用；GET 必须带当前任务号，旧号 404。建库失败不赋值并可重试；
+  壁纸深扫持锁时任务显示检查等待并复用；任务线程 finally 删除临时查询图；旧同步
+  `POST /api/library/similar` 保留并共用 `_sim_items`。只读检索不登记数据域。
+- **前端**：入口无任务选图、有任务接回；共用流动/计数控件、约 300 ms 阈值、
+  减少动效；检查 → 提取计数（M 只含本轮）→ 加载 → 检索 → 结果/无匹配/输入图
+  不可读/索引失败/检索失败；结果卡片沿用 `safeThumb`。轮询串行单链（单次 5 s
+  超时，短暂失败保留进度重试）；关闭后台继续、重开/刷新凭会话任务号接回；新选图
+  递增代号，旧 POST/GET/结果不能覆盖。
+- **回归**：新增 T200（总数 **191**）与 `test_sim_progress.cjs` **11 项**；
+  全量 **191/191**（182.23 s），日志
+  `_dev_runtime/diagnostics/trae-20261127o-library-similar-progress-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 22:27:24`，前端 `20261127o`）在 7813
+  以隔离图库/特征缓存通过新增以图搜图 API/UI 检查与既有 12 项检查（日志
+  `trae-20261127o-candidate-checks.log`）。回滚清单
+  `_dev_runtime/backups/publish-20261127o-20261127-223158.json`（4 个旧文件、
+  8 个替换项、15,212,625 字节）。dist 与安装版 exe `8bdc6923d855…`、base_library
+  `8613dc47d508…`、app.js `0bdca1cc1d34…`、index.html `e2c5e8dea9fe…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127o-1795789644-1795695345-1795519082`、健康正常，以图搜图/副本扫描/
+  壁纸库/回收站 UI 检查通过。
 
 ### 4.82 壁纸副本扫描返修：启动归属 + 线程失败可重试（2026-11-27，前端 `20261127n`，已发布到安装版）
 

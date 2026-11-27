@@ -3143,6 +3143,7 @@ def run_suite() -> SuiteResult:
     suite.add("T197", "🖼 缩略图缓存: 失效范围覆盖四根/全格式 + 三操作共用任务进度 (隔离数据)", t197_thumbs_cache_scope_and_task)
     suite.add("T198", "♻️ 回收站全部恢复: 作品/图片两视图共用进度 + 成功/跳过/搬回失败 (隔离数据)", t198_trash_restore_all_progress)
     suite.add("T199", "🧹 壁纸副本扫描: 核对→计数阶段 + 读取失败统计 + 只读 (隔离数据)", t199_wall_dupes_progress)
+    suite.add("T200", "🔍 图库以图搜图: 特征提取/加载/检索阶段 + 任务号读取 + 临时图清理 (隔离数据)", t200_library_similar_progress)
     suite.write_report()
     return suite
 
@@ -10486,7 +10487,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261127n" and _mss.group(1) == "20261127n", \
+    assert _mjs and _mss and _mjs.group(1) == "20261127o" and _mss.group(1) == "20261127o", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10581,7 +10582,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261127n', html) and _re.search(r'app\.js\?v=20261127n', html), \
+    assert _re.search(r'style\.css\?v=20261127o', html) and _re.search(r'app\.js\?v=20261127o', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10989,7 +10990,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261127n" in html and "app.js?v=20261127n" in html, \
+        assert "style.css?v=20261127o" in html and "app.js?v=20261127o" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13562,7 +13563,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261127n" in _h and "style.css?v=20261127n" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261127o" in _h and "style.css?v=20261127o" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14931,7 +14932,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261127n" in html and "app.js?v=20261127n" in html
+            assert "style.css?v=20261127o" in html and "app.js?v=20261127o" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -15040,7 +15041,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261127n" in html and "app.js?v=20261127n" in html
+            assert "style.css?v=20261127o" in html and "app.js?v=20261127o" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -15151,7 +15152,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261127n" in html and "app.js?v=20261127n" in html
+    assert "style.css?v=20261127o" in html and "app.js?v=20261127o" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -15191,7 +15192,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261127n" in html
+    assert "20261127o" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15902,7 +15903,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261127n" in html
+    assert "同步磁盘索引" in html and "20261127o" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16318,7 +16319,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127n" in html
+    assert "20261127o" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -17052,7 +17053,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127n" in html
+    assert "20261127o" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -19602,7 +19603,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261127n" in html and "app.js?v=20261127n" in html
+    assert "style.css?v=20261127o" in html and "app.js?v=20261127o" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -19808,7 +19809,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261127n" in html
+    assert "20261127o" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20270,7 +20271,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261127n" in html
+    assert "20261127o" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20378,7 +20379,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261127n" in html
+    assert "20261127o" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20490,7 +20491,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261127n" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261127o" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20635,7 +20636,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261127n" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261127o" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -21006,7 +21007,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261127n" in html
+    assert "20261127o" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -21032,7 +21033,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127n" in html
+    assert "20261127o" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -21058,7 +21059,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261127n" in html
+    assert "20261127o" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -21084,7 +21085,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127n" in html
+    assert "20261127o" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -21109,7 +21110,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127n" in html
+    assert "20261127o" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -21127,7 +21128,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127n" in html
+    assert "20261127o" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -22818,7 +22819,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261127n" in html
+        assert "20261127o" in html
     finally:
         for _d in dbs:
             try:
@@ -23120,7 +23121,7 @@ def t195_normalize_png_progress() -> None:
             (nr.returncode, nr.stdout, nr.stderr)
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
             encoding="utf-8")
-        assert "app.js?v=20261127n" in html and "style.css?v=20261127n" in html
+        assert "app.js?v=20261127o" in html and "style.css?v=20261127o" in html
     finally:
         cif.normalize_to_png = orig_norm
         ucfg.ingest_auto_png = patched
@@ -23147,7 +23148,7 @@ def t196_jpg_progress_ui() -> None:
         assert token in js, f"单张转 JPG 进度接线缺失: {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
-    assert "app.js?v=20261127n" in html and "style.css?v=20261127n" in html
+    assert "app.js?v=20261127o" in html and "style.css?v=20261127o" in html
 
     node_test = PROJECT_ROOT / "autotest" / "test_jpg_progress_ui.cjs"
     nr = _subprocess.run(
@@ -24399,6 +24400,309 @@ def t199_wall_dupes_progress() -> None:
             ws._WALL_DUPES.update({
                 "status": "idle", "stage": "", "done": 0, "total": 0,
                 "current": "", "error": "", "at": 0.0, "result": None})
+        shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t200_library_similar_progress() -> None:
+    """T200: 图库以图搜图共用进度 (隔离图库/特征缓存)。
+
+    覆盖: 首次固定数量提取、增量只处理新增、缓存就绪跳过提取、部分跳过/写盘失败;
+    后台任务 checking → extracting → loading → searching → done; 结果凭任务 id 读取;
+    新选择替换旧任务; 坏查询图; 建库失败后可重试; 另一入口持锁准备时流动等待并复用;
+    临时查询图在成功/失败/拒绝路径清理。返回排序沿用原检索器。
+    """
+    import hashlib
+    import io
+    import shutil
+    import subprocess
+    import tempfile
+    import threading
+    import time
+
+    import numpy as np
+    from PIL import Image
+
+    import core.local_search as ls
+    import utils.paths as upaths
+    import web.server as ws
+    from db.store import PixivDatabase, WSt, PSt
+
+    tmp = Path(tempfile.mkdtemp(prefix="t200sim_"))
+    img, tmpq = tmp / "img", tmp / "tmp"
+    img.mkdir(parents=True, exist_ok=True)
+    tmpq.mkdir(parents=True, exist_ok=True)
+    orig = (upaths.user_data, upaths.data_root, upaths.user_config_path,
+            ws._config["paths"].get("img_subdir"),
+            ws._config["paths"].get("feature_db_subdir"),
+            ws._ls_searcher, ws._SIM_TASK["id"], ws._SIM_TASK["status"])
+    upaths.user_data = lambda rel: tmp / str(rel)
+    upaths.data_root = lambda: tmp
+    upaths.user_config_path = lambda: tmp / "user.json"
+    ws._config["paths"]["img_subdir"] = "img"
+    ws._config["paths"]["feature_db_subdir"] = "feature_db"
+    ws._ls_searcher = None
+    with ws._SIM_TASK_LOCK:
+        ws._SIM_TASK.update({"id": "", "status": "idle", "stage": "",
+                             "result": None, "error": ""})
+
+    def _mk(rel: str, seed: int) -> str:
+        p = img / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        arr = np.random.default_rng(seed).integers(
+            0, 255, (256, 256, 3), dtype=np.uint8)
+        Image.fromarray(arr).save(p)
+        return rel
+
+    def _add_page(db, aid: str, rel: str) -> None:
+        db.change_work_status(aid, WSt.DONE, title=f"作品{aid}",
+                              author_id="1", total_pages=1)
+        db.mark_page_status(aid, 0, PSt.DONE, local_path=rel,
+                            width=256, height=256,
+                            md5=hashlib.md5((img / rel).read_bytes()).hexdigest())
+
+    rels = [_mk(f"X图/shuno_1/90000{i}_p0.png", i + 1) for i in range(6)]
+    with PixivDatabase(tmp / "pixiv.db") as db:
+        for i, rel in enumerate(rels):
+            _add_page(db, f"90000{i}", rel)
+
+    events = []
+    searcher = ls.ImageSearcher(
+        library_path=str(img), config=ws._config,
+        progress_cb=lambda *a: events.append(a))
+    plan = [e for e in events if e[0] == "extract_plan"]
+    assert plan and plan[0][2] == 6, events
+    ex = [e for e in events if e[0] == "extract"]
+    assert [e[1] for e in ex] == [1, 2, 3, 4, 5, 6], ex
+    assert all(e[2] == 6 and e[3] == "ok" for e in ex), ex
+    assert any(e[0] in ("load_start", "load_plan") for e in events), events
+
+    q = tmp / "query.png"
+    shutil.copy2(img / rels[0], q)
+    sevents = []
+    hits = searcher.search(str(q), top_k=3,
+                           progress_cb=lambda *a: sevents.append(a),
+                           strict_query=True)
+    assert hits and hits[0]["name"] == rels[0], hits
+    assert any(a[0] == "search_start" for a in sevents), sevents
+    badq = tmp / "bad.png"
+    badq.write_bytes(b"not an image")
+    try:
+        searcher.search(str(badq), strict_query=True)
+        raise AssertionError("坏查询图应抛 QueryImageError")
+    except ls.QueryImageError:
+        pass
+    assert searcher.search(str(badq)) == [], "旧调用方仍应拿到空结果而不是异常"
+
+    # 增量: 只提取新增的那一张
+    newrel = _mk("X图/shuno_1/900006_p0.png", 99)
+    with PixivDatabase(tmp / "pixiv.db") as db:
+        _add_page(db, "900006", newrel)
+    ev2 = []
+    ls.ImageSearcher(library_path=str(img), config=ws._config,
+                     progress_cb=lambda *a: ev2.append(a))
+    ex2 = [e for e in ev2 if e[0] == "extract"]
+    assert len(ex2) == 1 and ex2[0][1] == ex2[0][2] == 1, ev2
+    assert ex2[0][3] == "ok", ev2
+
+    # 缓存已就绪: 不再出现提取计数
+    ev3 = []
+    ls.ImageSearcher(library_path=str(img), config=ws._config,
+                     progress_cb=lambda *a: ev3.append(a))
+    assert not any(e[0] == "extract" for e in ev3), ev3
+
+    # 部分跳过 + 写盘失败
+    ws._config["paths"]["feature_db_subdir"] = "feature_fail"
+    good = _mk("X图/shuno_1/900007_p0.png", 107)
+    bad = img / "X图/shuno_1/900008_p0.png"
+    bad.write_bytes(b"broken")
+    failrel = _mk("X图/shuno_1/900009_p0.png", 109)
+    orig_savez = ls.np.savez
+    fail_npz = hashlib.md5(failrel.encode("utf-8")).hexdigest() + ".npz"
+
+    def _savez_once(*a, **kw):
+        if fail_npz in str(a[0] if a else kw.get("file", "")):
+            raise OSError("模拟写盘失败")
+        return orig_savez(*a, **kw)
+
+    ev4 = []
+    ls.np.savez = _savez_once
+    try:
+        ls.ImageSearcher(library_path=str(img), config=ws._config,
+                         progress_cb=lambda *a: ev4.append(a))
+    finally:
+        ls.np.savez = orig_savez
+    ex4 = [e for e in ev4 if e[0] == "extract"]
+    assert [e[1] for e in ex4] == list(range(1, 11)), ex4
+    counts = {}
+    for e in ex4:
+        counts[e[3]] = counts.get(e[3], 0) + 1
+    assert counts == {"ok": 8, "skip": 1, "fail": 1}, ex4
+    assert any("900008" in (e[4] or "") for e in ex4 if e[3] == "skip"), ex4
+    assert any("900009" in (e[4] or "") for e in ex4 if e[3] == "fail"), ex4
+    ws._config["paths"]["feature_db_subdir"] = "feature_db"
+
+    # 后台任务: 延迟真实事件, 观察 checking → extracting → loading → searching
+    ws._config["paths"]["feature_db_subdir"] = "feature_api"
+    ws._ls_searcher = None
+    orig_emit = ls.ImageSearcher._emit
+
+    def _slow_emit(self, stage, done=0, total=0, outcome="", detail=""):
+        orig_emit(self, stage, done, total, outcome, detail)
+        if stage == "extract_plan":
+            time.sleep(0.25)
+        elif stage == "extract":
+            time.sleep(0.08)
+        elif stage in ("load_start", "load_plan"):
+            time.sleep(0.15)
+        elif stage == "search_start":
+            time.sleep(0.2)
+
+    ls.ImageSearcher._emit = _slow_emit
+
+    def _start(client, path: Path):
+        with open(path, "rb") as fh:
+            return client.post(
+                "/api/library/similar/task",
+                data={"image": (io.BytesIO(fh.read()), path.name)},
+                content_type="multipart/form-data")
+
+    def _wait(client, tid: str, timeout=25):
+        end = time.time() + timeout
+        got = {}
+        states = []
+        while time.time() < end:
+            resp = client.get(f"/api/library/similar/task?id={tid}")
+            if resp.status_code == 404:
+                return resp.get_json(), states
+            got = (resp.get_json() or {}).get("task") or {}
+            states.append((got.get("status"), got.get("stage"),
+                           int(got.get("done") or 0), int(got.get("total") or 0)))
+            if got.get("status") != "running":
+                return got, states
+            time.sleep(0.03)
+        raise AssertionError(f"以图搜图任务超时: {got}")
+
+    try:
+        client = ws.create_app().test_client()
+        before = set(p.name for p in tmpq.iterdir())
+        r = _start(client, q)
+        j = r.get_json()
+        assert r.status_code == 200 and j.get("status") == "ok", j
+        task = j["task"]
+        tid = task["id"]
+        assert task["status"] == "running" and task["stage"] == "checking", task
+        assert client.get("/api/library/similar/task?id=wrong").status_code == 404
+        got, states = _wait(client, tid)
+        assert got["status"] == "done", got
+        assert got["result"]["items"][0]["artwork_id"] == "900000", got
+        build = got["result"]["build"]
+        assert build["extracted"] >= 7 and build["total"] >= 7, build
+        stages = [s[1] for s in states]
+        assert "extracting" in stages, states
+        assert "loading" in stages and "searching" in stages, states
+        assert any(s == "extracting" and 0 <= d < t for _, s, d, t in states), states
+        assert got["stage"] == "", got
+        after = set(p.name for p in tmpq.iterdir())
+        assert after == before, f"查询临时图未清理: {after - before}"
+
+        # 新选择替换旧任务: 旧 id 读不到结果
+        r2 = _start(client, img / rels[1])
+        tid2 = r2.get_json()["task"]["id"]
+        assert tid2 != tid
+        assert client.get(f"/api/library/similar/task?id={tid}").status_code == 404
+        got2, _ = _wait(client, tid2)
+        assert got2["status"] == "done" and got2["result"]["items"], got2
+
+        # 输入图无法读取
+        rb = _start(client, badq)
+        tidb = rb.get_json()["task"]["id"]
+        gotb, _ = _wait(client, tidb)
+        assert gotb["status"] == "error" and "无法读取目标图片" in gotb["error"], gotb
+
+        # 建库失败后释放互斥并能重试
+        ws._ls_searcher = None
+        orig_cls = ls.ImageSearcher
+
+        class _BadSearcher:
+            def __init__(self, *a, **kw):
+                raise RuntimeError("模拟建库失败")
+
+        ls.ImageSearcher = _BadSearcher
+        try:
+            rf = _start(client, q)
+            tidf = rf.get_json()["task"]["id"]
+            gotf, _ = _wait(client, tidf)
+        finally:
+            ls.ImageSearcher = orig_cls
+        assert gotf["status"] == "error" and "构建特征库失败" in gotf["error"], gotf
+        assert ws._ls_searcher is None
+        rr = _start(client, q)
+        tidr = rr.get_json()["task"]["id"]
+        gotr, _ = _wait(client, tidr)
+        assert gotr["status"] == "done" and gotr["result"]["items"], gotr
+
+        # 另一入口正持锁准备同一索引: 任务只流动等待, 完成后复用检索器 (不再提取)
+        ready = ws._ls_searcher
+        ws._ls_searcher = None
+        ws._ls_lock.acquire()
+
+        def _prepare_index():
+            time.sleep(0.6)
+            ws._ls_searcher = ready
+            ws._ls_lock.release()
+
+        threading.Thread(target=_prepare_index, daemon=True,
+                         name="t200-prepare").start()
+        rl = _start(client, q)
+        tidl = rl.get_json()["task"]["id"]
+        time.sleep(0.15)
+        first = (client.get(f"/api/library/similar/task?id={tidl}")
+                 .get_json() or {}).get("task") or {}
+        assert first.get("status") == "running", first
+        assert first.get("stage") == "checking", first
+        gotl, _ = _wait(client, tidl)
+        assert gotl["status"] == "done" and gotl["result"]["items"], gotl
+        assert gotl["result"]["build"]["total"] == 0, gotl
+
+        # 接线 + 前端真实函数用例
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+        core = (PROJECT_ROOT / "core" / "local_search.py").read_text(encoding="utf-8")
+        for token in ("sim-flow", "sim-count", "simFileChosen", "startSimPolling",
+                      "loadSimTask", "simResultItemsHtml", "正在检查图库特征",
+                      "正在提取特征", "正在加载图像特征", "正在查找相似图",
+                      "safeThumb", "/api/library/similar/task"):
+            assert token in js, f"以图搜图进度接线缺失: {token}"
+        for _id in ('id="lib-similar-btn"', 'id="lib-similar-file"'):
+            assert _id in html, f"图库工具栏缺少 {_id}"
+        for token in ("_SIM_TASK", "_sim_run", "QueryImageError",
+                      "similar/task"):
+            assert token in srv, f"以图搜图服务端接线缺失: {token}"
+        for token in ("extract_plan", "load_plan", "search_start"):
+            assert token in core, f"以图搜图核心事件缺失: {token}"
+        node_test = PROJECT_ROOT / "autotest" / "test_sim_progress.cjs"
+        nr = subprocess.run(["node", str(node_test)], capture_output=True,
+                            text=True, encoding="utf-8", errors="replace",
+                            timeout=60)
+        assert nr.returncode == 0 and "NODE OK" in (nr.stdout or ""), \
+            (nr.returncode, nr.stdout, nr.stderr)
+    finally:
+        ls.ImageSearcher._emit = orig_emit
+        ws._config["paths"]["feature_db_subdir"] = orig[4] or "feature_db"
+        with ws._SIM_TASK_LOCK:
+            ws._SIM_TASK.update({"id": "", "status": "idle", "stage": "",
+                                 "result": None, "error": ""})
+        (upaths.user_data, upaths.data_root, upaths.user_config_path,
+         _img_sub, _feat_sub, ws._ls_searcher, _tid0, _st0) = orig
+        if _img_sub is None:
+            ws._config["paths"].pop("img_subdir", None)
+        else:
+            ws._config["paths"]["img_subdir"] = _img_sub
+        if _feat_sub is None:
+            ws._config["paths"].pop("feature_db_subdir", None)
+        else:
+            ws._config["paths"]["feature_db_subdir"] = _feat_sub
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 
