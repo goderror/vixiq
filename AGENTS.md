@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128b`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128c`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128b`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128c`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,29 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.88 清理缺失作品写库前最后复核（2026-11-28，前端 `20261128c`，已发布到安装版）
+
+- **写库边界**：`_labels_inline` 取标题/作者提前到最终校验之前；随后在**执行删除的
+  同一个 `_db()` 连接**内核对作品存在且未进回收站、页集合/状态/软删/登记路径与确认
+  快照一致、活动页路径当前无文件；全部通过后同连接立即 `delete_artworks(kept)`。
+  检查后不再读说明、开新连接或等待可提前完成的操作。
+- **跳过语义**：`_labels_inline` 期间补回文件、已被其他操作处理、状态无法核实都按
+  跳过结算并保留记录，不计 cleaned、不进入回收；同批其它仍缺失作品继续清理。
+  最终复核、残留文件身份与回收范围、批次互斥保持原行为。
+- **回归**：T201 新增 `_labels_inline` 期间补回用例（真实 `reconcile_output` 证明
+  缺失→存在、单作品 cleaned=0/skipped=1、记录/页/文件/字节保留、回收替身 0 次、
+  混合批次另一件正常清理）。全量 **192/192**（175.96 s），日志
+  `_dev_runtime/diagnostics/trae-20261128c-missing-cleanup-commit-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 02:07:28`，前端 `20261128c`）在 7813
+  隔离图库通过清理缺失 API/UI 检查，恢复配置后通过既有 **12 项**检查（日志
+  `trae-20261128c-candidate-checks.log`）。回滚清单
+  `_dev_runtime/backups/publish-20261128c-20261128-021020.json`（3 个旧文件、
+  6 个替换项、14,477,436 字节）。dist 与安装版 exe `7cf8950f3bc9…`、base_library
+  `36fca9b09ed5…`、app.js `1e767de63e5d…`（未变）、index.html `1a2dd34afce9…`；
+  两处 `config/user.json` 哈希未变。安装版 7810 前端
+  `20261128c-1795801680-1795695345-1795519082`、健康正常，清理缺失/以图搜图/
+  副本扫描/壁纸库/回收站 UI 检查通过。
 
 ### 4.87 清理缺失作品最终复核与批次互斥（2026-11-28，前端 `20261128b`，已发布到安装版）
 

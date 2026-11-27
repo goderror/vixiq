@@ -10488,7 +10488,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261128b" and _mss.group(1) == "20261128b", \
+    assert _mjs and _mss and _mjs.group(1) == "20261128c" and _mss.group(1) == "20261128c", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10583,7 +10583,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261128b', html) and _re.search(r'app\.js\?v=20261128b', html), \
+    assert _re.search(r'style\.css\?v=20261128c', html) and _re.search(r'app\.js\?v=20261128c', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10991,7 +10991,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261128b" in html and "app.js?v=20261128b" in html, \
+        assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13564,7 +13564,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261128b" in _h and "style.css?v=20261128b" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261128c" in _h and "style.css?v=20261128c" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14933,7 +14933,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261128b" in html and "app.js?v=20261128b" in html
+            assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -15042,7 +15042,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261128b" in html and "app.js?v=20261128b" in html
+            assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -15153,7 +15153,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261128b" in html and "app.js?v=20261128b" in html
+    assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -15193,7 +15193,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261128b" in html
+    assert "20261128c" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15904,7 +15904,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261128b" in html
+    assert "同步磁盘索引" in html and "20261128c" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16320,7 +16320,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128b" in html
+    assert "20261128c" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -17054,7 +17054,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128b" in html
+    assert "20261128c" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -19604,7 +19604,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261128b" in html and "app.js?v=20261128b" in html
+    assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -19810,7 +19810,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261128b" in html
+    assert "20261128c" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20272,7 +20272,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261128b" in html
+    assert "20261128c" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20380,7 +20380,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261128b" in html
+    assert "20261128c" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20492,7 +20492,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261128b" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128c" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20637,7 +20637,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261128b" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128c" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -21008,7 +21008,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261128b" in html
+    assert "20261128c" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -21034,7 +21034,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128b" in html
+    assert "20261128c" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -21060,7 +21060,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261128b" in html
+    assert "20261128c" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -21086,7 +21086,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128b" in html
+    assert "20261128c" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -21111,7 +21111,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128b" in html
+    assert "20261128c" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -21129,7 +21129,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128b" in html
+    assert "20261128c" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -22820,7 +22820,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261128b" in html
+        assert "20261128c" in html
     finally:
         for _d in dbs:
             try:
@@ -23122,7 +23122,7 @@ def t195_normalize_png_progress() -> None:
             (nr.returncode, nr.stdout, nr.stderr)
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
             encoding="utf-8")
-        assert "app.js?v=20261128b" in html and "style.css?v=20261128b" in html
+        assert "app.js?v=20261128c" in html and "style.css?v=20261128c" in html
     finally:
         cif.normalize_to_png = orig_norm
         ucfg.ingest_auto_png = patched
@@ -23149,7 +23149,7 @@ def t196_jpg_progress_ui() -> None:
         assert token in js, f"单张转 JPG 进度接线缺失: {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
-    assert "app.js?v=20261128b" in html and "style.css?v=20261128b" in html
+    assert "app.js?v=20261128c" in html and "style.css?v=20261128c" in html
 
     node_test = PROJECT_ROOT / "autotest" / "test_jpg_progress_ui.cjs"
     nr = _subprocess.run(
@@ -25017,6 +25017,7 @@ def t201_missing_cleanup_progress() -> None:
     orig_sub = ws._config["paths"]["img_subdir"]
     orig_recon = ws._cached_reconcile
     orig_recycle = ws._recycle_files
+    orig_labels = ws._labels_inline
     orig_paths = PixivDatabase.get_local_paths_by_artwork
     orig_pages = PixivDatabase.get_artwork_page_list
     orig_delete = PixivDatabase.delete_artworks
@@ -25046,7 +25047,7 @@ def t201_missing_cleanup_progress() -> None:
 
             for aid in ("991001", "991002", "991003", "991008", "991009",
                         "991010", "991011", "991020", "991021",
-                        "991023", "991024"):
+                        "991023", "991024", "991030", "991031"):
                 add(aid, f"gone/{aid}_p0.jpg")
             add("991004", [(0, "residual/991004_p0.jpg"),
                            (1, "residual/991004_p1.jpg")])
@@ -25305,14 +25306,64 @@ def t201_missing_cleanup_progress() -> None:
         PixivDatabase.delete_artworks = orig_delete
         ws._recycle_files = orig_recycle
 
-        # ⑪ 空清单预览与空 ids 启动
+        # ⑪ _labels_inline 期间补回: 真实对账证明从缺失变存在, 记录/页/文件保留
+        set_rep(["991030"])
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            before = db.reconcile_output(img, write=False)
+        assert "991030" in before.missing_ids, before.missing_ids
+
+        def labels_restoring(ids):
+            text = orig_labels(ids)
+            if "991030" in [str(x) for x in ids]:
+                (img / "gone" / "991030_p0.jpg").write_bytes(b"BACK30")
+            return text
+
+        ws._labels_inline = labels_restoring
+        recycle_calls = []
+        ws._recycle_files = lambda paths: (recycle_calls.append(list(paths)) or (0, []))
+        r = post_task(["991030"], recycle=True)
+        done, _ = wait_task(r.get_json()["task"]["id"])
+        assert done["status"] == "done", done
+        assert done["result"]["cleaned"] == 0, done
+        assert done["result"]["skipped"] == 1, done
+        assert "出现新文件" in done["result"]["skipped_items"][0]["reason"], done
+        assert not recycle_calls, recycle_calls
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            assert db.get_artwork_metadata("991030") is not None
+            rows = db.conn.execute(
+                "SELECT page_num, status, local_path FROM pages "
+                "WHERE artwork_id='991030' ORDER BY page_num").fetchall()
+            assert rows and rows[0]["local_path"] == "gone/991030_p0.jpg", rows
+            after = db.reconcile_output(img, write=False)
+        assert "991030" not in after.missing_ids, after.missing_ids
+        assert (img / "gone" / "991030_p0.jpg").read_bytes() == b"BACK30"
+
+        # 混合批次: 仍缺失的 991031 正常清理, 补回的 991030 保留
+        set_rep(["991030", "991031"])
+        recycle_calls = []
+        r = post_task(["991030", "991031"], recycle=True)
+        done, _ = wait_task(r.get_json()["task"]["id"])
+        assert done["status"] == "done", done
+        assert done["result"]["cleaned"] == 1, done
+        assert done["result"]["skipped"] == 1, done
+        assert done["result"]["cleaned_ids"] == ["991031"], done
+        assert "991030" not in done["result"]["cleaned_ids"], done
+        assert not recycle_calls, recycle_calls
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            assert db.get_artwork_metadata("991030") is not None
+            assert db.get_artwork_metadata("991031") is None
+        assert (img / "gone" / "991030_p0.jpg").read_bytes() == b"BACK30"
+        ws._labels_inline = orig_labels
+        ws._recycle_files = orig_recycle
+
+        # ⑫ 空清单预览与空 ids 启动
         set_rep([])
         r = client.get("/api/library/missing-items")
         assert r.status_code == 200 and r.get_json()["items"] == [], r.data
         r = post_task([])
         assert r.status_code == 400, r.data
 
-        # ⑫ 静态接线 + 前端真实函数用例
+        # ⑬ 静态接线 + 前端真实函数用例
         js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
         srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
@@ -25342,6 +25393,7 @@ def t201_missing_cleanup_progress() -> None:
             pass
         ws._cached_reconcile = orig_recon
         ws._recycle_files = orig_recycle
+        ws._labels_inline = orig_labels
         PixivDatabase.get_local_paths_by_artwork = orig_paths
         PixivDatabase.get_artwork_page_list = orig_pages
         PixivDatabase.delete_artworks = orig_delete

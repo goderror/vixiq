@@ -3116,6 +3116,7 @@ def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
     img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
     rel_map: "dict[str, list[str]]" = {}
     active_map: "dict[str, list[str]]" = {}
+    page_state: "dict[str, list]" = {}
     residual_paths: "dict[str, set]" = {}
     residual_map: "dict[str, dict]" = {}
     labels = ""
@@ -3137,6 +3138,12 @@ def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
             with _db() as db:
                 rel_map = db.get_local_paths_by_artwork(to_clean)
                 page_map = db.get_artwork_page_list(to_clean)
+                for aid in to_clean:
+                    rows = db.conn.execute(
+                        "SELECT page_num, status, trashed_at, local_path "
+                        "FROM pages WHERE artwork_id=? ORDER BY page_num",
+                        (aid,)).fetchall()
+                    page_state[aid] = [tuple(r) for r in rows]
         except Exception as e:
             reason = f"读取作品路径失败，已保留记录：{type(e).__name__}: {e}"
             for aid in to_clean:
@@ -3223,78 +3230,92 @@ def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
                         kept.append(aid)
                     to_clean = kept
 
-            # 写库前最后一刻: 活动页路径又出现文件 / 记录消失 / 路径变化
+            # 先完成标题/作者等准备, 再在真正写库的同一连接内做最终核验并立即删除。
+            # 这段检查之后不得再读说明、开新连接或等其它可提前完成的操作。
             if to_clean:
+                upd(stage="cleaning", current="")
                 try:
-                    with _db() as db:
-                        metas = {aid: db.get_artwork_metadata(aid) is not None
-                                 for aid in to_clean}
-                        pages3 = db.get_artwork_page_list(to_clean)
-                        rel_map3 = db.get_local_paths_by_artwork(to_clean)
+                    labels = _labels_inline(to_clean)   # 删库前取标题/作者
                 except Exception as e:
-                    reason = f"状态无法核实，已保留记录：{type(e).__name__}: {e}"
+                    reason = f"读取作品说明失败，已保留记录：{type(e).__name__}: {e}"
                     for aid in to_clean:
                         if not is_current():
                             return
                         settle(aid, "skipped", reason)
                     to_clean = []
-                    pages3, rel_map3, metas = {}, {}, {}
-                final_ids = []
-                for aid in to_clean:
-                    if not is_current():
-                        return
-                    if not metas.get(aid):
-                        settle(aid, "skipped",
-                               "记录已不存在（可能已由其他操作处理）")
-                        continue
-                    active3 = sorted(str(p.get("local_path"))
-                                     for p in (pages3.get(aid) or [])
-                                     if p.get("local_path"))
-                    if (active3 != active_map.get(aid, [])
-                            or sorted(rel_map3.get(aid, []) or [])
-                            != sorted(rel_map.get(aid, []) or [])):
-                        settle(aid, "skipped", "登记路径已变化，请重新预览")
-                        continue
-                    appeared = ""
-                    for rel in active3:
-                        try:
-                            if (Path(img_root) / rel).is_file():
-                                appeared = rel
-                                break
-                        except OSError:
-                            appeared = rel
-                            break
-                    if appeared:
-                        settle(aid, "skipped",
-                               f"文件已恢复或路径上出现新文件：{appeared}")
-                        continue
-                    final_ids.append(aid)
-                to_clean = final_ids
 
-        if to_clean:
-            upd(stage="cleaning", current="")
-            try:
-                labels = _labels_inline(to_clean)   # 删库前取标题/作者
-                with _db() as db:
-                    db.delete_artworks(to_clean)    # 批次事务: 保留原有语义
-            except Exception as e:
-                reason = f"清理记录失败：{type(e).__name__}: {e}"
-                for aid in to_clean:
-                    if not is_current():
-                        return
-                    settle(aid, "failed", reason)
-                to_clean = []
             if to_clean:
-                with _db() as db:
-                    for aid in to_clean:
+                kept: "list[str]" = []
+                try:
+                    with _db() as db:
+                        for aid in to_clean:
+                            if not is_current():
+                                return
+                            try:
+                                row = db.conn.execute(
+                                    "SELECT trashed_at FROM artworks "
+                                    "WHERE artwork_id=?", (aid,)).fetchone()
+                                if row is None:
+                                    settle(aid, "skipped",
+                                           "记录已不存在（可能已由其他操作处理）")
+                                    continue
+                                if row["trashed_at"]:
+                                    settle(aid, "skipped",
+                                           "记录已被移到回收站")
+                                    continue
+                                rows = db.conn.execute(
+                                    "SELECT page_num, status, trashed_at, local_path "
+                                    "FROM pages WHERE artwork_id=? ORDER BY page_num",
+                                    (aid,)).fetchall()
+                                sig = [tuple(r) for r in rows]
+                                if sig != page_state.get(aid, []):
+                                    settle(aid, "skipped",
+                                           "页状态或路径已变化，请重新预览")
+                                    continue
+                                active = sorted(
+                                    str(r["local_path"]) for r in rows
+                                    if not r["trashed_at"] and r["local_path"])
+                                if active != active_map.get(aid, []):
+                                    settle(aid, "skipped",
+                                           "登记路径已变化，请重新预览")
+                                    continue
+                                appeared = ""
+                                for rel in active:
+                                    if (Path(img_root) / rel).is_file():
+                                        appeared = rel
+                                        break
+                                if appeared:
+                                    settle(aid, "skipped",
+                                           "文件已恢复或路径上出现新文件："
+                                           f"{appeared}")
+                                    continue
+                                kept.append(aid)
+                            except Exception as e:
+                                settle(aid, "skipped",
+                                       "状态无法核实，已保留记录："
+                                       f"{type(e).__name__}: {e}")
+                        if kept:
+                            # 同一连接、检查后立即写; 仍是单批次事务
+                            db.delete_artworks(kept)
+                except Exception as e:
+                    reason = f"清理记录失败：{type(e).__name__}: {e}"
+                    for aid in kept:
                         if not is_current():
                             return
-                        if db.get_artwork_metadata(aid) is None:
-                            settle(aid, "cleaned")
-                            cleaned_ids.append(aid)
-                        else:
-                            settle(aid, "failed",
-                                   "记录未删除（可能被其他操作占用）")
+                        settle(aid, "failed", reason)
+                    kept = []
+                to_clean = kept
+                if to_clean:
+                    with _db() as db:
+                        for aid in to_clean:
+                            if not is_current():
+                                return
+                            if db.get_artwork_metadata(aid) is None:
+                                settle(aid, "cleaned")
+                                cleaned_ids.append(aid)
+                            else:
+                                settle(aid, "failed",
+                                       "记录未删除（可能被其他操作占用）")
 
     recycled, recycle_failed = 0, []
     if recycle_files and cleaned_ids:
