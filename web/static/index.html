@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261127e">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261127e">
+<link rel="stylesheet" href="/static/style.css?v=20261127f">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261127f">
 </head>
 <body>
 
@@ -782,8 +782,12 @@
             <div id="thumbs-stats" class="hint">正在读取缓存信息…</div>
             <div class="btn-row" style="margin-top:10px">
               <button id="thumbs-warm-btn" class="btn accent">🖼️ 立即预热全部缩略图</button>
-              <button id="thumbs-orphan-btn" class="btn ghost" title="只删图被移动/改名/删除后的残留缓存">🧹 清理孤儿</button>
-              <button id="thumbs-clear-btn" class="btn danger">🗑️ 清除缓存</button>
+              <button id="thumbs-orphan-btn" class="btn ghost" title="清理原图移动、改名或删除后留下的缩略图缓存">🧹 清理失效缩略图</button>
+              <button id="thumbs-clear-btn" class="btn danger">🗑️ 清空缩略图缓存</button>
+            </div>
+            <div id="thumbs-task" class="hidden" style="margin-top:10px">
+              <div id="thumbs-task-progress"></div>
+              <div id="thumbs-task-note" class="hint"></div>
             </div>
             <div class="hint" style="margin-top:8px">缩略图缓存在 <code>data\thumbs\</code>。清除缓存不影响原图。</div>
           </div>
@@ -984,10 +988,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261127e"></script>
-<script src="/static/wallpaper-admin.js?v=20261127e"></script>
-<script src="/static/management-drawer-state.js?v=20261127e"></script>
-<script src="/static/management-toolbar.js?v=20261127e"></script>
+<script src="/static/app.js?v=20261127f"></script>
+<script src="/static/wallpaper-admin.js?v=20261127f"></script>
+<script src="/static/management-drawer-state.js?v=20261127f"></script>
+<script src="/static/management-toolbar.js?v=20261127f"></script>
 </body>
 </html>
 

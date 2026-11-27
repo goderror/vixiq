@@ -2453,6 +2453,7 @@ _IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 # 对账扫描当成图库图片。
 # =============================================================
 _THUMB_MAX_PX = 480
+_THUMB_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 _thumb_dir_cache: "Path | None" = None
 _thumb_lock = threading.Lock()
 
@@ -4317,20 +4318,85 @@ _thumb_warm_thread = None
 _ls_lock = threading.Lock()
 _ls_searcher = None
 
+# 设置页三个缩略图缓存操作共用一条可重开的任务状态
+_thumb_task_lock = threading.Lock()
+_thumb_task = {
+    "id": "", "kind": "", "state": "idle", "stage": "", "done": 0,
+    "total": 0, "message": "", "result": None, "error": None,
+    "created_at": None, "finished_at": None,
+}
 
-def warm_thumbs_background(force: bool = False) -> None:
+
+def _thumb_task_snapshot() -> dict:
+    with _thumb_task_lock:
+        return dict(_thumb_task)
+
+
+def _thumb_task_begin(kind: str, stage: str, preempt_warm: bool = False):
+    """登记缓存任务; 返回 (task, created)。清空缓存可抢占正在运行的预热。"""
+    with _thumb_task_lock:
+        if _thumb_task.get("state") == "running":
+            if not (preempt_warm and _thumb_task.get("kind") == "warm"):
+                return dict(_thumb_task), False
+        now = time.time()
+        task = {"id": uuid.uuid4().hex, "kind": kind, "state": "running",
+                "stage": stage, "done": 0, "total": 0, "message": "",
+                "result": None, "error": None, "created_at": now,
+                "finished_at": None}
+        _thumb_task.clear()
+        _thumb_task.update(task)
+        return dict(task), True
+
+
+def _thumb_task_update(task_id: str, **fields) -> None:
+    with _thumb_task_lock:
+        if _thumb_task.get("id") != task_id:
+            return
+        _thumb_task.update(fields)
+
+
+def _thumb_task_finish(task_id: str, result=None, error: str = "",
+                       message: str = "") -> None:
+    with _thumb_task_lock:
+        if _thumb_task.get("id") != task_id:
+            return
+        _thumb_task["result"] = result
+        _thumb_task["error"] = error or None
+        _thumb_task["message"] = message or (error or "")
+        _thumb_task["state"] = "error" if error else "done"
+        _thumb_task["finished_at"] = time.time()
+
+
+def _thumb_progress_cb(task_id: str):
+    def _cb(ev: dict) -> None:
+        _thumb_task_update(task_id, stage=str(ev.get("stage") or ""),
+                           done=int(ev.get("done") or 0),
+                           total=int(ev.get("total") or 0))
+    return _cb
+
+
+def warm_thumbs_background(force: bool = False, task_id: "str | None" = None):
     """后台逐张预生成图库缩略图 (每张间隔让路用户请求)。
 
     默认只跑一次 (done 标志防重入); force=True 时重置 done, 用于设置页
-    「立即预热全部缩略图」按钮: 新入库图片后再次批量补齐缓存。"""
+    「立即预热全部缩略图」按钮: 新入库图片后再次批量补齐缓存。
+    进度写入共用缩略图任务状态: 先核对图片数, 再报已检查/已生成/已存在/失败。"""
     global _thumb_warm_thread
     if _thumb_warm_state["running"]:
-        return
+        return _thumb_task_snapshot()
     if _thumb_warm_state["done"] and not force:
-        return
+        return None
+    if not task_id:
+        task, created = _thumb_task_begin("warm", "核对缩略图")
+        if not created:
+            return None
+        task_id = task["id"]
     _thumb_warm_state["done"] = False
     _thumb_warm_state["abort"] = False
     _thumb_warm_state["running"] = True
+    _thumb_task_update(task_id, state="running", stage="核对缩略图",
+                       done=0, total=0, result=None, error=None,
+                       message="", created_at=time.time(), finished_at=None)
 
     def _task():
         rep = _reporter()
@@ -4340,24 +4406,41 @@ def warm_thumbs_background(force: bool = False) -> None:
                     "SELECT DISTINCT local_path FROM pages "
                     "WHERE local_path IS NOT NULL AND local_path != ''").fetchall()]
             if not rels:
+                _thumb_task_finish(
+                    task_id,
+                    result={"total": 0, "generated": 0,
+                            "existing": 0, "failed": 0},
+                    message="没有可预热的图片")
                 _thumb_warm_state["done"] = True
                 return
             img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
-            # ① 先快速核对缓存: 只挑出「本地文件在、缩略图还没缓存」的, 不生成/不限速。
-            #    缓存是持久的 (data/thumbs), 所以正常情况下这里几乎全命中 ——
-            #    不做这一步的话, 每次开服务都会拿 20ms/张 的限速把全库空转一遍 (~1800 张 ≈ 40s)。
-            pending = [(img_root / rel, rel) for rel in rels
-                       if (img_root / rel).is_file()
-                       and not _thumb_cached(img_root / rel, "img", rel)]
+            files = []
+            for rel in rels:
+                f = img_root / rel
+                try:
+                    if f.is_file():
+                        files.append((f, rel))
+                except OSError:
+                    continue
+            existing = len(files)
+            pending = [(f, rel) for f, rel in files
+                       if not _thumb_cached(f, "img", rel)]
+            cached = existing - len(pending)
+            _thumb_task_update(task_id, stage="预热缩略图",
+                               done=cached, total=existing)
             if not pending:
                 _thumb_warm_state["done"] = True
-                rep.log(f"🖼 缩略图缓存已就绪 (全库 {len(rels)} 张), 无需预热")
+                _thumb_task_finish(
+                    task_id,
+                    result={"total": existing, "generated": 0,
+                            "existing": cached, "failed": 0},
+                    message=(f"已检查 {existing} 张：已生成 0 张，"
+                             f"已存在 {cached} 张，失败 0 张"))
+                rep.log(f"🖼 缩略图缓存已就绪 (全库 {existing} 张), 无需预热")
                 return
-            # ② 只为缺的这批生成, 才需要限速让路用户请求
-            rep.log(f"🖼 开始后台预热缩略图: 缺 {len(pending)}/{len(rels)} 张…")
+            rep.log(f"🖼 开始后台预热缩略图: 缺 {len(pending)}/{existing} 张…")
             ok = fail = 0
             for i, (f, rel) in enumerate(pending):
-                # 中止信号: 清除缓存时 abort=True → 跳出循环, 不再生成新缓存
                 if _thumb_warm_state["abort"]:
                     rep.log(f"🖼 缩略图预热已中止, 已处理 {i}/{len(pending)}")
                     return
@@ -4365,13 +4448,21 @@ def warm_thumbs_background(force: bool = False) -> None:
                     ok += 1
                 else:
                     fail += 1
+                _thumb_task_update(task_id, stage="预热缩略图",
+                                   done=cached + i + 1, total=existing)
                 if (i + 1) % 300 == 0:
                     rep.log(f"🖼 缩略图预热中: {i + 1}/{len(pending)}")
                 time.sleep(0.02)  # 让路用户请求
             _thumb_warm_state["done"] = True
+            _thumb_task_finish(
+                task_id,
+                result={"total": existing, "generated": ok,
+                        "existing": cached, "failed": fail},
+                message=(f"已检查 {existing} 张：已生成 {ok} 张，"
+                         f"已存在 {cached} 张，失败 {fail} 张"))
             rep.log(f"🖼 缩略图预热完成: {ok} 张就绪, {fail} 张失败(浏览时回退原图)")
-        except Exception:
-            pass
+        except Exception as e:
+            _thumb_task_finish(task_id, error=str(e) or e.__class__.__name__)
         finally:
             _thumb_warm_state["running"] = False
             _thumb_warm_state["abort"] = False
@@ -4380,10 +4471,11 @@ def warm_thumbs_background(force: bool = False) -> None:
     t = threading.Thread(target=_task, daemon=True)
     _thumb_warm_thread = t
     t.start()
+    return _thumb_task_snapshot()
 
 
 def _thumbs_stats() -> dict:
-    """返回缩略图缓存统计: 文件数 + 总字节数 + 是否正在预热。"""
+    """返回缩略图缓存统计: 文件数 + 总字节数 + 失效缩略图数 + 当前任务。"""
     d = _thumb_dir()
     count = 0
     total = 0
@@ -4398,119 +4490,231 @@ def _thumbs_stats() -> dict:
     except Exception:
         pass
     try:
-        total_n, orphans_n = _thumbs_orphan_count()
+        _total_n, orphans_n, skipped = _thumbs_orphan_count()
     except Exception:
-        total_n, orphans_n = count, 0
+        orphans_n, skipped = 0, ["unknown"]
     return {
         "count": count,
         "size_bytes": total,
         "size_mb": round(total / 1024 / 1024, 1),
         "orphans": orphans_n,
+        "invalid": orphans_n,
+        "scan_complete": not skipped,
+        "skipped_roots": skipped,
         "warming": _thumb_warm_state["running"],
         "done": _thumb_warm_state["done"],
+        "task": _thumb_task_snapshot(),
     }
 
 
-_valid_names_cache = {"ts": 0.0, "names": None}
+_valid_names_cache = {"ts": 0.0, "names": None, "skipped": []}
 
 
-def _valid_thumb_names() -> "set[str]":
-    """当前所有图片对应的合法缩略图文件名 (常规键 md5(根|rel|mtime|size) + stable 键)。
-    用于识别孤儿缓存: 图片被移动/改名/删除后, 旧键缩略图不再属于任何当前图片。
-    带 10s 缓存: 预热期间每 5s 轮询 stats 时避免每轮全盘走一遍。"""
-    now = time.time()
-    if _valid_names_cache["names"] is not None \
-            and now - _valid_names_cache["ts"] < 10:
-        return _valid_names_cache["names"]
-    valid: "set[str]" = set()
-    for root_key, sub in (("img", _config["paths"]["img_subdir"]),
-                          ("input", _config["paths"].get("input_subdir", "input"))):
-        root = Path(paths.user_data(sub))
+def _thumb_roots() -> "list[tuple[str, Path, bool]]":
+    """当前实际启用的缩略图根: (root_key, root, 缺失时是否按空目录处理)。
+
+    与 /api/local-img 的 root 参数保持一致: img / input / trash / wall。
+    图库/反搜/回收站挂在数据根下, 数据根在而子目录不存在时按空目录处理;
+    壁纸夹单独配置, 缺失视为暂时不可用 (可能是移动盘离线), 不当作空目录。"""
+    try:
+        droot_ok = Path(paths.data_root()).exists()
+    except OSError:
+        droot_ok = False
+    roots = [
+        ("img", Path(paths.user_data(_config["paths"]["img_subdir"])), droot_ok),
+        ("input", Path(paths.user_data(
+            _config["paths"].get("input_subdir", "input"))), droot_ok),
+        ("trash", _trash_root(), droot_ok),
+    ]
+    try:
+        wd = candidates_dir(_wallpaper_file())
+    except Exception:
+        wd = None
+    if wd:
+        roots.append(("wall", Path(wd), False))
+    return roots
+
+
+def _scan_thumb_root(root: Path, missing_ok: bool):
+    """扫描一个缩略图根, 返回 (可生成缩略图的图片列表, 是否完整)。
+
+    os.walk 的 onerror 与文件 stat 失败都视为扫描不完整; 调用方收到不完整时
+    必须放弃清理, 不能把扫不到的图片缓存当失效项删掉。"""
+    try:
+        if not root.exists():
+            return [], bool(missing_ok)
         if not root.is_dir():
+            return [], False
+    except OSError:
+        return [], False
+    files = []
+    complete = True
+
+    def _onerror(_e):
+        nonlocal complete
+        complete = False
+
+    for dirpath, _dirnames, filenames in os.walk(str(root), onerror=_onerror):
+        for name in filenames:
+            p = Path(dirpath) / name
+            if p.suffix.lower() in _THUMB_EXTS:
+                files.append(p)
+    return files, complete
+
+
+def _valid_thumb_names(fresh: bool = False):
+    """当前有效缩略图文件名 + 跳过/不完整的根。
+
+    覆盖缩略图接口实际使用的根 (img/input/trash/wall) 与全部可生成格式;
+    图库还会为数据库登记过的路径保留 stable 键 (文件缺失/进回收站后仍能看历史预览)。
+    任一已启用根无法完整扫描时返回 skipped, 调用方必须放弃清理, 避免误删。"""
+    now = time.time()
+    if (not fresh and _valid_names_cache["names"] is not None
+            and now - _valid_names_cache["ts"] < 10):
+        return _valid_names_cache["names"], list(_valid_names_cache["skipped"])
+    valid: "set[str]" = set()
+    skipped: "list[str]" = []
+    for root_key, root, missing_ok in _thumb_roots():
+        files, complete = _scan_thumb_root(root, missing_ok)
+        if not complete:
+            skipped.append(root_key)
             continue
-        for p in root.rglob("*"):
-            if not p.is_file() or p.suffix.lower() not in _IMG_EXT:
-                continue
+        bad = False
+        for p in files:
             try:
                 st = p.stat()
-            except OSError:
-                continue
-            rel = str(p.relative_to(root)).replace("\\", "/")
-            valid.add(hashlib.md5(f"{root_key}|{rel}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest() + ".jpg")
+                rel = p.relative_to(root).as_posix()
+            except (OSError, ValueError):
+                bad = True
+                break
+            valid.add(hashlib.md5(
+                f"{root_key}|{rel}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest() + ".jpg")
             valid.add(f"stable_{hashlib.md5(f'stable|{root_key}|{rel}'.encode()).hexdigest()}.jpg")
-    _valid_names_cache.update(ts=now, names=valid)
-    return valid
+        if bad:
+            skipped.append(root_key)
+    # 数据库登记过的图库路径: 源文件缺失或已进回收站时, stable 缩略图仍用于历史预览
+    try:
+        with _db() as db:
+            rows = db.conn.execute(
+                "SELECT DISTINCT local_path FROM pages "
+                "WHERE local_path IS NOT NULL AND local_path != ''").fetchall()
+            trash_rows = db.conn.execute(
+                "SELECT DISTINCT trash_rel_path FROM pages "
+                "WHERE trash_rel_path IS NOT NULL AND trash_rel_path != ''").fetchall()
+        for r in rows:
+            rel = str(r["local_path"] or "").replace("\\", "/")
+            if rel:
+                valid.add(f"stable_{hashlib.md5(f'stable|img|{rel}'.encode()).hexdigest()}.jpg")
+        for r in trash_rows:
+            rel = str(r["trash_rel_path"] or "").replace("\\", "/")
+            if rel:
+                valid.add(f"stable_{hashlib.md5(f'stable|trash|{rel}'.encode()).hexdigest()}.jpg")
+    except Exception:
+        skipped.append("db")
+    _valid_names_cache.update(ts=now, names=valid, skipped=skipped)
+    return valid, list(skipped)
 
 
-def _thumbs_orphan_count() -> "tuple[int, int]":
-    """(缓存文件总数, 孤儿数) — 孤儿 = 图被移动/改名/删除后的残留缓存。"""
+def _thumbs_orphan_count():
+    """(缓存文件总数, 失效缩略图数, 扫描不完整的根)。失效 = 旧路径/旧版本残留。"""
     d = _thumb_dir()
     try:
         files = [f for f in d.iterdir() if f.is_file()]
     except Exception:
-        return 0, 0
+        return 0, 0, []
     if not files:
-        return 0, 0
+        return 0, 0, []
     try:
-        valid = _valid_thumb_names()
+        valid, skipped = _valid_thumb_names()
     except Exception:
-        return len(files), 0
+        return len(files), 0, ["unknown"]
+    if skipped:
+        return len(files), 0, skipped
     orphans = sum(1 for f in files if f.name not in valid)
-    return len(files), orphans
+    return len(files), orphans, []
 
 
-def _clear_thumbs_orphans() -> int:
-    """删除孤儿缩略图 (不含任何当前图片对应键的缓存)。返回删除数。"""
+def _clear_thumbs_orphans(progress=None) -> dict:
+    """删除失效缩略图 (旧路径或旧版本残留); 扫描不完整时不删任何文件。"""
     d = _thumb_dir()
+    if progress:
+        progress({"stage": "核对缩略图", "done": 0, "total": 0})
+    _valid_names_cache["names"] = None
     try:
-        valid = _valid_thumb_names()
-    except Exception:
-        return 0
-    n = 0
-    for p in d.iterdir():
-        if p.is_file() and p.name not in valid:
-            try:
-                p.unlink()
-                n += 1
-            except OSError:
-                pass
+        valid, skipped = _valid_thumb_names(fresh=True)
+    except Exception as e:
+        return {"deleted": 0, "total": 0, "failed": [],
+                "skipped_roots": ["unknown"], "scan_complete": False,
+                "error": str(e)}
+    try:
+        files = [f for f in d.iterdir() if f.is_file()]
+    except Exception as e:
+        return {"deleted": 0, "total": 0, "failed": [],
+                "skipped_roots": [], "scan_complete": False,
+                "error": str(e)}
+    if skipped:
+        return {"deleted": 0, "total": 0, "failed": [],
+                "skipped_roots": skipped, "scan_complete": False}
+    invalid = [f for f in files if f.name not in valid]
+    total = len(invalid)
+    if progress:
+        progress({"stage": "清理失效缩略图", "done": 0, "total": total})
+    deleted = 0
+    failed = []
+    for i, p in enumerate(invalid, 1):
+        try:
+            p.unlink()
+            deleted += 1
+        except OSError as e:
+            failed.append({"name": p.name, "error": str(e)})
+        if progress:
+            progress({"stage": "清理失效缩略图", "done": i, "total": total})
     _valid_names_cache["names"] = None  # 删完使缓存失效, 下次重算
-    return n
+    return {"deleted": deleted, "total": total, "failed": failed,
+            "skipped_roots": [], "scan_complete": True,
+            "cache_files": len(files)}
 
 
-def _clear_thumbs_cache() -> int:
-    """删除 thumbs/ 目录下全部缓存文件 (stable_* + 普通哈希名)。返回删除数。
+def _clear_thumbs_cache(progress=None) -> dict:
+    """删除 thumbs/ 目录下全部缓存文件 (stable_* + 普通哈希名)。
 
-    若预热正在进行, 先发 abort 信号让 warm 循环尽快退出,
-    再等待 warm 线程真正结束 (running=False, 最多 5s), 避免清完又被写回。"""
-    global _thumb_warm_thread
-    # 1. 发中止信号: warm 循环顶部检查 abort, 立刻 return (不生成新缓存)
-    if _thumb_warm_state["running"]:
+    若预热正在进行, 先发 abort 信号让 warm 循环退出并等待结束 (最多 5s),
+    再删除缓存, 避免清完又被写回。"""
+    was_warming = bool(_thumb_warm_state["running"])
+    stopped_warm = True
+    if was_warming:
+        if progress:
+            progress({"stage": "停止预热", "done": 0, "total": 0})
         _thumb_warm_state["abort"] = True
-        # 2. 等 warm 线程真正退出 (它 finally 把 running 设 False), 最多 5s
         for _ in range(50):
             if not _thumb_warm_state["running"]:
                 break
             time.sleep(0.1)
-    # 3. 此刻 warm 已退出或超时; 进入临界区删文件 (仍可能有一个 in-flight
-    #    _get_thumb 写入, 但循环已停, 不会再有下一个, 删完即可)
+        stopped_warm = not _thumb_warm_state["running"]
     d = _thumb_dir()
-    n = 0
     try:
-        for p in d.iterdir():
-            if p.is_file():
-                try:
-                    p.unlink()
-                    n += 1
-                except OSError:
-                    pass
+        files = [f for f in d.iterdir() if f.is_file()]
     except Exception:
-        pass
+        files = []
+    total = len(files)
+    if progress:
+        progress({"stage": "清空缓存", "done": 0, "total": total})
+    deleted = 0
+    failed = []
+    for i, p in enumerate(files, 1):
+        try:
+            p.unlink()
+            deleted += 1
+        except OSError as e:
+            failed.append({"name": p.name, "error": str(e)})
+        if progress:
+            progress({"stage": "清空缓存", "done": i, "total": total})
     # 重置预热状态: 清空后允许下次预热重新跑
     _thumb_warm_state["done"] = False
     _thumb_warm_state["abort"] = False
     _valid_names_cache["names"] = None
-    return n
+    return {"deleted": deleted, "total": total, "failed": failed,
+            "was_warming": was_warming, "stopped_warm": stopped_warm}
 
 
 # ---------- dataclass → JSON ----------
@@ -5914,33 +6118,107 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     # ---------------- 缩略图缓存 ----------------
     @app.route("/api/thumbs/stats", methods=["GET"])
     def api_thumbs_stats():
-        """返回 thumbs/ 缓存统计 (文件数/大小/是否预热中)。设置页卡片用。"""
+        """返回 thumbs/ 缓存统计 (文件数/大小/失效数/当前任务)。设置页卡片用。"""
         return jsonify(_thumbs_stats())
+
+    @app.route("/api/thumbs/task", methods=["GET"])
+    def api_thumbs_task():
+        """读取当前/最近一次缩略图缓存任务; 关闭设置页后再回来可接回。"""
+        return jsonify({"status": "ok", "task": _thumb_task_snapshot()})
+
+    @app.route("/api/thumbs/task", methods=["POST"])
+    def api_thumbs_task_start():
+        """启动缩略图缓存任务: warm / clear / clear-orphans 共用一条任务状态。
+
+        clear 可以抢占正在运行的预热 (先停止预热再清空); 其他组合返回 busy,
+        由前端接回当前任务, 不重复启动。"""
+        data = request.get_json(silent=True) or {}
+        action = str(data.get("action") or "").strip()
+        if action not in ("warm", "clear", "clear-orphans"):
+            return jsonify({"status": "error", "error": "未知操作"}), 400
+        if action == "warm":
+            if _thumb_warm_state["running"]:
+                return jsonify({"status": "ok", "task": _thumb_task_snapshot(),
+                                "reused": True})
+            task, created = _thumb_task_begin("warm", "核对缩略图")
+            if not created:
+                return jsonify({"status": "error", "busy": True, "task": task,
+                                "message": "已有另一项缩略图任务正在执行"}), 409
+            warm_thumbs_background(force=True, task_id=task["id"])
+            return jsonify({"status": "ok", "task": _thumb_task_snapshot(),
+                            "reused": False})
+        kind = "clear" if action == "clear" else "clear-orphans"
+        stage = "停止预热" if action == "clear" else "核对缩略图"
+        task, created = _thumb_task_begin(
+            kind, stage, preempt_warm=(action == "clear"))
+        if not created:
+            return jsonify({"status": "error", "busy": True, "task": task,
+                            "message": "已有另一项缩略图任务正在执行"}), 409
+        task_id = task["id"]
+
+        def _run() -> None:
+            try:
+                cb = _thumb_progress_cb(task_id)
+                if action == "clear":
+                    res = _clear_thumbs_cache(progress=cb)
+                    msg = f"已清空 {int(res.get('deleted') or 0)} 个缓存文件"
+                    if res.get("was_warming"):
+                        msg += ("（已停止预热）" if res.get("stopped_warm")
+                                else "（预热未能及时停止，清理可能不完整）")
+                    failed = res.get("failed") or []
+                    if failed:
+                        msg += f"；{len(failed)} 个未清空"
+                    mark_dirty("thumbs")
+                else:
+                    res = _clear_thumbs_orphans(progress=cb)
+                    if not res.get("scan_complete", True):
+                        msg = "部分缓存根暂时不可用，本次未清理"
+                    elif int(res.get("deleted") or 0):
+                        msg = f"已清理 {int(res.get('deleted') or 0)} 张失效缩略图"
+                    else:
+                        msg = "没有失效缩略图"
+                    failed = res.get("failed") or []
+                    if failed:
+                        msg += f"；{len(failed)} 张未清理"
+                    mark_dirty("thumbs")
+                _thumb_task_finish(task_id, result=res, message=msg)
+            except Exception as e:
+                _thumb_task_finish(task_id, error=str(e) or e.__class__.__name__)
+
+        try:
+            threading.Thread(target=_run, daemon=True).start()
+        except Exception as e:
+            err = f"无法启动后台任务：{str(e).splitlines()[0]}"
+            _thumb_task_finish(task_id, error=err)
+            return jsonify({"status": "error", "error": err}), 500
+        return jsonify({"status": "ok", "task": _thumb_task_snapshot()})
 
     @app.route("/api/thumbs/warm", methods=["POST"])
     def api_thumbs_warm():
-        """立即重新预热全部缩略图 (force=True, 跳过 done 标志)。
-        新入库图片后或清空缓存后, 点此按钮批量重新生成。"""
+        """立即重新预热全部缩略图 (force=True, 跳过 done 标志)。"""
         if _thumb_warm_state["running"]:
             return jsonify({"status": "already_running"})
-        warm_thumbs_background(force=True)
-        return jsonify({"status": "started"})
+        task, created = _thumb_task_begin("warm", "核对缩略图")
+        if not created:
+            return jsonify({"status": "already_running", "task": task})
+        warm_thumbs_background(force=True, task_id=task["id"])
+        return jsonify({"status": "started", "task": _thumb_task_snapshot()})
 
     @app.route("/api/thumbs/clear", methods=["POST"])
     def api_thumbs_clear():
         """清空缩略图缓存目录 (thumbs/ 下所有文件)。下次浏览原图时自动重建。
         不会删除原图, 仅清缓存。"""
-        n = _clear_thumbs_cache()
-        _reporter().log(f"🖼 缩略图缓存已清空: 删除 {n} 个文件")
-        return jsonify({"status": "ok", "deleted": n})
+        res = _clear_thumbs_cache()
+        _reporter().log(f"🖼 缩略图缓存已清空: 删除 {res.get('deleted')} 个文件")
+        return jsonify({"status": "ok", **res})
 
     @app.route("/api/thumbs/clear-orphans", methods=["POST"])
     def api_thumbs_clear_orphans():
-        """只删除孤儿缩略图 (图片被移动/改名/删除后的残留缓存), 不动当前图片的缓存。"""
-        n = _clear_thumbs_orphans()
-        if n:
-            _reporter().log(f"🧹 缩略图孤儿缓存已清理: 删除 {n} 个")
-        return jsonify({"status": "ok", "deleted": n})
+        """只删除失效缩略图 (旧路径或旧版本残留), 不动当前图片的缓存。"""
+        res = _clear_thumbs_orphans()
+        if res.get("deleted"):
+            _reporter().log(f"🧹 缩略图失效缓存已清理: 删除 {res.get('deleted')} 个")
+        return jsonify({"status": "ok", **res})
 
     # ---------------- 程序退出 ----------------
     @app.route("/api/app/quit", methods=["POST"])
@@ -8711,7 +8989,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                                      conditional=True, max_age=30 * 86400)
             return "", 404
         # 限缩略图常见图片类型
-        if f.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}:
+        if f.suffix.lower() not in _THUMB_EXTS:
             return "", 403
         if thumb_req:
             tc = _get_thumb(f, root_key, p)

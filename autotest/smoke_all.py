@@ -3140,6 +3140,7 @@ def run_suite() -> SuiteResult:
     suite.add("T194", "🖼 入库时自动转为 PNG: 默认关闭 + 上传/导入/下载/反搜入库/归档/磁盘同步两种模式 (隔离数据)", t194_ingest_auto_png_setting)
     suite.add("T195", "🖼 批量转 PNG 预览/执行共用进度: 真实计数 + 重复点击复用 + 部分失败 (隔离数据)", t195_normalize_png_progress)
     suite.add("T196", "🗜 单张转 JPG 进度: 质量预览流动 + 执行分段充能 (真实前端函数)", t196_jpg_progress_ui)
+    suite.add("T197", "🖼 缩略图缓存: 失效范围覆盖四根/全格式 + 三操作共用任务进度 (隔离数据)", t197_thumbs_cache_scope_and_task)
     suite.write_report()
     return suite
 
@@ -10483,7 +10484,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261127e" and _mss.group(1) == "20261127e", \
+    assert _mjs and _mss and _mjs.group(1) == "20261127f" and _mss.group(1) == "20261127f", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10578,7 +10579,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261127e', html) and _re.search(r'app\.js\?v=20261127e', html), \
+    assert _re.search(r'style\.css\?v=20261127f', html) and _re.search(r'app\.js\?v=20261127f', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10986,7 +10987,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261127e" in html and "app.js?v=20261127e" in html, \
+        assert "style.css?v=20261127f" in html and "app.js?v=20261127f" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13369,7 +13370,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261127e" in _h and "style.css?v=20261127e" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261127f" in _h and "style.css?v=20261127f" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14738,7 +14739,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261127e" in html and "app.js?v=20261127e" in html
+            assert "style.css?v=20261127f" in html and "app.js?v=20261127f" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14847,7 +14848,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261127e" in html and "app.js?v=20261127e" in html
+            assert "style.css?v=20261127f" in html and "app.js?v=20261127f" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14958,7 +14959,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261127e" in html and "app.js?v=20261127e" in html
+    assert "style.css?v=20261127f" in html and "app.js?v=20261127f" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14998,7 +14999,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261127e" in html
+    assert "20261127f" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15709,7 +15710,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261127e" in html
+    assert "同步磁盘索引" in html and "20261127f" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16125,7 +16126,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127e" in html
+    assert "20261127f" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -16859,7 +16860,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127e" in html
+    assert "20261127f" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -19409,7 +19410,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261127e" in html and "app.js?v=20261127e" in html
+    assert "style.css?v=20261127f" in html and "app.js?v=20261127f" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -19615,7 +19616,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261127e" in html
+    assert "20261127f" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20077,7 +20078,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261127e" in html
+    assert "20261127f" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20185,7 +20186,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261127e" in html
+    assert "20261127f" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20297,7 +20298,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261127e" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261127f" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20442,7 +20443,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261127e" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261127f" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20813,7 +20814,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261127e" in html
+    assert "20261127f" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -20839,7 +20840,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127e" in html
+    assert "20261127f" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -20865,7 +20866,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261127e" in html
+    assert "20261127f" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -20891,7 +20892,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127e" in html
+    assert "20261127f" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -20916,7 +20917,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127e" in html
+    assert "20261127f" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -20934,7 +20935,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127e" in html
+    assert "20261127f" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -22625,7 +22626,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261127e" in html
+        assert "20261127f" in html
     finally:
         for _d in dbs:
             try:
@@ -22927,7 +22928,7 @@ def t195_normalize_png_progress() -> None:
             (nr.returncode, nr.stdout, nr.stderr)
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
             encoding="utf-8")
-        assert "app.js?v=20261127e" in html and "style.css?v=20261127e" in html
+        assert "app.js?v=20261127f" in html and "style.css?v=20261127f" in html
     finally:
         cif.normalize_to_png = orig_norm
         ucfg.ingest_auto_png = patched
@@ -22954,7 +22955,7 @@ def t196_jpg_progress_ui() -> None:
         assert token in js, f"单张转 JPG 进度接线缺失: {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
-    assert "app.js?v=20261127e" in html and "style.css?v=20261127e" in html
+    assert "app.js?v=20261127f" in html and "style.css?v=20261127f" in html
 
     node_test = PROJECT_ROOT / "autotest" / "test_jpg_progress_ui.cjs"
     nr = _subprocess.run(
@@ -22962,6 +22963,232 @@ def t196_jpg_progress_ui() -> None:
         encoding="utf-8", errors="replace", timeout=60)
     assert nr.returncode == 0 and "NODE OK" in (nr.stdout or ""), \
         (nr.returncode, nr.stdout, nr.stderr)
+
+
+def t197_thumbs_cache_scope_and_task() -> None:
+    """T197: 失效缩略图范围覆盖实际缩略图根与全部格式 + 三操作共用任务进度。
+
+    - img/input/trash/wall 四个根与 bmp/tif/webp 等格式的缓存都算有效;
+    - 数据库登记过但源文件缺失的 stable 缓存保留;
+    - 壁纸根暂时不可用时放弃清理, 不误删;
+    - 清理/清空/预热共用一个任务状态, 清理先核对再计数, 清空可停止预热。
+    """
+    import shutil
+    import subprocess as _subprocess
+    import tempfile
+    import threading
+    import time
+
+    import utils.paths as upaths
+    import web.server as ws
+    from db.store import PixivDatabase, WSt, PSt
+    from PIL import Image
+
+    tmp = Path(tempfile.mkdtemp(prefix="t197thumbs_"))
+    img, inp, trash, wall = (tmp / "img", tmp / "input",
+                             tmp / "trash", tmp / "wall")
+    for d in (img, inp, trash, wall):
+        d.mkdir(parents=True, exist_ok=True)
+
+    orig = (upaths.user_data, upaths.data_root,
+            ws._config["paths"].get("img_subdir"),
+            ws._config["paths"].get("input_subdir"),
+            ws.candidates_dir, ws._wallpaper_file, ws._thumb_dir_cache)
+    upaths.user_data = lambda rel: tmp / str(rel)
+    upaths.data_root = lambda: tmp
+    ws._config.setdefault("paths", {})["img_subdir"] = "img"
+    ws._config["paths"]["input_subdir"] = "input"
+    ws._thumb_dir_cache = None
+    ws.candidates_dir = lambda _wf: wall
+    ws._wallpaper_file = lambda: None
+    ws._valid_names_cache.update(ts=0.0, names=None, skipped=[])
+    ws._thumb_warm_state.update(running=False, done=False, abort=False)
+    with ws._thumb_task_lock:
+        ws._thumb_task.clear()
+        ws._thumb_task.update({"id": "", "kind": "", "state": "idle", "stage": "",
+                               "done": 0, "total": 0, "message": "",
+                               "result": None, "error": None,
+                               "created_at": None, "finished_at": None})
+
+    def _mk(p: Path, color, fmt: str) -> None:
+        Image.new("RGB", (10, 8), color).save(p, fmt)
+
+    try:
+        files = [
+            (img / "a.bmp", "img", img, (1, 2, 3), "BMP"),
+            (img / "b.tif", "img", img, (4, 5, 6), "TIFF"),
+            (inp / "c.webp", "input", inp, (7, 8, 9), "WEBP"),
+            (trash / "d.jpg", "trash", trash, (10, 11, 12), "JPEG"),
+            (wall / "e.jpg", "wall", wall, (13, 14, 15), "JPEG"),
+        ]
+        for p, _root, _base, color, fmt in files:
+            _mk(p, color, fmt)
+        for p, root_key, base, _color, _fmt in files:
+            rel = p.relative_to(base).as_posix()
+            assert ws._get_thumb(p, root_key, rel) is not None, (root_key, rel)
+
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            db.change_work_status("971001", WSt.DONE, title="缺图", total_pages=1)
+            db.mark_page_status("971001", 0, PSt.DONE, local_path="missing.jpg")
+        miss_stable = ws._stable_thumb_path("img", "missing.jpg")
+        miss_stable.write_bytes(b"stable-missing")
+
+        thumbs = ws._thumb_dir()
+        valid_paths = {p for p in thumbs.iterdir() if p.is_file()}
+        stale = [thumbs / f"stale_{i}.jpg" for i in range(3)]
+        for p in stale:
+            p.write_bytes(b"dead")
+        ws._valid_names_cache.update(ts=0.0, names=None, skipped=[])
+
+        total_n, orphans, skipped = ws._thumbs_orphan_count()
+        assert not skipped, skipped
+        assert orphans == 3, (total_n, orphans)
+        res = ws._clear_thumbs_orphans()
+        assert res["scan_complete"] and res["deleted"] == 3 and not res["failed"], res
+        assert all(p.exists() for p in valid_paths), "有效缩略图被误删"
+        assert not any(p.exists() for p in stale), "失效缩略图未清掉"
+
+        # 壁纸根暂时不可用: 不删任何缓存, 结果标明跳过
+        ws.candidates_dir = lambda _wf: tmp / "wall-offline"
+        stale2 = thumbs / "stale_wall.jpg"
+        stale2.write_bytes(b"dead")
+        ws._valid_names_cache.update(ts=0.0, names=None, skipped=[])
+        res2 = ws._clear_thumbs_orphans()
+        assert res2["deleted"] == 0 and "wall" in res2["skipped_roots"], res2
+        assert stale2.exists(), "根不可用时不得删除任何缓存"
+
+        ws.candidates_dir = lambda _wf: wall
+        ws._valid_names_cache.update(ts=0.0, names=None, skipped=[])
+        res3 = ws._clear_thumbs_orphans()
+        assert res3["deleted"] == 1, res3
+        st = ws._thumbs_stats()
+        assert st["orphans"] == 0 and st["scan_complete"] is True, st
+
+        # 共用任务: 清理失效缩略图
+        app = ws.create_app()
+        client = app.test_client()
+        for i in range(5):
+            (thumbs / f"task_stale_{i}.jpg").write_bytes(b"x")
+        ws._valid_names_cache.update(ts=0.0, names=None, skipped=[])
+        r = client.post("/api/thumbs/task", json={"action": "clear-orphans"})
+        assert r.status_code == 200, r.get_json()
+        task = r.get_json()["task"]
+        assert task["kind"] == "clear-orphans" and task["state"] == "running", task
+        seen = []
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            t = client.get("/api/thumbs/task").get_json()["task"]
+            seen.append((t.get("stage"), int(t.get("done") or 0),
+                         int(t.get("total") or 0)))
+            if t.get("state") != "running":
+                task = t
+                break
+            time.sleep(0.02)
+        assert task.get("state") == "done", task
+        assert (task.get("result") or {}).get("deleted") == 5, task
+        assert "已清理 5 张失效缩略图" in (task.get("message") or ""), task
+        assert any(s == "核对缩略图" for s, _d, _t in seen), seen
+
+        # 清空缓存: 预热运行中时先停止预热, 再按文件数计数
+        (thumbs / "clear_a.jpg").write_bytes(b"x")
+        (thumbs / "clear_b.jpg").write_bytes(b"x")
+        before_clear = {p.name for p in thumbs.iterdir() if p.is_file()}
+        ws._thumb_warm_state.update(running=True, done=False, abort=False)
+
+        def _stop_warm() -> None:
+            time.sleep(0.25)
+            ws._thumb_warm_state["running"] = False
+
+        threading.Thread(target=_stop_warm, daemon=True).start()
+        r = client.post("/api/thumbs/task", json={"action": "clear"})
+        assert r.status_code == 200, r.get_json()
+        task = r.get_json()["task"]
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            t = client.get("/api/thumbs/task").get_json()["task"]
+            if t.get("state") != "running":
+                task = t
+                break
+            time.sleep(0.02)
+        assert task.get("state") == "done", task
+        cr = task.get("result") or {}
+        assert cr.get("was_warming") is True and cr.get("stopped_warm") is True, cr
+        assert cr.get("deleted") == len(before_clear), cr
+        assert not any(thumbs.iterdir()), "清空后缓存目录应为空"
+
+        # 预热任务: 先确认图片数, 再生成缺失缓存
+        _mk(img / "warm_a.jpg", (21, 22, 23), "JPEG")
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            db.change_work_status("971002", WSt.DONE, title="预热", total_pages=1)
+            db.mark_page_status("971002", 0, PSt.DONE, local_path="warm_a.jpg")
+        ws._thumb_warm_state.update(running=False, done=False, abort=False)
+        with ws._thumb_task_lock:
+            ws._thumb_task.clear()
+            ws._thumb_task.update({"id": "", "kind": "", "state": "idle", "stage": "",
+                                   "done": 0, "total": 0, "message": "",
+                                   "result": None, "error": None,
+                                   "created_at": None, "finished_at": None})
+        r = client.post("/api/thumbs/task", json={"action": "warm"})
+        assert r.status_code == 200, r.get_json()
+        task = r.get_json()["task"]
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            t = client.get("/api/thumbs/task").get_json()["task"]
+            if t.get("state") != "running":
+                task = t
+                break
+            time.sleep(0.03)
+        assert task.get("state") == "done", task
+        wr = task.get("result") or {}
+        assert int(wr.get("total") or 0) >= 1, wr
+        assert int(wr.get("generated") or 0) >= 1, wr
+        assert int(wr.get("failed") or 0) == 0, wr
+        assert ws._thumb_cached(img / "warm_a.jpg", "img", "warm_a.jpg")
+
+        # 静态接线: 文案/进度区/任务接口
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        for token in ("清理失效缩略图", "清空缩略图缓存", "thumbs-task",
+                      "thumbs-task-progress", "thumbs-task-note",
+                      "/api/thumbs/task", "thumbsTaskResultText",
+                      "paintThumbsTask", "startThumbsTaskPolling"):
+            assert token in js, f"缩略图缓存进度接线缺失: {token}"
+        html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+            encoding="utf-8")
+        for token in ("🧹 清理失效缩略图", "🗑️ 清空缩略图缓存",
+                      'id="thumbs-task"', 'id="thumbs-task-progress"'):
+            assert token in html, f"设置页缩略图缓存接线缺失: {token}"
+        srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+        for token in ("/api/thumbs/task", "_thumb_task_begin",
+                      "_thumb_roots", "_scan_thumb_root", "skipped_roots",
+                      "scan_complete"):
+            assert token in srv, f"服务端缩略图缓存接线缺失: {token}"
+        node_test = PROJECT_ROOT / "autotest" / "test_thumbs_task_ui.cjs"
+        nr = _subprocess.run(
+            ["node", str(node_test)], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=60)
+        assert nr.returncode == 0 and "NODE OK" in (nr.stdout or ""), \
+            (nr.returncode, nr.stdout, nr.stderr)
+    finally:
+        ws._thumb_warm_state.update(running=False, done=False, abort=False)
+        ws._valid_names_cache.update(ts=0.0, names=None, skipped=[])
+        (upaths.user_data, upaths.data_root,
+         _img_sub, _input_sub, ws.candidates_dir, ws._wallpaper_file,
+         ws._thumb_dir_cache) = orig
+        if _img_sub is None:
+            ws._config["paths"].pop("img_subdir", None)
+        else:
+            ws._config["paths"]["img_subdir"] = _img_sub
+        if _input_sub is None:
+            ws._config["paths"].pop("input_subdir", None)
+        else:
+            ws._config["paths"]["input_subdir"] = _input_sub
+        with ws._thumb_task_lock:
+            ws._thumb_task.clear()
+            ws._thumb_task.update({"id": "", "kind": "", "state": "idle", "stage": "",
+                                   "done": 0, "total": 0, "message": "",
+                                   "result": None, "error": None,
+                                   "created_at": None, "finished_at": None})
+        shutil.rmtree(str(tmp), ignore_errors=True)
 
 
 def main() -> int:

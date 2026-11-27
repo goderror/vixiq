@@ -11637,55 +11637,217 @@ window.hideBrowser = async function () {
 };
 
 // ============ 🖼️ 缩略图缓存管理 (设置页) ============
-let _thumbsPollTimer = null;
-async function loadThumbsStats() {
+// 三个操作共用同一条任务状态与设置卡片下方的进度区: 关闭设置页再回来可接回。
+let _thumbsTaskTimer = null;
+let _thumbsTaskStatsTick = 0;
+let _thumbsLastStats = null;
+
+const THUMB_TASK_KINDS = {
+  warm: { label: '预热缩略图', verb: '已检查', unit: '张' },
+  clear: { label: '清空缓存', verb: '已清理', unit: '个' },
+  'clear-orphans': { label: '清理失效缩略图', verb: '已清理', unit: '张' },
+};
+
+function setThumbsButtonsBusy(busy) {
+  ['#thumbs-warm-btn', '#thumbs-orphan-btn', '#thumbs-clear-btn'].forEach(sel => {
+    const b = $(sel);
+    if (b) b.disabled = !!busy;
+  });
+}
+
+function ensureThumbsTaskControls() {
+  const host = $('#thumbs-task-progress');
+  if (!host) return null;
+  if (host.dataset.ready !== '1') {
+    host.innerHTML = opProgressHtml('thumbs-task-flow', {
+        mode: 'flow', text: '正在核对缩略图…' }) +
+      opProgressHtml('thumbs-task-count', {
+        mode: 'count', label: '缩略图任务', text: '已处理 0／0 项', hidden: true });
+    host.dataset.ready = '1';
+    opRevealProgressIn(host);
+  }
+  return host;
+}
+
+function _thumbTaskKind(t) {
+  return THUMB_TASK_KINDS[t && t.kind]
+    || { label: '缩略图任务', verb: '已处理', unit: '项' };
+}
+
+function thumbsTaskResultText(t) {
+  const r = t.result || {};
+  const fail = Array.isArray(r.failed) ? r.failed : [];
+  if (t.kind === 'warm') {
+    const total = Number(r.total || 0);
+    if (!total) return '没有可预热的图片';
+    return `已检查 ${total} 张：已生成 ${Number(r.generated || 0)} 张，`
+      + `已存在 ${Number(r.existing || 0)} 张，失败 ${Number(r.failed || 0)} 张`;
+  }
+  if (t.kind === 'clear') {
+    let s = `已清空 ${Number(r.deleted || 0)} 个缓存文件`;
+    if (r.was_warming) {
+      s += r.stopped_warm ? '（已停止预热）'
+                          : '（预热未能及时停止，清理可能不完整）';
+    }
+    if (fail.length) s += `；${fail.length} 个未清空（${fail[0].error || '原因未知'}）`;
+    return s;
+  }
+  if (!r.scan_complete) {
+    const roots = (r.skipped_roots || []).join('、');
+    return '部分缓存根暂时不可用'
+      + (roots ? `（${roots}）` : '') + '，本次未清理';
+  }
+  let s = Number(r.deleted || 0)
+    ? `已清理 ${Number(r.deleted || 0)} 张失效缩略图`
+    : '没有失效缩略图';
+  if (fail.length) s += `；${fail.length} 张未清理（${fail[0].error || '原因未知'}）`;
+  return s;
+}
+
+function paintThumbsTask(t) {
+  const area = $('#thumbs-task');
+  if (!area) return;
+  if (!t || !t.state || t.state === 'idle') {
+    area.classList.add('hidden');
+    setThumbsButtonsBusy(false);
+    return;
+  }
+  ensureThumbsTaskControls();
+  area.classList.remove('hidden');
+  const running = t.state === 'running';
+  const total = Number(t.total || 0);
+  const done = Math.min(Number(t.done || 0), total || Number(t.done || 0));
+  const counting = running && total > 0;
+  const kind = _thumbTaskKind(t);
+  const stage = t.stage || '正在核对缩略图';
+  opProgressPaint('thumbs-task-flow', {
+    mode: 'flow', hidden: !running || counting, stage,
+    text: stage + '…',
+  });
+  opProgressPaint('thumbs-task-count', {
+    mode: 'count', hidden: !counting, done, total,
+    label: kind.label, stage,
+    text: `${kind.verb} ${done}／${total} ${kind.unit}`,
+  });
+  const note = $('#thumbs-task-note');
+  if (note) {
+    if (running) note.textContent = stage + '…';
+    else if (t.state === 'error') note.textContent = '失败：' + (t.error || '未知错误');
+    else note.textContent = t.message || thumbsTaskResultText(t);
+  }
+  setThumbsButtonsBusy(running);
+}
+
+async function refreshThumbsStatsOnly() {
   const box = $('#thumbs-stats');
-  if (!box) return;
+  if (!box) return null;
+  let d = null;
   try {
-    const d = await api('/api/thumbs/stats');
-    const warmTxt = d.warming ? '　<span class="tag" style="background:#fff3cd;color:#856404">预热中…</span>'
-      : (d.done ? '　<span class="tag" style="background:#d4edda;color:#155724">已完成</span>'
-         : '　<span class="tag">未预热</span>');
-    box.innerHTML = `缓存文件 <strong>${d.count}</strong> 个，占用 <strong>${d.size_mb} MB</strong>` +
-      (d.orphans ? `，其中<strong class="err-text">孤儿 ${d.orphans}</strong> 个（图被移动/改名后的残留，点「清理孤儿」删除）` : '') +
-      warmTxt;
+    d = await api('/api/thumbs/stats');
   } catch (e) {
     box.innerHTML = `<span class="hint">读取失败: ${esc(e.message)}</span>`;
+    return null;
+  }
+  _thumbsLastStats = d;
+  const skipped = d.skipped_roots || [];
+  const invalid = Number(d.orphans || 0);
+  const warmTxt = d.warming ? '　<span class="tag" style="background:#fff3cd;color:#856404">预热中…</span>'
+    : (d.done ? '　<span class="tag" style="background:#d4edda;color:#155724">已完成</span>'
+       : '　<span class="tag">未预热</span>');
+  box.innerHTML = `缓存文件 <strong>${d.count}</strong> 个，占用 <strong>${d.size_mb} MB</strong>` +
+    (skipped.length
+      ? `；<span class="err-text">失效缩略图暂不可统计（缓存根不可用：${esc(skipped.join('、'))}）</span>`
+      : (invalid ? `，其中<strong class="err-text">失效缩略图 ${invalid}</strong> 张` : '')) +
+    warmTxt;
+  return d;
+}
+
+function startThumbsTaskPolling() {
+  if (_thumbsTaskTimer) return;
+  _thumbsTaskStatsTick = 0;
+  const tick = async () => {
+    let r = null;
+    try {
+      r = await api('/api/thumbs/task');
+    } catch (e) {
+      return;
+    }
+    const t = r && r.task;
+    if (!t) return;
+    paintThumbsTask(t);
+    _thumbsTaskStatsTick += 1;
+    if (_thumbsTaskStatsTick % 4 === 0) refreshThumbsStatsOnly();
+    if (t.state !== 'running') {
+      clearInterval(_thumbsTaskTimer);
+      _thumbsTaskTimer = null;
+      await refreshThumbsStatsOnly();
+    }
+  };
+  tick();
+  _thumbsTaskTimer = setInterval(tick, 500);
+}
+
+async function loadThumbsTask() {
+  let r = null;
+  try {
+    r = await api('/api/thumbs/task');
+  } catch (e) {
+    return;
+  }
+  const t = r && r.task;
+  paintThumbsTask(t || { state: 'idle' });
+  if (t && t.state === 'running') startThumbsTaskPolling();
+  else if (_thumbsTaskTimer) {
+    clearInterval(_thumbsTaskTimer);
+    _thumbsTaskTimer = null;
   }
 }
-async function warmThumbs() {
-  try {
-    const r = await api('/api/thumbs/warm', { method: 'POST' });
-    if (r.status === 'already_running') {
-      toast('预热已在运行中，请稍候', 'warn');
-    } else {
-      toast('已开始后台预热全部缩略图（浏览日志查看进度）', 'ok');
-    }
-    loadThumbsStats();
-    // 预热期间每 5s 刷新一次状态, 直到完成或超时 10 分钟
-    if (_thumbsPollTimer) clearInterval(_thumbsPollTimer);
-    let stopAfter = Date.now() + 10 * 60 * 1000;
-    _thumbsPollTimer = setInterval(async () => {
-      await loadThumbsStats();
-      if (Date.now() > stopAfter) { clearInterval(_thumbsPollTimer); _thumbsPollTimer = null; }
-    }, 5000);
-  } catch (e) { toast('失败: ' + e.message, 'err'); }
+
+async function loadThumbsStats() {
+  await refreshThumbsStatsOnly();
+  await loadThumbsTask();
 }
+
+async function startThumbsTask(action) {
+  if (_thumbsTaskTimer) return;   // 已在跟踪, 不重复启动
+  setThumbsButtonsBusy(true);
+  let r = null;
+  try {
+    r = await api('/api/thumbs/task', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+  } catch (e) {
+    setThumbsButtonsBusy(false);
+    toast('失败：' + e.message, 'err');
+    return;
+  }
+  if (r && r.task) paintThumbsTask(r.task);
+  if (r && r.status === 'ok' && r.task && r.task.state === 'running') {
+    startThumbsTaskPolling();
+  } else if (r && r.busy) {
+    toast(r.message || '已有另一项缩略图任务正在执行', 'warn');
+    startThumbsTaskPolling();
+  } else {
+    setThumbsButtonsBusy(false);
+    if (r && r.error) toast('失败：' + r.error, 'err');
+  }
+}
+
+async function warmThumbs() {
+  await startThumbsTask('warm');
+}
+
 async function clearThumbs() {
   if (!confirm('确认清空缩略图缓存？下次浏览原图时会自动重建（不影响原图）')) return;
-  try {
-    const r = await api('/api/thumbs/clear', { method: 'POST' });
-    toast(`已清空 ${r.deleted} 个缓存文件`, 'ok');
-    loadThumbsStats();
-  } catch (e) { toast('失败: ' + e.message, 'err'); }
+  await startThumbsTask('clear');
 }
+
 async function clearThumbsOrphans() {
-  if (!confirm('删除孤儿缩略图（图片被移动/改名/删除后的残留缓存）？当前图片的缩略图不受影响')) return;
-  try {
-    const r = await api('/api/thumbs/clear-orphans', { method: 'POST' });
-    toast(r.deleted ? `已清理 ${r.deleted} 个孤儿缓存 ✓` : '当前没有孤儿缓存 ✓', 'ok');
-    loadThumbsStats();
-  } catch (e) { toast('失败: ' + e.message, 'err'); }
+  const n = Number((_thumbsLastStats || {}).orphans || 0);
+  if (!confirm((n ? `清理 ${n} 张失效缩略图？` : '清理失效缩略图？')
+               + '原图不会被删除。')) return;
+  await startThumbsTask('clear-orphans');
 }
 
 // ============ 退出程序 (设置页) ============

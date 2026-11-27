@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127e`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127f`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127f`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,33 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.74 缩略图缓存：失效范围修正 + 三操作共用进度（2026-11-27，前端 `20261127f`，已发布到安装版）
+
+- **文案统一**：设置页「清理孤儿」改为「清理失效缩略图」，悬停说明改为「清理原图移动、
+  改名或删除后留下的缩略图缓存」；统计用「失效缩略图 N 张」，确认与结果文案同步，
+  失败项单列「N 张未清理」并带原因。「清除缓存」改为「清空缩略图缓存」。
+- **有效缓存范围**：`_valid_thumb_names` 现在覆盖 `/api/local-img` 实际使用的
+  img/input/trash/wall 四个根和全部可生成格式（含 bmp/tif/tiff），并为数据库登记过的
+  图库/回收站路径保留 stable 键（源文件缺失或进回收站后仍可看历史预览）。扫描不完整
+  或已启用根暂时不可用时放弃清理并返回 `skipped_roots`，不再误删有效缓存。
+- **共用任务**：新增 `GET/POST /api/thumbs/task`，三个操作共用一条可重开任务状态
+  （`kind/state/stage/done/total/result/message`）。清理先流动「核对缩略图」，锁定范围
+  后按张数计数；清空缓存可抢占正在运行的预热，先显示「停止预热」再按文件数清理；
+  预热先确定图片数，再报已检查/已生成/已存在/失败。设置卡片下方统一显示进度与结果，
+  关闭设置再回来可接回，按钮在任务期间禁用。
+- **回归**：新增 T197（四根/全格式/缺失 stable/不可用根/三操作任务）+
+  `autotest/test_thumbs_task_ui.cjs`（真实前端函数：流动/计数/结果/接回/启动）。
+  全量 **188/188**（121.17 s），日志
+  `_dev_runtime/diagnostics/trae-20261127f-thumbs-cache-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 13:58:59`，前端 `20261127f`）在 7813
+  通过三个接口检查、批量转 PNG 失败 UI、转 JPG 进度 UI 与
+  `check_thumbs_task_ui.py`；回滚清单
+  `_dev_runtime/backups/publish-20261127f-20261127-140030.json`（4 个旧文件、8 个
+  替换项、15,163,701 字节）。dist 与安装版 exe `0e1e0ccb61b0…`、base_library
+  `9172df217adc…`、app.js `84f5bc85a546…`、index.html `cdbc0e77cfdc…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127f-1795759139-1795695345-1795519082`、健康正常。
 
 ### 4.73 单张 PNG 转 JPG 接入共用进度（2026-11-27，前端 `20261127e`，已发布到安装版）
 
