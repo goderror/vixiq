@@ -2960,6 +2960,15 @@ def _sim_run(task_id: str, query_path: str) -> None:
                 _upd(status="error", stage="", finished_at=time.time(),
                      error=f"构建特征库失败：{type(e).__name__}: {e}")
                 return
+        else:
+            # 已经加载的检索器也要先按图库增量更新: 新入库/同路径换图
+            # 必须进入本次结果, 不能让旧内存索引继续冒充当前图库。
+            try:
+                searcher.refresh(progress_cb=_cb)
+            except Exception as e:
+                _upd(status="error", stage="", finished_at=time.time(),
+                     error=f"构建特征库失败：{type(e).__name__}: {e}")
+                return
         _upd(stage="searching", done=0, total=0)
         try:
             results = searcher.search(query_path, top_k=12,
@@ -9143,7 +9152,10 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     img_root = str(Path(paths.user_data(_config["paths"]["img_subdir"])))
                     _ls_searcher = ImageSearcher(library_path=img_root,
                                                  reporter=PrintReporter(), config=_config)
-            results = _ls_searcher.search(tmp, top_k=12)
+                else:
+                    # 旧同步入口同样先增量更新, 与后台任务共用同一份内存索引
+                    _ls_searcher.refresh()
+                results = _ls_searcher.search(tmp, top_k=12)
         except Exception as e:
             return jsonify({"status": "error",
                             "message": f"检索失败: {str(e).splitlines()[0]}"}), 500

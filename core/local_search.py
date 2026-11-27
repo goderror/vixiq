@@ -232,13 +232,40 @@ class ImageSearcher:
         final_score = fusion + confidence_bonus
         return min(1.0, final_score)
 
+    @staticmethod
+    def _file_sig(path):
+        """文件身份: 大小 + 修改时间 (ns)。特征库用它判断已存特征是否对应当前文件。"""
+        st = os.stat(path)
+        return int(st.st_size), int(st.st_mtime_ns)
+
+    def refresh(self, progress_cb=None) -> bool:
+        """按当前图库更新特征库与内存索引, 返回是否有实际变化。
+
+        已创建的单例在下一次检索前调用: 新增/变更文件按真实数量回调进度;
+        图库无变化时不重载内存缓存, 保持快速检索。
+        """
+        old = self.progress_cb
+        if progress_cb is not None:
+            self.progress_cb = progress_cb
+        try:
+            changed = self.build_db(self.feature_dir, self.library_path)
+            if changed or not self.db_names:
+                self._load_to_memory()
+            return bool(changed)
+        except Exception:
+            # 内存索引不能停留在半更新状态; 下次 refresh 会重新加载
+            self.db_des, self.db_hist, self.db_names = [], [], []
+            raise
+        finally:
+            self.progress_cb = old
+
     def build_db(self, feature_dir, library_path):
         if not library_path:
             self.reporter.log("未配置图库路径,跳过特征库构建")
-            return
+            return False
         if not os.path.isdir(library_path):
             self.reporter.warn(f"图库路径不存在: {library_path}")
-            return
+            return False
 
         valid_extensions = ('.jpg', '.png', '.jpeg', '.bmp', '.webp')
         # 递归收集 (本库图片在 X图/涩图/作者_ID/... 嵌套目录)
@@ -249,27 +276,81 @@ class ImageSearcher:
                     rel = os.path.relpath(os.path.join(dirpath, fn), library_path)
                     all_files.append(rel.replace("\\", "/"))
         all_files_set = set(all_files)
+        import hashlib as _hl
 
-        # 清理过期特征文件 (npz 内嵌 rel 不在当前文件列表 → 删)
+        # 清理过期特征文件 (npz 内嵌 rel 不在当前文件列表 → 删), 同时读出
+        # 每份特征记录的文件身份。旧格式没有身份 → 下面按修改时间安全升级。
         existing = [f for f in os.listdir(feature_dir) if f.endswith('.npz')]
         removed_count = 0
+        meta = {}   # rel -> (npz 文件名, 存下的身份或 None, npz 修改时间 ns)
         for f in existing:
+            fp = os.path.join(feature_dir, f)
+            sig = None
             try:
-                with np.load(os.path.join(feature_dir, f)) as data:
+                with np.load(fp) as data:
                     rel = _rel_to_str(data['rel'])
+                    if 'sig_size' in data.files and 'sig_mtime_ns' in data.files:
+                        sig = (int(data['sig_size']), int(data['sig_mtime_ns']))
+                npz_mtime = os.stat(fp).st_mtime_ns
             except Exception:
                 rel = os.path.splitext(f)[0]  # 旧格式 (无 rel): 用文件名兜底
+                npz_mtime = 0
             if rel not in all_files_set:
-                os.remove(os.path.join(feature_dir, f))
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
                 removed_count += 1
+                continue
+            meta[rel] = (f, sig, npz_mtime)
         if removed_count > 0:
             self.reporter.log(f"清理了 {removed_count} 个过期特征文件")
 
-        # 过滤已处理文件 (npz 文件名 = md5(rel), 已存在即已提取)
-        import hashlib as _hl
-        to_process = [rel for rel in all_files
-                      if not os.path.exists(os.path.join(
-                          feature_dir, _hl.md5(rel.encode("utf-8")).hexdigest() + ".npz"))]
+        # 判定新增与变更: 新格式逐项比较大小 + 修改时间; 旧格式没有身份时,
+        # 只有图片比特征文件新才视为过期, 否则补齐身份 (安全升级, 不重复提取)。
+        stale = {rel for rel in all_files if rel not in meta}
+        upgrades = []
+        for rel in all_files:
+            info = meta.get(rel)
+            if not info:
+                continue
+            fname, sig, npz_mtime = info
+            img_path = os.path.join(library_path, *rel.split("/"))
+            try:
+                cur = self._file_sig(img_path)
+            except OSError:
+                stale.add(rel)      # 读不到 → 走提取, 由提取阶段报告 skip/fail
+                continue
+            if sig is None:
+                if npz_mtime and cur[1] > npz_mtime:
+                    stale.add(rel)
+                else:
+                    upgrades.append((rel, fname, cur))
+            elif sig != cur:
+                stale.add(rel)
+
+        for rel, fname, cur in upgrades:
+            fp = os.path.join(feature_dir, fname)
+            try:
+                with np.load(fp) as data:
+                    des = data['des']
+                    hist = data['color_hist']
+                    relb = data['rel']
+                np.savez(fp, des=des, color_hist=hist, rel=relb,
+                         sig_size=np.int64(cur[0]), sig_mtime_ns=np.int64(cur[1]))
+            except Exception:
+                stale.add(rel)      # 升级失败 → 按过期重提取
+
+        # 过期特征先删掉: 重提失败时旧特征绝不参与检索, 下次检索仍会重试
+        for rel in stale:
+            info = meta.get(rel)
+            if info:
+                try:
+                    os.remove(os.path.join(feature_dir, info[0]))
+                except OSError:
+                    pass
+
+        to_process = [rel for rel in all_files if rel in stale]
         if removed_count > 0 or len(to_process) > 0:
             # 有变动,删缓存强制重新加载
             if os.path.exists(self.cache_file):
@@ -278,7 +359,7 @@ class ImageSearcher:
         if not to_process:
             self.reporter.log("特征库已是最新")
             self._emit("extract_plan", 0, 0)
-            return
+            return bool(removed_count)
 
         total = len(to_process)
         self._emit("extract_plan", 0, total)
@@ -288,6 +369,7 @@ class ImageSearcher:
             outcome, detail = "fail", ""
             try:
                 img_path = os.path.join(library_path, *rel.split("/"))
+                fsig = self._file_sig(img_path)   # 读图前记录身份
                 img_color = self.cv_imread(img_path)
                 img_gray = self.cv_imread_gray(img_path)
 
@@ -313,6 +395,8 @@ class ImageSearcher:
                         des=des,
                         color_hist=color_hist,
                         rel=rel.encode("utf-8"),
+                        sig_size=np.int64(fsig[0]),
+                        sig_mtime_ns=np.int64(fsig[1]),
                     )
                     outcome, detail = "ok", ""
                 else:
@@ -325,6 +409,7 @@ class ImageSearcher:
             finally:
                 # 无论成功/跳过/失败, 这张都检查完了 —— N 只在这里加一次
                 self._emit("extract", i, total, outcome, detail)
+        return True
 
     def search(self, query_img_path, top_k: "int | None" = None,
                progress_cb=None, strict_query: bool = False) -> list:

@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127o`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127p`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127o`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127p`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,30 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.84 图库以图搜图增量索引返修（2026-11-27，前端 `20261127p`，已发布到安装版）
+
+- **单例增量**：`/api/library/similar/task` 在 `_ls_searcher` 已存在时先
+  `searcher.refresh(_cb)` 再检索；旧同步接口同样先 refresh，并把 refresh+search
+  放进 `_ls_lock`。新入库和同路径换图不重启、不清特征库即可进入本次结果。
+- **文件身份**：特征 npz 记录 `sig_size` / `sig_mtime_ns`（读图前 stat）；身份不一致
+  即视为过期。过期 npz 先删除再重提，重提失败时旧特征不参与检索且下次仍重试；
+  旧格式无身份时按图片与 npz 修改时间安全升级（未变只补身份，变化则重提）。
+  `build_db` 返回是否有变化，`refresh` 仅在变化时重载内存索引。
+- **回归**：T200 用正常 HTTP 入口覆盖「先搜一次 → 入库新图 → 立即搜新图」：分母 1、
+  TOP1 为新图、未变化文件不重复提取；并覆盖运行中同路径换图、冷启动旧磁盘缓存、
+  旧格式升级/过期、无变化直搜、另一入口持锁、临时图回收与错误重试。全量 **191/191**
+  （168.40 s），日志
+  `_dev_runtime/diagnostics/trae-20261127p-library-similar-incremental-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 23:16:13`，前端 `20261127p`）在 7813
+  隔离图库通过新增/同路径换图 API 检查与以图搜图 UI 检查，恢复配置后通过既有
+  **12 项**检查（日志 `trae-20261127p-candidate-checks.log`）。回滚清单
+  `_dev_runtime/backups/publish-20261127p-20261127-231925.json`（3 个旧文件、
+  6 个替换项、14,462,001 字节）。dist 与安装版 exe `ab3578eb9fff…`、base_library
+  `f4369f72da83…`、app.js `0bdca1cc1d34…`、index.html `f0944c194824…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127p-1795789644-1795695345-1795519082`、健康正常，以图搜图/副本扫描/
+  壁纸库/回收站 UI 检查通过。
 
 ### 4.83 图库「以图搜图」接入共用进度（2026-11-27，前端 `20261127o`，已发布到安装版）
 
