@@ -12563,9 +12563,28 @@ function bind() {
     clearTimeout(st.timer);
     st.timer = null;
     const box = $('#jpg-preview');
-    if (box) box.textContent = msg || '正在生成预览…';
+    if (box) { box.classList.add('hidden'); box.textContent = ''; }
     const btn = $('#jpg-confirm-btn');
     if (btn) btn.disabled = true;
+    _jpgApplyProgress(0, -1, false, true);
+    _jpgPreviewFlow(true);
+  }
+
+  // 质量预览: 请求在途时用流动条, 结果回来后收起, 只显示当前质量对应的结果
+  function _jpgPreviewFlow(show, text) {
+    opProgressPaint('jpg-preview-progress', {
+      mode: 'flow', hidden: !show,
+      stage: '正在生成质量预览',
+      text: text || '正在生成质量预览…',
+    });
+  }
+
+  // 确认转换: 短版分段充能条, 按「编码 → 校验并更新登记」显示当前阶段
+  function _jpgApplyProgress(stageIndex, failedIndex, running, hidden) {
+    opProgressPaint('jpg-apply-progress', {
+      mode: 'segments', stages: ['编码', '校验并更新登记'],
+      stageIndex, failedIndex, running, hidden,
+    });
   }
 
   function _paintPageConversion(lb, rec, canJpg) {
@@ -12621,8 +12640,9 @@ function bind() {
     const req = st.reqSeq = (st.reqSeq || 0) + 1;
     const box = $('#jpg-preview');
     const btn = $('#jpg-confirm-btn');
-    if (box) box.textContent = '正在生成预览…';
+    if (box) { box.classList.add('hidden'); box.textContent = ''; }
     if (btn) btn.disabled = true;
+    _jpgPreviewFlow(true);
     let r = null;
     try {
       r = await api('/api/library/convert-to-jpg/preview', {
@@ -12631,7 +12651,11 @@ function bind() {
       });
     } catch (e) {
       if (window._jpgConvert === st && !st.closed && st.seq === seq && st.reqSeq === req) {
-        if (box) box.textContent = '预览失败：' + e.message;
+        _jpgPreviewFlow(false);
+        if (box) {
+          box.classList.remove('hidden');
+          box.textContent = '预览失败：' + e.message;
+        }
         if (btn) btn.disabled = true;
       }
       return;
@@ -12641,8 +12665,10 @@ function bind() {
         || st.reqSeq !== req || Number(st.quality) !== quality) return;
     st.preview = null;
     st.previewId = null;
+    _jpgPreviewFlow(false);
     if (!r || r.status !== 'ok' || Number(r.quality) !== quality || !r.preview_id) {
       if (box) {
+        box.classList.remove('hidden');
         box.innerHTML = '<b>⚠ ' + esc(_jpgMsg(r)) + '</b>'
           + ((r && r.pending_recycle)
             ? '<div style="margin-top:8px"><button class="btn ghost" '
@@ -12656,6 +12682,7 @@ function bind() {
     st.previewId = r.preview_id;
     const saved = Number(r.saved_bytes) || 0;
     if (box) {
+      box.classList.remove('hidden');
       box.innerHTML = '<div>当前：<b>' + fmtSize(r.current_size) + '</b>（'
         + r.width + '×' + r.height + '）</div>'
         + '<div>JPG（质量 ' + r.quality + '）：<b>' + fmtSize(r.jpg_size) + '</b></div>'
@@ -12680,7 +12707,11 @@ function bind() {
         压缩质量 <input type="range" id="jpg-quality" min="60" max="100" value="85" step="1" style="flex:1">
         <b id="jpg-quality-val">85</b>
       </label>
-      <div id="jpg-preview" class="hint" style="margin-top:10px">正在生成预览…</div>
+      ${opProgressHtml('jpg-preview-progress', {
+        mode: 'flow', text: '正在生成质量预览…' })}
+      <div id="jpg-preview" class="hint hidden" style="margin-top:10px"></div>
+      ${opProgressHtml('jpg-apply-progress', {
+        mode: 'segments', stages: ['编码', '校验并更新登记'], hidden: true })}
       <div class="btn-row">
         <button class="btn accent" id="jpg-confirm-btn" disabled onclick="applyJpgConvert()">确认转换为 JPG</button>
         <button class="btn ghost" onclick="closeLibModal()">取消</button>
@@ -12721,6 +12752,10 @@ function bind() {
     st.submitting = true;
     const btn = $('#jpg-confirm-btn');
     if (btn) btn.disabled = true;
+    _jpgPreviewFlow(false);
+    const pvBox = $('#jpg-preview');
+    if (pvBox) pvBox.classList.add('hidden');
+    _jpgApplyProgress(0, -1, true, false);
     const quality = Number(st.quality);
     const previewId = preview.preview_id;
     st.seq++;                       // 使在途预览应答失效
@@ -12738,6 +12773,7 @@ function bind() {
       toast('转换失败：' + e.message, 'err');
       if (window._jpgConvert === st && !st.closed) {
         _jpgPreviewReset(st, '预览已失效，请重新预览');
+        _jpgApplyProgress(0, 0, false, false);
         const seq = st.seq;
         st.timer = setTimeout(() => loadJpgPreview(st.aid, st.page, seq), 0);
       }
@@ -12748,11 +12784,13 @@ function bind() {
       toast('转换失败：' + msg, 'err');
       if (window._jpgConvert === st && !st.closed) {
         _jpgPreviewReset(st, '⚠ ' + msg);
+        _jpgApplyProgress(0, 0, false, false);
         const seq = st.seq;
         st.timer = setTimeout(() => loadJpgPreview(st.aid, st.page, seq), 0);
       }
       return;
     }
+    _jpgApplyProgress(2, -1, false, false);
     closeLibModal();
     const saved = Number(r.saved_bytes) || 0;
     toast('已转为 JPG · ' + fmtSize(r.current_size) + ' → ' + fmtSize(r.new_size)

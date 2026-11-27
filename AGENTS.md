@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127d`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127e`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127d`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,26 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.73 单张 PNG 转 JPG 接入共用进度（2026-11-27，前端 `20261127e`，已发布到安装版）
+
+- **质量预览**：质量滑块变化或首次打开时显示流动条「正在生成质量预览」，请求在途
+  只显示流动条；当前质量的结果回来后收起流动条并展示大小预估。旧质量/旧请求的迟到
+  应答继续按 `seq/reqSeq/quality` 丢弃，不覆盖新结果。
+- **确认转换**：使用共用分段充能条，阶段为「编码 → 校验并更新登记」；提交后第一段
+  进行中，成功后两段完成并关闭弹窗，失败时当前段标红、弹窗保留并提示原因。
+- 沿用原有质量令牌、源文件身份、页登记、发布防覆盖、旧 PNG 回收与重试规则，不改
+  后端接口。
+- **回归**：新增 T196 + `autotest/test_jpg_progress_ui.cjs`（真实 `app.js` 函数）覆盖
+  预览流动、成功收尾、失败标红；全量 **187/187**（123.01 s），日志
+  `_dev_runtime/diagnostics/trae-20261127e-jpg-progress-smoke.log`。
+- **候选/发布（仅前端）**：候选包 `_dev_runtime/packages/vixiq` 的 app.js/index.html
+  更新为 `20261127e`；7813 通过三个接口检查、`check_normalize_failure_ui.py` 与
+  `check_jpg_progress_ui.py`。回滚清单
+  `_dev_runtime/backups/publish-20261127e-20261127-134142.json`（2 个旧文件哈希、
+  4 个替换项、797,726 字节）。dist 与安装版 app.js `ba4d9380f54c…`、index.html
+  `dcebef902cfd…`，exe/base_library 仍为 `20261127d` 构建；两处 `config/user.json`
+  哈希未变。安装版 7810 前端 `20261127e-1795757621-1795695345-1795519082`、健康正常。
 
 ### 4.72 批量转 PNG 任务复用、弹窗归属与失败重开（2026-11-27，前端 `20261127d`，已发布到安装版）
 
