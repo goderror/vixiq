@@ -10140,32 +10140,38 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                          f"#{aid} p{page} 旧 PNG 已送回收站", 1, ids=[aid])
         return jsonify({"status": "ok", "retried": recycled, "pending": False})
 
-    @app.route("/api/library/normalize-pending/preview", methods=["POST"])
-    def api_library_normalize_pending_preview():
+    def _normalize_preview_run(progress=None) -> dict:
         """4B-3: 预览手动放入的静态 JPG/WEBP/BMP/TIF 转为 PNG 的计划。
 
         只读: 转换结果写在应用临时目录, 用后即删; 不碰图库文件。
-        同页已有 PNG 或目标 PNG 已存在时只报告冲突, 不签发确认令牌。"""
+        同页已有 PNG 或目标 PNG 已存在时只报告冲突, 不签发确认令牌。
+        同步接口与后台任务共用; progress 只报告真实张数, 不按计时估算。"""
         from core.image_format import actual_format_info, normalize_to_png
         rep = _cached_reconcile(force=True)
         if not getattr(rep, "root_available", True):
-            return jsonify({
+            return {
                 "status": "error",
                 "error": "图库不可用：磁盘未连接或图库目录无法访问",
                 "root_available": False, "items": [],
-            }), 503
+            }
         try:
             img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
         except Exception as e:
-            return jsonify({
+            return {
                 "status": "error",
                 "error": f"图库不可用：{str(e).splitlines()[0]}",
                 "root_available": False, "items": [],
-            }), 503
+            }
         items: "list[dict]" = []
+        cands = list(getattr(rep, "normalize_pending", []) or [])
+        if progress:
+            progress({"stage": "生成预览", "done": 0, "total": len(cands)})
         tmpdir = _new_ingest_tmpdir()
         try:
-            for idx, raw in enumerate(getattr(rep, "normalize_pending", []) or []):
+            for idx, raw in enumerate(cands):
+                if progress:
+                    progress({"stage": "生成预览", "done": idx,
+                              "total": len(cands)})
                 item = dict(raw)
                 item["status"] = "pending"
                 item["preview_id"] = None
@@ -10283,7 +10289,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         chosen = [x for x in items if x.get("status") == "chosen"]
         total_size = sum(int(x.get("size") or 0) for x in ready)
         total_png = sum(int(x.get("png_size") or 0) for x in ready)
-        return jsonify({
+        return {
             "status": "ok", "root_available": True,
             "scan_incomplete": bool(getattr(rep, "scan_incomplete", False)),
             "unreadable_dirs": getattr(rep, "unreadable_dirs", []) or [],
@@ -10292,34 +10298,110 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             "error_count": len(errors), "chosen_count": len(chosen),
             "total_size": total_size, "total_png_size": total_png,
             "saved_bytes": total_size - total_png,
-        })
+        }
 
-    @app.route("/api/library/normalize-pending/apply", methods=["POST"])
-    def api_library_normalize_pending_apply():
-        """4B-3: 用户确认后把选中的静态图片转换为 PNG, 更新页登记并回收旧文件。"""
+    @app.route("/api/library/normalize-pending/preview", methods=["POST"])
+    def api_library_normalize_pending_preview():
+        out = _normalize_preview_run()
+        if out.get("status") != "ok":
+            return jsonify(out), 503
+        return jsonify(out)
+
+    # ---- 批量转 PNG 共用任务: 初步核对/逐张预览/逐张执行都报真实状态 ----
+    _normalize_jobs: "dict[str, dict]" = {}
+    _normalize_jobs_lock = threading.Lock()
+
+    def _normalize_running_job(kind: str):
+        with _normalize_jobs_lock:
+            for _j in _normalize_jobs.values():
+                if _j.get("state") == "running" and _j.get("kind") == kind:
+                    return _j
+        return None
+
+    def _normalize_job_register(kind: str, stage: str, total: int) -> dict:
+        job_id = uuid.uuid4().hex
+        now = time.time()
+        with _normalize_jobs_lock:
+            for jid, old in list(_normalize_jobs.items()):
+                if (old.get("state") != "running"
+                        and now - (old.get("finished_at") or now) > 7200):
+                    _normalize_jobs.pop(jid, None)
+            job = {"id": job_id, "kind": kind, "state": "running",
+                   "stage": stage, "done": 0, "total": int(total or 0),
+                   "created_at": now, "finished_at": None,
+                   "result": None, "error": None}
+            _normalize_jobs[job_id] = job
+        return job
+
+    @app.route("/api/library/normalize-pending/preview/job", methods=["POST"])
+    def api_library_normalize_pending_preview_job():
+        """后台生成预览: 初步核对用流动, 逐张预览按真实张数推进。"""
+        running = _normalize_running_job("preview")
+        if running:
+            return jsonify({"status": "ok", "job_id": running["id"],
+                            "reused": True})
+        job = _normalize_job_register("preview", "核对候选格式与冲突", 0)
+
+        def _progress(ev: dict) -> None:
+            with _normalize_jobs_lock:
+                job["stage"] = str(ev.get("stage") or "生成预览")
+                job["done"] = int(ev.get("done") or 0)
+                job["total"] = int(ev.get("total") or 0)
+
+        def _run() -> None:
+            try:
+                out = _normalize_preview_run(progress=_progress)
+                if out.get("status") != "ok":
+                    raise RuntimeError(out.get("error") or "预览失败")
+                with _normalize_jobs_lock:
+                    job["result"] = out
+                    job["state"] = "done"
+                    job["stage"] = "预览完成"
+                    job["done"] = job["total"]
+                    job["finished_at"] = time.time()
+            except Exception as e:
+                with _normalize_jobs_lock:
+                    job["state"] = "error"
+                    job["error"] = str(e) or e.__class__.__name__
+                    job["finished_at"] = time.time()
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"status": "ok", "job_id": job["id"]})
+
+    @app.route("/api/library/normalize-pending/preview/job/<job_id>", methods=["GET"])
+    def api_library_normalize_pending_preview_job_status(job_id):
+        with _normalize_jobs_lock:
+            job = _normalize_jobs.get(job_id)
+            if not job:
+                return jsonify({"status": "error",
+                                "message": "任务不存在或已过期"}), 404
+            return jsonify({"status": "ok", **dict(job)})
+
+    def _normalize_apply_run(req_items, recycle_old: bool, progress=None) -> dict:
+        """4B-3: 用户确认后把选中的静态图片转换为 PNG, 更新页登记并回收旧文件。
+
+        同步接口与后台任务共用; progress 只按本次确认的张数报告真实进度。"""
         from core.image_format import (actual_format_info, normalize_to_png,
                                        PublishRejected)
         from utils.hashutil import md5_of
-        data = request.get_json(silent=True) or {}
-        req_items = data.get("items") or []
-        recycle_old = bool(data.get("recycle_old", True))
-        if not isinstance(req_items, list) or not req_items:
-            return jsonify({"status": "error", "error": "没有要处理的文件"}), 400
+        total = len(req_items)
+        if progress:
+            progress({"stage": "执行转换", "done": 0, "total": total})
         rep = _cached_reconcile(force=True)
         if not getattr(rep, "root_available", True):
-            return jsonify({
+            return {
                 "status": "error",
                 "error": "图库不可用：磁盘未连接或图库目录无法访问",
                 "root_available": False,
-            }), 503
+            }
         try:
             img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
         except Exception as e:
-            return jsonify({
+            return {
                 "status": "error",
                 "error": f"图库不可用：{str(e).splitlines()[0]}",
                 "root_available": False,
-            }), 503
+            }
         results: "list[dict]" = []
         converted = failed = recycled_total = 0
 
@@ -10330,7 +10412,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             results.append(out)
             return out
 
-        for req in req_items:
+        for _cur, req in enumerate(req_items):
+            if progress:
+                progress({"stage": "执行转换", "done": _cur, "total": total})
             token = _normalize_preview_take((req or {}).get("preview_id"))
             if not token:
                 _err({"path": (req or {}).get("path", "")}, "stale_preview",
@@ -10568,11 +10652,76 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                              f"旧文件回收 {recycled_total}", 1)
         except Exception:
             pass
-        return jsonify({
+        if progress:
+            progress({"stage": "执行转换", "done": total, "total": total})
+        return {
             "status": "ok", "items": results,
             "converted": converted, "failed": failed,
             "recycled": recycled_total,
-        })
+        }
+
+    @app.route("/api/library/normalize-pending/apply", methods=["POST"])
+    def api_library_normalize_pending_apply():
+        data = request.get_json(silent=True) or {}
+        req_items = data.get("items") or []
+        recycle_old = bool(data.get("recycle_old", True))
+        if not isinstance(req_items, list) or not req_items:
+            return jsonify({"status": "error", "error": "没有要处理的文件"}), 400
+        out = _normalize_apply_run(req_items, recycle_old)
+        if out.get("status") != "ok":
+            return jsonify(out), 503
+        return jsonify(out)
+
+    @app.route("/api/library/normalize-pending/apply/job", methods=["POST"])
+    def api_library_normalize_pending_apply_job():
+        """后台执行转换: 前端按本次确认的张数显示「已处理 n／N 张」。"""
+        data = request.get_json(silent=True) or {}
+        req_items = data.get("items") or []
+        recycle_old = bool(data.get("recycle_old", True))
+        if not isinstance(req_items, list) or not req_items:
+            return jsonify({"status": "error", "error": "没有要处理的文件"}), 400
+        running = _normalize_running_job("apply")
+        if running:
+            return jsonify({"status": "ok", "job_id": running["id"],
+                            "reused": True})
+        job = _normalize_job_register("apply", "执行转换", len(req_items))
+
+        def _progress(ev: dict) -> None:
+            with _normalize_jobs_lock:
+                job["stage"] = str(ev.get("stage") or "执行转换")
+                job["done"] = int(ev.get("done") or 0)
+                job["total"] = int(ev.get("total") or 0)
+
+        def _run() -> None:
+            try:
+                out = _normalize_apply_run(req_items, recycle_old,
+                                           progress=_progress)
+                if out.get("status") != "ok":
+                    raise RuntimeError(out.get("error") or "转换失败")
+                with _normalize_jobs_lock:
+                    job["result"] = out
+                    job["state"] = "done"
+                    job["stage"] = "转换完成"
+                    job["done"] = job["total"]
+                    job["finished_at"] = time.time()
+            except Exception as e:
+                with _normalize_jobs_lock:
+                    job["state"] = "error"
+                    job["error"] = str(e) or e.__class__.__name__
+                    job["finished_at"] = time.time()
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"status": "ok", "job_id": job["id"],
+                        "total": len(req_items)})
+
+    @app.route("/api/library/normalize-pending/apply/job/<job_id>", methods=["GET"])
+    def api_library_normalize_pending_apply_job_status(job_id):
+        with _normalize_jobs_lock:
+            job = _normalize_jobs.get(job_id)
+            if not job:
+                return jsonify({"status": "error",
+                                "message": "任务不存在或已过期"}), 404
+            return jsonify({"status": "ok", **dict(job)})
 
     @app.route("/api/library/missing-items")
     def api_library_missing_items():

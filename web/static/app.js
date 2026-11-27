@@ -5201,18 +5201,143 @@ window.showSyncResult = function () {
 };
 
 // 4B-3: 同步发现的手动 JPG/WEBP/BMP/TIF → 预览确认后转 PNG
-window.openNormalizePreview = async function () {
-  let r = null;
+// 批量转 PNG 设计稿第五节: 初步核对用流动, 逐张预览/执行按真实张数计数。
+let _normPreview = null;   // {id,state,stage,done,total,result}; 重开入口接回
+let _normApply = null;     // 执行任务; 关闭弹窗后从原入口接回
+
+function normalizePreviewOwner(id) { return 'normalize-preview:' + id; }
+function normalizeApplyOwner(id) { return 'normalize-apply:' + id; }
+
+function normalizePreviewProgressHtml() {
+  return opProgressHtml('norm-preview-flow', {
+      mode: 'flow', text: '正在核对候选格式与冲突…' }) +
+    opProgressHtml('norm-preview-count', {
+      mode: 'count', label: '生成预览', text: '已预览 0／0 张', hidden: true,
+      textId: 'norm-preview-text', fillId: 'norm-preview-fill' }) +
+    `<div class="hint" id="norm-preview-note">预览只生成转换结果，不改动图库文件。</div>`;
+}
+
+function normalizePreviewPaint(j) {
+  const total = Number(j.total || 0);
+  const counting = j.stage === '生成预览' || total > 0;
+  if (counting) {
+    opProgressPaint('norm-preview-flow', { mode: 'flow', hidden: true });
+    const done = j.state === 'done' ? total : Math.min(Number(j.done || 0), total);
+    opProgressPaint('norm-preview-count', {
+      mode: 'count', hidden: false, done, total, label: '生成预览',
+      stage: '生成预览', text: `已预览 ${done}／${total} 张`,
+      textId: 'norm-preview-text', fillId: 'norm-preview-fill',
+    });
+  } else {
+    opProgressPaint('norm-preview-flow', {
+      mode: 'flow', hidden: false, stage: '正在核对候选格式与冲突',
+      text: j.state === 'error' ? '预览失败' : '正在核对候选格式与冲突…',
+    });
+    opProgressPaint('norm-preview-count', { mode: 'count', hidden: true,
+      textId: 'norm-preview-text' });
+  }
+  const note = $('#norm-preview-note');
+  if (note) note.textContent = j.pollError
+    ? `查询中断：${j.pollError}（保留最后进度，可继续查询）`
+    : j.state === 'error' ? (j.error || '预览失败')
+    : counting ? '正在逐张生成预览，确认后才会真正转换。'
+    : '正在核对候选格式与冲突…';
+}
+
+function normalizePreviewWatch(jobId) {
+  const owner = normalizePreviewOwner(jobId);
+  return opTrackJob('normalize-preview', jobId, {
+    url: '/api/library/normalize-pending/preview/job',
+    errorText: '预览失败', timeoutText: '预览超时',
+    onState: j => {
+      if (!_normPreview || _normPreview.id !== jobId) return;
+      _normPreview = { ...j };
+      if (opModalMatches(owner)) normalizePreviewPaint(_normPreview);
+    },
+    onDone: j => {
+      if (!_normPreview || _normPreview.id !== jobId) return;
+      _normPreview = { ...j };
+      if (opModalMatches(owner)) normalizePreviewShow(j.result || {});
+    },
+    onError: e => {
+      if (!_normPreview || _normPreview.id !== jobId) return;
+      if (e.job) {
+        _normPreview = { ...e.job, state: 'error' };
+        if (opModalMatches(owner)) {
+          normalizePreviewPaint(_normPreview);
+          normalizeOpenError(owner, e.message);
+        }
+        return;
+      }
+      _normPreview = { ..._normPreview, pollError: e.message };
+      if (opModalMatches(owner)) normalizePreviewPaint(_normPreview);
+    },
+  });
+}
+
+function normalizeOpenError(owner, msg) {
+  openLibModal('🖼️ 转为 PNG',
+    `<div class="hint err-text">${esc(msg)}</div>
+     <div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>`,
+    { lg: true });
+  opClaimModal(owner);
+}
+
+function normalizePreviewResume() {
+  const j = _normPreview;
+  openLibModal('🖼️ 转为 PNG',
+    normalizePreviewProgressHtml() +
+    '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+    { lg: true });
+  opClaimModal(normalizePreviewOwner(j.id));
+  normalizePreviewPaint(j);
+  normalizePreviewWatch(j.id);
+}
+
+async function normalizePreviewStart() {
+  openLibModal('🖼️ 转为 PNG',
+    normalizePreviewProgressHtml() +
+    '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">取消</button></div>',
+    { lg: true });
+  const owner = 'normalize-preview-start';
+  opClaimModal(owner);
+  opProgressPaint('norm-preview-flow', {
+    mode: 'flow', stage: '正在核对候选格式与冲突' });
+  let start = null;
   try {
-    r = await api('/api/library/normalize-pending/preview', { method: 'POST' });
+    start = await api('/api/library/normalize-pending/preview/job', { method: 'POST' });
   } catch (e) {
-    toast('预览失败：' + e.message, 'err');
+    if (opModalMatches(owner)) normalizeOpenError(owner, '预览失败：' + e.message);
     return;
   }
-  if (!r || r.status !== 'ok') {
-    toast('预览失败：' + ((r && r.error) || '未知错误'), 'err');
+  if (!start || start.status !== 'ok') {
+    if (opModalMatches(owner)) {
+      normalizeOpenError(owner, '预览失败：' + ((start && start.error) || '未知错误'));
+    }
     return;
   }
+  _normPreview = { id: start.job_id, state: 'running',
+                   stage: '核对候选格式与冲突', done: 0, total: 0 };
+  opClaimModal(normalizePreviewOwner(start.job_id));
+  normalizePreviewWatch(start.job_id);
+}
+
+window.openNormalizePreview = function () {
+  // 重新进入入口: 执行中 / 预览中 / 最近结果 分别接回
+  if (_normApply && _normApply.state === 'running') { normalizeApplyResume(); return; }
+  if (_normPreview && _normPreview.state === 'running') {
+    normalizePreviewResume(); return;
+  }
+  if (_normPreview && _normPreview.state === 'done' && _normPreview.result) {
+    normalizePreviewShow(_normPreview.result); return;
+  }
+  if (_normApply && _normApply.state === 'done' && _normApply.result) {
+    normalizeApplyShowResult(_normApply.result, true); return;
+  }
+  normalizePreviewStart();
+};
+
+function normalizePreviewShow(r) {
   const items = r.items || [];
   const ready = items.filter(x => x.preview_id);
   const conflicts = items.filter(x => x.status === 'conflict' || x.target_exists);
@@ -5259,23 +5384,38 @@ window.openNormalizePreview = async function () {
     ${ready.length ? `<label class="hint" style="display:flex;align-items:center;gap:8px;margin-top:12px">
       <input type="checkbox" id="norm-recycle-old" checked> 转换后把旧文件送进系统回收站（可在系统回收站还原）
     </label>` : ''}
+    ${opProgressHtml('norm-apply-count', {
+      mode: 'count', label: '执行转换', text: '已处理 0／0 张', hidden: true })}
     <div class="btn-row" style="margin-top:12px">
       <button class="btn accent" id="norm-apply-btn" ${ready.length ? '' : 'disabled'} onclick="applyNormalizePending()">确认转为 PNG${ready.length ? '（' + ready.length + '）' : ''}</button>
+      <button class="btn ghost" onclick="normalizeRestartPreview()">重新预览</button>
       <button class="btn ghost" onclick="closeLibModal()">取消</button>
     </div>
   `, { lg: true });
-};
+  opClaimModal(_normPreview && _normPreview.id
+    ? normalizePreviewOwner(_normPreview.id) : 'normalize-preview-result');
+}
 
 window.applyNormalizePending = async function () {
   const st = window._normalizePreview;
   if (!st || !st.ready.length) return;
+  if (_normApply && _normApply.state === 'running') {
+    normalizeApplyResume(); return;
+  }
   const btn = document.getElementById('norm-apply-btn');
-  if (btn) btn.disabled = true;
+  if (btn) { btn.disabled = true; btn.textContent = '转换中…'; }
   const recycleEl = document.getElementById('norm-recycle-old');
   const recycle = !recycleEl || recycleEl.checked;
-  let r = null;
+  const total = st.ready.length;
+  opProgressPaint('norm-apply-count', {
+    mode: 'count', hidden: false, done: 0, total, label: '执行转换',
+    stage: '执行转换', text: `已处理 0／${total} 张`,
+  });
+  const startOwner = 'normalize-apply-start';
+  opClaimModal(startOwner);
+  let start = null;
   try {
-    r = await api('/api/library/normalize-pending/apply', {
+    start = await api('/api/library/normalize-pending/apply/job', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         items: st.ready.map(x => ({ preview_id: x.preview_id, path: x.path })),
@@ -5284,47 +5424,142 @@ window.applyNormalizePending = async function () {
     });
   } catch (e) {
     toast('转换失败：' + e.message, 'err');
-    if (btn) btn.disabled = false;
+    normalizeApplyReset(total);
     return;
   }
-  if (!r || r.status !== 'ok') {
-    toast('转换失败：' + ((r && r.error) || '未知错误'), 'err');
-    if (btn) btn.disabled = false;
+  if (!start || start.status !== 'ok') {
+    toast('转换失败：' + ((start && start.error) || '未知错误'), 'err');
+    normalizeApplyReset(total);
     return;
   }
+  _normApply = { id: start.job_id, state: 'running', done: 0,
+                 total: Number(start.total || total), stage: '执行转换' };
+  _normPreview = null;   // 预览令牌已被本次执行消费, 入口再进时重新预览
+  opClaimModal(normalizeApplyOwner(start.job_id));
+  normalizeApplyWatch(start.job_id);
+};
+
+// 结果页/计划页的「重新预览」: 清掉最近结果, 从入口重新核对候选
+window.normalizeRestartPreview = function () {
+  _normApply = null;
+  _normPreview = null;
+  normalizePreviewStart();
+};
+
+function normalizeApplyReset(total) {
+  const btn = document.getElementById('norm-apply-btn');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '确认转为 PNG' + (total ? `（${total}）` : '');
+  }
+  opProgressPaint('norm-apply-count', { mode: 'count', hidden: true });
+}
+
+function normalizeApplyPaint(j) {
+  const total = Number(j.total || 0);
+  const done = j.state === 'done' ? total : Math.min(Number(j.done || 0), total);
+  opProgressPaint('norm-apply-count', {
+    mode: 'count', hidden: false, done, total, label: '执行转换',
+    stage: '执行转换', text: `已处理 ${done}／${total} 张`,
+  });
+  const btn = document.getElementById('norm-apply-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '转换中…'; }
+}
+
+function normalizeApplyResume() {
+  const j = _normApply;
+  openLibModal('🖼️ 转为 PNG',
+    '<div class="hint">正在执行转换，分母为本次确认转换的数量。</div>' +
+    opProgressHtml('norm-apply-count', {
+      mode: 'count', label: '执行转换',
+      text: `已处理 0／${Number(j.total || 0)} 张` }) +
+    '<div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>',
+    { lg: true });
+  opClaimModal(normalizeApplyOwner(j.id));
+  normalizeApplyPaint(j);
+  normalizeApplyWatch(j.id);
+}
+
+function normalizeApplyWatch(jobId) {
+  const owner = normalizeApplyOwner(jobId);
+  return opTrackJob('normalize-apply', jobId, {
+    url: '/api/library/normalize-pending/apply/job',
+    errorText: '转换失败', timeoutText: '转换超时',
+    onState: j => {
+      if (!_normApply || _normApply.id !== jobId) return;
+      _normApply = { ...j };
+      if (opModalMatches(owner)) normalizeApplyPaint(_normApply);
+    },
+    onDone: async j => {
+      if (!_normApply || _normApply.id !== jobId) return;
+      _normApply = { ...j };
+      const shown = opModalMatches(owner);
+      if (shown) {
+        normalizeApplyPaint(_normApply);
+        await new Promise(r => setTimeout(r, 250));
+      }
+      _normApply = { ..._normApply, state: 'done', result: j.result || {} };
+      await libSync(false, false);
+      loadLibrary(); loadStats(); loadLibFacets();
+      if (shown) normalizeApplyShowResult(j.result || {}, false);
+    },
+    onError: e => {
+      if (!_normApply || _normApply.id !== jobId) return;
+      if (e.job) {
+        _normApply = { ...e.job, state: 'error' };
+        if (opModalMatches(owner)) {
+          normalizeApplyPaint(_normApply);
+          normalizeOpenError(owner, e.message);
+        }
+        return;
+      }
+      _normApply = { ..._normApply, pollError: e.message };
+      if (opModalMatches(owner)) {
+        const el = document.querySelector('#lib-modal .modal-actions');
+        if (el) el.innerHTML =
+          `<button class="btn accent" onclick="normalizeApplyResume()">🔄 继续查询</button>` +
+          '<button class="btn ghost" onclick="closeLibModal()">关闭</button>';
+      }
+    },
+  });
+}
+
+function normalizeApplyShowResult(r, fromEntry) {
   const items = r.items || [];
   const fails = items.filter(x => x.status !== 'ok');
   const recycleFails = items.filter(x => x.status === 'ok' && (x.recycle_failed || []).length);
   const kept = items.filter(x => x.status === 'ok' && x.recycle_skipped);
   const okCount = items.filter(x => x.status === 'ok').length;
-  await libSync(false, false);
-  loadLibrary(); loadStats(); loadLibFacets();
-  if (fails.length || recycleFails.length || kept.length) {
-    const rows = fails.map(x =>
-      `<li><code>${esc(x.path || '')}</code><div class="hint">${esc(x.error || x.stage || '失败')}</div></li>`
-    ).join('');
-    const recRows = recycleFails.map(x =>
-      `<li><code>${esc(x.path || '')}</code><div class="hint">PNG 已入库，旧 JPG 仍保留：` +
-      `${esc((x.recycle_failed || []).join('；'))}</div></li>`
-    ).join('');
-    const keptRows = kept.map(x =>
-      `<li><code>${esc(x.path || '')}</code><div class="hint">已按选择保留旧文件，仍占用磁盘空间</div></li>`
-    ).join('');
-    openLibModal('🖼️ 转换结果', `
-      <div class="hint">${fails.length
-        ? `成功 ${okCount} 张，失败 ${fails.length} 张。失败项保留原文件，可重新预览后再试。`
-        : `已转为 PNG · 成功 ${okCount} 张。`}</div>
-      ${fails.length ? `<div class="hint" style="margin-top:10px">失败项：</div><ul>${rows}</ul>` : ''}
-      ${recycleFails.length ? `<div class="hint" style="margin-top:10px">PNG 已入库，旧 JPG 仍保留（可稍后手动清理）：</div><ul>${recRows}</ul>` : ''}
-      ${kept.length ? `<div class="hint" style="margin-top:10px">旧文件仍占用磁盘：</div><ul>${keptRows}</ul>` : ''}
-      <div class="btn-row"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>
-    `, { lg: true });
+  if (!fromEntry && !fails.length && !recycleFails.length && !kept.length) {
+    closeLibModal();
+    toast(`已转为 PNG · 成功 ${r.converted || 0} 张`
+      + (r.recycled ? ` · 旧文件回收 ${r.recycled} 个` : ''), 'ok');
     return;
   }
-  closeLibModal();
-  toast(`已转为 PNG · 成功 ${r.converted || 0} 张`
-    + (r.recycled ? ` · 旧文件回收 ${r.recycled} 个` : ''), 'ok');
-};
+  const rows = fails.map(x =>
+    `<li><code>${esc(x.path || '')}</code><div class="hint">${esc(x.error || x.stage || '失败')}</div></li>`
+  ).join('');
+  const recRows = recycleFails.map(x =>
+    `<li><code>${esc(x.path || '')}</code><div class="hint">PNG 已入库，旧 JPG 仍保留：` +
+    `${esc((x.recycle_failed || []).join('；'))}</div></li>`
+  ).join('');
+  const keptRows = kept.map(x =>
+    `<li><code>${esc(x.path || '')}</code><div class="hint">已按选择保留旧文件，仍占用磁盘空间</div></li>`
+  ).join('');
+  openLibModal('🖼️ 转换结果', `
+    <div class="hint">${fails.length
+      ? `成功 ${okCount} 张，失败 ${fails.length} 张。失败项保留原文件，可重新预览后再试。`
+      : `已转为 PNG · 成功 ${okCount} 张。`}${fromEntry ? '（最近一次转换的结果）' : ''}</div>
+    ${fails.length ? `<div class="hint" style="margin-top:10px">失败项：</div><ul>${rows}</ul>` : ''}
+    ${recycleFails.length ? `<div class="hint" style="margin-top:10px">PNG 已入库，旧 JPG 仍保留（可稍后手动清理）：</div><ul>${recRows}</ul>` : ''}
+    ${kept.length ? `<div class="hint" style="margin-top:10px">旧文件仍占用磁盘：</div><ul>${keptRows}</ul>` : ''}
+    <div class="btn-row">
+      <button class="btn accent" onclick="normalizeRestartPreview()">重新预览</button>
+      <button class="btn ghost" onclick="closeLibModal()">关闭</button>
+    </div>
+  `, { lg: true });
+  opClaimModal('normalize-apply-result');
+}
 
 // 手动入口: 复用智能刷新的后台进度条与失败重试; 结果保留「查看同步结果」
 window.manualSyncDisk = function () {

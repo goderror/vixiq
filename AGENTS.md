@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127b`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127c`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127b`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127c`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,42 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.71 其他来源补登记保护 + 批量转 PNG 共用进度（2026-11-27，前端 `20261127c`，已发布到安装版）
+
+- **其他来源补登记不覆盖当前图**：`register_foreign_file` 遇到同一 `ext_` ID 已有页时
+  一律跳过，不再按「同路径才跳过」放行；冲突更新追加
+  `WHERE pages.local_path = excluded.local_path`，`rowcount=0` 时清空壳作品并返回
+  None。`_auto_png_cleanup_pending` 在归属复核失败、回收未完成两个分支把页原指向的
+  旧 PNG 加入本轮 `blocked`，本轮补登记看不到旧图。
+- **T194 新增其他来源回收切页用例**：无自然键 JPG 转 PNG 后重建原件待处理，回收替身
+  内部把页切回 JPG；首次同步 `foreign_registered=0`、页的路径/指纹/大小/当前格式均
+  指向 JPG、旧 PNG 未重新登记；第二次同步 JPG 未被回收、待处理状态清空。反向验证：
+  临时回退 store 修复时该用例在批量补登记断言处失败。
+- **批量转 PNG 接入共用进度**：新增 `/api/library/normalize-pending/preview/job`
+  与 `/apply/job`（含状态查询），与同步接口共用同一套逐张处理逻辑；任务字段
+  `stage/done/total/result`，重复点击复用同一任务。前端预览先显示「正在核对候选格式
+  与冲突…」流动条，拿到候选数后改用「已预览 n／N 张」计数条；执行另起
+  「已处理 n／N 张」，分母为本次确认数量；关闭弹窗后任务继续，从「转为 PNG」入口
+  接回进度或最近结果；结果页可重新预览。
+- **回归**：新增 T195 覆盖预览/执行真实计数、运行中重复点击复用、`recycle_old=False`
+  保留源图、预览后源图变化的部分失败；T175 前端结果渲染改用
+  `normalizeApplyShowResult` 直接验证。全量 **186/186**（108.39 s），日志
+  `_dev_runtime/diagnostics/trae-20261127c-normalize-progress-smoke2.log`
+  （首跑 185/186 仅 T175 旧 harness 失败，修 harness 后全绿）。
+- **候选/发布**：候选包 `_dev_runtime/packages/vixiq`（`built_at 2026-11-27
+  12:29:33`，前端 `20261127c`）在 7813 通过 `check_ingest_auto_png_candidate.py`、
+  `check_foreign_recheck_candidate.py`、`check_normalize_progress_candidate.py`；
+  回滚清单 `_dev_runtime/backups/publish-20261127c-20261127-123227.json`（4 个旧
+  文件、8 个替换项、新增备份 15,139,194 字节）。dist 与安装版 exe 哈希一致
+  （`db0f489ba51b…`），app.js `94a0fc682516…`，两处 `config/user.json` 哈希未变。
+- **安装版验证**：7810 前端 `20261127c-1795753773-1795695345-1795519082`、
+  `built_at 2026-11-27 12:29:33`、`frozen=true`、`/api/ingest` 默认
+  `auto_png=false`、任务状态接口正常返回 404、健康正常。
+- **同一文件的前置发布**：其他来源修复先在 `20261127b` 重打包（`built_at
+  12:16:07`，回滚清单 `publish-20261127b-20261127-121818.json`，2 个旧文件、4 个
+  替换项、14,358,326 字节），安装版验收后继续本项。
+- GitHub：`1e4c210` 已推送；本轮提交随后推送。
 
 ### 4.70 原件回收二次收口：skip_rels 仍算磁盘存在 + 原子不覆盖退回（2026-11-27，前端 `20261127b`，已发布到安装版）
 

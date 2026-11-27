@@ -3138,6 +3138,7 @@ def run_suite() -> SuiteResult:
     suite.add("T192", "⏳ 启动等待重开 + 迟到忙响应重试 + 扫描文案/超时 (静态接线)", t192_starting_resume_busy_retry_scan_text)
     suite.add("T193", "⚠️ 导入启动失败时重开弹窗直接显示失败 (静态接线)", t193_import_start_failure_resume)
     suite.add("T194", "🖼 入库时自动转为 PNG: 默认关闭 + 上传/导入/下载/反搜入库/归档/磁盘同步两种模式 (隔离数据)", t194_ingest_auto_png_setting)
+    suite.add("T195", "🖼 批量转 PNG 预览/执行共用进度: 真实计数 + 重复点击复用 + 部分失败 (隔离数据)", t195_normalize_png_progress)
     suite.write_report()
     return suite
 
@@ -10481,7 +10482,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261127b" and _mss.group(1) == "20261127b", \
+    assert _mjs and _mss and _mjs.group(1) == "20261127c" and _mss.group(1) == "20261127c", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10576,7 +10577,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261127b', html) and _re.search(r'app\.js\?v=20261127b', html), \
+    assert _re.search(r'style\.css\?v=20261127c', html) and _re.search(r'app\.js\?v=20261127c', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10984,7 +10985,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261127b" in html and "app.js?v=20261127b" in html, \
+        assert "style.css?v=20261127c" in html and "app.js?v=20261127c" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13367,7 +13368,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261127b" in _h and "style.css?v=20261127b" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261127c" in _h and "style.css?v=20261127c" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14736,7 +14737,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261127b" in html and "app.js?v=20261127b" in html
+            assert "style.css?v=20261127c" in html and "app.js?v=20261127c" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14845,7 +14846,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261127b" in html and "app.js?v=20261127b" in html
+            assert "style.css?v=20261127c" in html and "app.js?v=20261127c" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14956,7 +14957,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261127b" in html and "app.js?v=20261127b" in html
+    assert "style.css?v=20261127c" in html and "app.js?v=20261127c" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -14996,7 +14997,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261127b" in html
+    assert "20261127c" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15707,7 +15708,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261127b" in html
+    assert "同步磁盘索引" in html and "20261127c" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16123,7 +16124,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127b" in html
+    assert "20261127c" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -16857,7 +16858,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127b" in html
+    assert "20261127c" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -17857,10 +17858,10 @@ def t175_normalize_pending_safety() -> None:
                   "class PublishRejected"):
         assert token in fmt_src, f"缺少发布防覆盖接线 {token}"
 
-    # 用合成结果走真实前端提交函数: 部分失败 / 全部成功 / 主动保留旧文件
+    # 用合成结果走真实前端结果渲染: 部分失败 / 全部成功 / 主动保留旧文件
     node = _shutil.which("node")
     if node:
-        start = js_src.index("window.applyNormalizePending = async function")
+        start = js_src.index("function normalizeApplyShowResult(")
         end = js_src.index("// 手动入口", start)
         fn_src = js_src[start:end].rstrip()
         harness = r"""
@@ -17869,22 +17870,14 @@ const fnSrc = fs.readFileSync(process.argv[2], 'utf8');
 const payload = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 const calls = {modal: [], toast: [], closed: 0};
 const noop = () => {};
-const window = {};
-const document = {getElementById: () => null};
 const esc = s => String(s == null ? '' : s);
-const fmtSize = n => String(n) + ' B';
-const api = async () => payload.response;
-const libSync = async () => {};
-const loadLibrary = noop, loadStats = noop, loadLibFacets = noop;
 const openLibModal = (title, html) => calls.modal.push({title: title, html: html});
 const closeLibModal = () => { calls.closed += 1; };
 const toast = (msg) => calls.toast.push(msg);
+const opClaimModal = noop;
 eval(fnSrc);
-(async () => {
-  window._normalizePreview = {ready: payload.ready || [{preview_id: 'p', path: 'a.jpg'}]};
-  await window.applyNormalizePending();
-  process.stdout.write(JSON.stringify(calls));
-})().catch(e => { console.error((e && e.stack) || String(e)); process.exit(1); });
+normalizeApplyShowResult(payload.response, false);
+process.stdout.write(JSON.stringify(calls));
 """
         with tempfile.TemporaryDirectory(prefix="t175js_") as jd:
             jdir = Path(jd)
@@ -19415,7 +19408,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261127b" in html and "app.js?v=20261127b" in html
+    assert "style.css?v=20261127c" in html and "app.js?v=20261127c" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -19621,7 +19614,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261127b" in html
+    assert "20261127c" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20083,7 +20076,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261127b" in html
+    assert "20261127c" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20191,7 +20184,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261127b" in html
+    assert "20261127c" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20303,7 +20296,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261127b" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261127c" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20448,7 +20441,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261127b" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261127c" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20819,7 +20812,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261127b" in html
+    assert "20261127c" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -20845,7 +20838,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127b" in html
+    assert "20261127c" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -20871,7 +20864,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261127b" in html
+    assert "20261127c" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -20897,7 +20890,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127b" in html
+    assert "20261127c" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -20922,7 +20915,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127b" in html
+    assert "20261127c" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -20940,7 +20933,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127b" in html
+    assert "20261127c" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -22631,7 +22624,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261127b" in html
+        assert "20261127c" in html
     finally:
         for _d in dbs:
             try:
@@ -22647,6 +22640,158 @@ def t194_ingest_auto_png_setting() -> None:
             ws._config["paths"].pop("input_subdir", None)
         else:
             ws._config["paths"]["input_subdir"] = _input_sub
+        ws._reconcile_state["rep"] = None
+        ws._reconcile_state["ts"] = 0.0
+        shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t195_normalize_png_progress() -> None:
+    """T195: 批量转 PNG 预览/执行共用进度 (隔离数据)。
+
+    预览: 初步核对后逐张生成预览, 真实 stage/done/total; 重复点击复用同一任务。
+    执行: 分母为本次确认张数, 完成后 PNG 入库, 源图按 recycle_old 处理。
+    预览后源图变化 → 该项失败且原文件保留。"""
+    import shutil
+    import tempfile
+    import time
+
+    import utils.paths as upaths
+    import utils.config as ucfg
+    import web.server as ws
+    import core.image_format as cif
+    from db.store import PixivDatabase
+    from PIL import Image
+
+    patched = ucfg.ingest_auto_png
+    ucfg.ingest_auto_png = lambda *a, **k: False
+    tmp = Path(tempfile.mkdtemp(prefix="t195norm_"))
+    orig = (upaths.user_data, upaths.data_root, upaths.config_dir,
+            upaths.user_config_path, ws._config["paths"].get("img_subdir"))
+    upaths.user_data = lambda rel: tmp / str(rel)
+    upaths.data_root = lambda: tmp
+    upaths.config_dir = lambda: tmp
+    upaths.user_config_path = lambda: tmp / "user.json"
+    ws._config.setdefault("paths", {})["img_subdir"] = "img"
+    ws._reconcile_state["rep"] = None
+    ws._reconcile_state["ts"] = 0.0
+    ws._reconcile_ro_state.update(rep=None, ts=0.0, root=None)
+
+    orig_norm = cif.normalize_to_png
+
+    def _slow_norm(*a, **k):
+        time.sleep(0.2)     # 放慢单张预览/转换, 才能在任务运行中验证复用
+        return orig_norm(*a, **k)
+
+    def _mk(p, color):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8), color).save(p, "JPEG")
+        return p
+
+    JOB_P = "/api/library/normalize-pending/preview/job"
+    JOB_A = "/api/library/normalize-pending/apply/job"
+
+    def _wait(base, job_id):
+        seen = []
+        for _ in range(400):
+            j = client.get(f"{base}/{job_id}").get_json()
+            assert j.get("status") == "ok", j
+            seen.append((j.get("stage"), int(j.get("done") or 0),
+                         int(j.get("total") or 0)))
+            if j.get("state") != "running":
+                return j, seen
+            time.sleep(0.03)
+        raise AssertionError("任务超时")
+
+    try:
+        img = tmp / "img"
+        img.mkdir()
+        client = ws.create_app().test_client()
+
+        # ① 预览任务: 逐张生成预览, 分母为候选数; 重复点击复用同一任务
+        for n, color in (("norm_a", (11, 21, 31)), ("norm_b", (12, 22, 32)),
+                         ("norm_c", (13, 23, 33))):
+            _mk(img / f"{n}.jpg", color)
+        cif.normalize_to_png = _slow_norm
+        p1 = client.post(JOB_P).get_json()
+        assert p1.get("status") == "ok" and p1.get("job_id"), p1
+        p2 = client.post(JOB_P).get_json()
+        assert p2.get("reused") is True and p2.get("job_id") == p1["job_id"], (p1, p2)
+        pj, seen = _wait(JOB_P, p1["job_id"])
+        assert pj.get("state") == "done", pj
+        assert any(s == "生成预览" and t == 3 for s, _d, t in seen), seen
+        assert int(pj.get("done") or 0) == 3 and int(pj.get("total") or 0) == 3, pj
+        pres = pj.get("result") or {}
+        ready = [x for x in (pres.get("items") or []) if x.get("preview_id")]
+        assert pres.get("ready_count") == 3 and len(ready) == 3, pres
+        assert all((img / f"{n}.jpg").is_file()
+                   for n in ("norm_a", "norm_b", "norm_c")), "预览不得改动源图"
+
+        # ② 执行任务: 分母为本次确认数, 重复点击复用; 完成后 PNG 入库
+        req = [{"preview_id": x["preview_id"], "path": x["path"]} for x in ready]
+        a1 = client.post(JOB_A, json={"items": req, "recycle_old": False}).get_json()
+        assert a1.get("status") == "ok" and int(a1.get("total") or 0) == 3, a1
+        a2 = client.post(JOB_A, json={"items": req, "recycle_old": False}).get_json()
+        assert a2.get("reused") is True and a2.get("job_id") == a1["job_id"], (a1, a2)
+        aj, aseen = _wait(JOB_A, a1["job_id"])
+        assert aj.get("state") == "done", aj
+        assert any(t == 3 for _s, _d, t in aseen), aseen
+        assert int(aj.get("done") or 0) == 3 and int(aj.get("total") or 0) == 3, aj
+        ares = aj.get("result") or {}
+        assert ares.get("converted") == 3 and ares.get("failed") == 0, ares
+        for n in ("norm_a", "norm_b", "norm_c"):
+            assert (img / f"{n}.png").is_file(), n
+            assert (img / f"{n}.jpg").is_file(), "recycle_old=False 时必须保留源图"
+        with PixivDatabase(str(tmp / "pixiv.db")) as dbq:
+            pref = dbq.find_page_by_local_path("norm_a.png")
+            assert pref, "转换后 PNG 必须登记"
+            rec = dbq.get_page_conversion(pref["artwork_id"], 0)
+            assert rec and str(rec["current_format"]).lower() == "png" \
+                and rec["source_format"] == "jpg", rec
+
+        # ③ 预览后源图变化: 该项失败, 原文件保留
+        d_src = _mk(img / "norm_d.jpg", (14, 24, 34))
+        e_png = img / "norm_e.png"
+        _mk(img / "norm_e.jpg", (15, 25, 35))
+        pd = client.post(JOB_P).get_json()
+        pj2, _ = _wait(JOB_P, pd["job_id"])
+        assert pj2.get("state") == "done", pj2
+        ready2 = [x for x in ((pj2.get("result") or {}).get("items") or [])
+                  if x.get("preview_id")]
+        assert len(ready2) == 2, ready2
+        time.sleep(0.01)
+        Image.new("RGB", (8, 8), (99, 98, 97)).save(d_src, "JPEG")
+        ad = client.post(JOB_A, json={
+            "items": [{"preview_id": x["preview_id"], "path": x["path"]}
+                      for x in ready2],
+            "recycle_old": False,
+        }).get_json()
+        aj2, _ = _wait(JOB_A, ad["job_id"])
+        assert aj2.get("state") == "done", aj2
+        r2 = aj2.get("result") or {}
+        assert r2.get("converted") == 1 and r2.get("failed") == 1, r2
+        bad = [x for x in (r2.get("items") or []) if x.get("status") != "ok"]
+        assert bad and bad[0].get("stage") == "source_changed", bad
+        assert d_src.is_file() and e_png.is_file(), "失败项保留原图, 成功项生成 PNG"
+
+        # ④ 前端接线: 预览与执行都走共用控件和任务跟踪
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        for token in ("normalize-pending/preview/job",
+                      "normalize-pending/apply/job",
+                      "norm-preview-flow", "norm-preview-count",
+                      "norm-apply-count", "已预览", "已处理",
+                      "opTrackJob('normalize-preview'",
+                      "opTrackJob('normalize-apply'",
+                      "normalizeRestartPreview"):
+            assert token in js, f"批量转 PNG 进度接线缺失: {token}"
+        html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+            encoding="utf-8")
+        assert "app.js?v=20261127c" in html and "style.css?v=20261127c" in html
+    finally:
+        cif.normalize_to_png = orig_norm
+        ucfg.ingest_auto_png = patched
+        (upaths.user_data, upaths.data_root, upaths.config_dir,
+         upaths.user_config_path, _img_sub) = orig
+        ws._config["paths"]["img_subdir"] = _img_sub
         ws._reconcile_state["rep"] = None
         ws._reconcile_state["ts"] = 0.0
         shutil.rmtree(str(tmp), ignore_errors=True)
