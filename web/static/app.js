@@ -3350,6 +3350,8 @@ async function testAiText() {
 // 进度接设置卡片里的共用控件: 先流动「读取图库候选」, 拿到总数后按「已检查 N／M 张」,
 // 最后一张检查完到登记结束之间显示「正在登记壁纸」。
 let wallLibTimer = null;
+let _wallLibGen = 0;          // 当前有效状态链; 停止/完成/新任务后旧回包一律失效
+let _wallLibInFlight = false;
 let _wallLibStarting = false;
 let _wallLibLast = null;
 
@@ -3433,8 +3435,9 @@ function wallLibResultText(res) {
     if (drop.length) s += '；筛掉：' + drop.join('、');
     if (res.missing) s += `；文件已不在 ${res.missing} 张`;
     const errors = Array.isArray(res.errors) ? res.errors : [];
-    if (errors.length) {
-      s += `；失败 ${errors.length} 项` + (errors[0] ? `（${errors[0]}）` : '');
+    const failed = Number(res.failed != null ? res.failed : errors.length);
+    if (failed) {
+      s += `；失败 ${failed} 项` + (errors[0] ? `（${errors[0]}）` : '');
     }
   }
   if (res.elapsed != null) s += `；用时 ${res.elapsed}s`;
@@ -3453,45 +3456,75 @@ function wallLibPaint(d) {
 }
 
 function stopWallLibPolling() {
-  if (wallLibTimer) { clearInterval(wallLibTimer); wallLibTimer = null; }
+  // 先作废当前链: 已发出的请求即使晚到也不能再动按钮/进度/结果
+  _wallLibGen += 1;
+  if (wallLibTimer) { clearTimeout(wallLibTimer); wallLibTimer = null; }
+  _wallLibInFlight = false;
 }
 
 function startWallLibPolling() {
-  if (wallLibTimer) return;
+  if (wallLibTimer || _wallLibInFlight) return;
+  const gen = ++_wallLibGen;
   const tick = async () => {
+    wallLibTimer = null;
+    if (gen !== _wallLibGen) return;
+    _wallLibInFlight = true;
     let d = null;
     try { d = await api('/api/wallpaper/lib'); }
-    catch (e) { return; }          // 短暂读取失败: 保留最后进度, 下个 tick 继续
-    if (!d) return;
+    catch (e) {
+      if (gen !== _wallLibGen) return;   // 旧链回包: 连在途标记也不能碰
+      _wallLibInFlight = false;
+      // 短暂读取失败: 保留最后有效进度, 稍后再查
+      wallLibTimer = setTimeout(tick, 600);
+      return;
+    }
+    if (gen !== _wallLibGen) return;     // 迟到回包: 已停止或已换任务
+    _wallLibInFlight = false;
+    if (!d) {
+      wallLibTimer = setTimeout(tick, 600);
+      return;
+    }
     paintWallLibTask(d);
-    if (d.status === 'running') return;
+    if (d.status === 'running') {
+      wallLibTimer = setTimeout(tick, 600);
+      return;
+    }
+    // 终态: 停掉本条链, 结果到此稳定
     stopWallLibPolling();
     wallLibPaint(d);
   };
   tick();
-  wallLibTimer = setInterval(tick, 600);
 }
 
-async function loadWallLib() {
+async function loadWallLib(force) {
   const st = $('#wall-lib-state');
   if (!st) return;
+  // 已有查询链/启动请求时直接复用, 不另发一条独立请求 (启动流程 finished 后可强制读一次)
+  if (!force && (_wallLibStarting || wallLibTimer || _wallLibInFlight)) return;
+  const gen = ++_wallLibGen;
+  _wallLibInFlight = true;
   let d = null;
   try { d = await api('/api/wallpaper/lib'); }
   catch (e) {
+    if (gen !== _wallLibGen) return;
+    _wallLibInFlight = false;
     // 已在跟踪的运行任务保留最后进度; 没有任务时才如实说读取失败
     if (!(_wallLibLast && _wallLibLast.status === 'running')) {
       st.textContent = '读取失败: ' + (e.message || e);
     }
     return;
   }
+  if (gen !== _wallLibGen) return;
+  _wallLibInFlight = false;
   paintWallLibTask(d);
   wallLibPaint(d);
   if (d && d.status === 'running') startWallLibPolling();
-  else stopWallLibPolling();
 }
 
 async function runWallLib() {
   if (_wallLibStarting || (_wallLibLast && _wallLibLast.status === 'running')) return;
+  // 新任务开始: 旧链与已发出的旧请求全部作废
+  stopWallLibPolling();
   _wallLibStarting = true;
   setWallLibBtnBusy(true);
   const st = $('#wall-lib-state');
@@ -3513,7 +3546,7 @@ async function runWallLib() {
     if (!r.already) toast('开始扫描图库，可先做别的事', 'ok');
     if (r.task) paintWallLibTask(r.task);
     if (r.task && r.task.status === 'running') startWallLibPolling();
-    else await loadWallLib();
+    else await loadWallLib(true);
   } catch (e) {
     stopWallLibPolling();
     _wallLibLast = null;

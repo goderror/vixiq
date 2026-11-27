@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127k`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127l`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127k`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127l`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,28 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.80 壁纸库生成进度返修：迟到回包 + 完整失败计数（2026-11-27，前端 `20261127l`，已发布到安装版）
+
+- **迟到回包**：轮询改为单条串行链（当前请求结束才安排下一次）；停止、终态、新任务
+  都会递增 `_wallLibGen` 并清定时器，旧请求回包按代号丢弃，不能再改按钮/进度/结果/
+  在途标记或重启轮询。`loadWallLib` 在已有链或启动请求时复用，启动结束后用
+  `loadWallLib(true)` 读最终状态；短暂查询失败保留最后进度继续。
+- **失败计数**：`core.wallpaper_lib` 新增 `failed` 总数，每次实际复制/读落盘信息失败
+  都计数；`errors` 仍只留前 20 条原因。前端用 `failed` 显示「失败 N 项」，明细原因
+  取第一条，兼容无该字段时回退到明细条数。
+- **回归**：Node 扩到 **13 项**（串行无并发、终态后旧 running、新任务后旧终态、
+  重进单链、失败继续、完整失败数）；T133 新增 23 个失败（`failed=23`、`errors=20`）
+  与部分失败（成功数=实际登记数、检查数含失败）。全量 **189/189**（166.59 s），日志
+  `_dev_runtime/diagnostics/trae-20261127l-wall-lib-rework-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 19:30:23`，前端 `20261127l`）在 7813
+  通过原有 10 项检查，壁纸库 API 新增只读目标复制失败场景（扫描 5 → 新增/已有/
+  比例/缺失/失败各 1），UI 校验「失败 23 项」；回滚清单
+  `_dev_runtime/backups/publish-20261127l-20261127-193231.json`（4 个旧文件、8 个
+  替换项、15,203,000 字节）。dist 与安装版 exe `d64f78e43afb…`、base_library
+  `9f951926fb6d…`、app.js `25c4130b2732…`、index.html `72829713afc7…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127l-1795779023-1795695345-1795519082`、健康正常，壁纸库与回收站 UI 检查通过。
 
 ### 4.79 壁纸库「从图库生成壁纸」接入共用进度（2026-11-27，前端 `20261127k`，已发布到安装版）
 

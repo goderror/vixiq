@@ -114,7 +114,11 @@ def generate(db, wall_dir, img_root, progress_cb=None) -> dict:
     返回统计 (给界面显示, 也是「门槛定得对不对」的唯一依据)::
 
         {"scanned", "passed", "added", "skipped_exist", "skipped_size",
-         "skipped_ratio", "skipped_ext", "missing", "errors", "wall_dir", "elapsed"}
+         "skipped_ratio", "skipped_ext", "missing", "failed", "errors",
+         "wall_dir", "elapsed"}
+
+    ``failed`` 是实际复制/读落盘信息失败的**总数**; ``errors`` 只留前
+    ``MAX_ERRORS`` 条原因, 两者不能混用 —— 否则失败一多, 界面会把 20 当成总数。
     """
     if not wall_dir:
         raise WallpaperLibError("还没指定壁纸夹（设置 → 桌面与壁纸 → 壁纸夹）")
@@ -132,7 +136,8 @@ def generate(db, wall_dir, img_root, progress_cb=None) -> dict:
     registered = db.wallpaper_file_names()      # 未标记的才占名字 (标记过的可复用同名)
     items, errors = [], []
     stat = {"scanned": total, "passed": 0, "added": 0, "skipped_exist": 0,
-            "skipped_size": 0, "skipped_ratio": 0, "skipped_ext": 0, "missing": 0}
+            "skipped_size": 0, "skipped_ratio": 0, "skipped_ext": 0,
+            "missing": 0, "failed": 0}
     t0 = time.time()
     if progress_cb:
         try:
@@ -164,6 +169,7 @@ def generate(db, wall_dir, img_root, progress_cb=None) -> dict:
                 shutil.copy2(str(src), str(wall / name))
                 size = (wall / name).stat().st_size
             except Exception as e:
+                stat["failed"] += 1
                 if len(errors) < MAX_ERRORS:
                     errors.append(f"{name}: {type(e).__name__}: {e}")
                 continue

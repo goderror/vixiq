@@ -62,15 +62,28 @@ function harnessBody() {
   let toastLog = [];
   function toast(msg, type) { toastLog.push({ msg, type }); }
 
-  let intervalFns = [];
-  function setInterval(fn) { intervalFns.push(fn); return intervalFns.length; }
-  function clearInterval(id) {
-    if (id && id > 0) intervalFns[id - 1] = null;
+  const realSetTimeout = globalThis.setTimeout;
+  let timers = [];
+  let timerSeq = 0;
+  function setTimeout(fn, ms) {
+    timerSeq += 1;
+    timers.push({ id: timerSeq, fn, ms });
+    return timerSeq;
+  }
+  function clearTimeout(id) {
+    timers = timers.filter(t => t.id !== id);
+  }
+  function timerCount() { return timers.length; }
+  async function runNextTimer() {
+    const t = timers.shift();
+    if (!t) return false;
+    await t.fn();
+    return true;
   }
 
   /*__WALL_SLICE__*/
 
-  const flush = () => new Promise(r => setTimeout(r, 0));
+  const flush = () => new Promise(r => realSetTimeout(r, 0));
   function lastPaint(wid) {
     for (let i = progressCalls.length - 1; i >= 0; i -= 1) {
       if (progressCalls[i].wid === wid) return progressCalls[i].o;
@@ -90,8 +103,10 @@ function harnessBody() {
     revealCalls = [];
     apiCalls = [];
     toastLog = [];
-    intervalFns = [];
+    timers = [];
     wallLibTimer = null;
+    _wallLibGen = 0;
+    _wallLibInFlight = false;
     _wallLibStarting = false;
     _wallLibLast = null;
     Object.values(els).forEach(el => {
@@ -135,7 +150,7 @@ function harnessBody() {
     assert.strictEqual(posts, 1);
     resolvePost({ ok: true, dir: 'x', task: runningTask('读取图库候选', 0, 0) });
     await p; await flush();
-    assert.ok(intervalFns.some(Boolean), '运行中任务应开始轮询');
+    assert.ok(timerCount() >= 1, '运行中任务应安排下一次查询');
   });
 
   // 2. 流动 → 真实计数
@@ -161,21 +176,23 @@ function harnessBody() {
   });
 
   // 4. 完整结果与部分失败原因
-  test('结果显示已检查/已生成/已存在/筛掉/缺失/失败', () => {
+  test('结果显示完整失败数, 明细仍只取第一条', () => {
     reset();
     const t = doneTask({
       scanned: 6, passed: 3, added: 2, skipped_exist: 1, skipped_size: 1,
-      skipped_ratio: 1, skipped_ext: 1, missing: 1,
-      errors: ['700002_p0.png: PermissionError: 拒绝访问'], elapsed: 1.2,
+      skipped_ratio: 1, skipped_ext: 1, missing: 1, failed: 23,
+      errors: Array(20).fill('700002_p0.png: PermissionError: 拒绝访问'),
+      elapsed: 1.2,
     }, 6, 6);
     paintWallLibTask(t);
     wallLibPaint(t);
     const s = els['#wall-lib-state'].textContent;
     for (const kw of ['已检查 6 张', '已生成 2 张', '已存在 1 张', '尺寸不合 1',
                       '比例不合 1', '格式不支持 1', '文件已不在 1 张',
-                      '失败 1 项', '拒绝访问', '用时 1.2s']) {
+                      '失败 23 项', '拒绝访问', '用时 1.2s']) {
       assert.ok(s.includes(kw), s);
     }
+    assert.ok(!s.includes('失败 20 项'), '失败数不能取明细条数: ' + s);
     assert.ok(els['#wall-lib-task'].classList.contains('hidden'));
     assert.strictEqual(els['#wall-lib-run'].disabled, false);
   });
@@ -237,29 +254,115 @@ function harnessBody() {
     const count = lastPaint('wall-lib-count');
     assert.ok(count && count.text.includes('已检查 2／6 张'), count && count.text);
     assert.strictEqual(els['#wall-lib-run'].disabled, true);
-    assert.ok(intervalFns.some(Boolean), '失败后轮询不能停');
-    const tick = intervalFns.filter(Boolean).slice(-1)[0];
-    await tick(); await flush();
+    assert.strictEqual(timerCount(), 1, '失败后要安排下一次查询');
+    await runNextTimer(); await flush();
     const count2 = lastPaint('wall-lib-count');
     assert.ok(count2 && count2.text.includes('已检查 3／6 张'), count2 && count2.text);
-    await tick(); await flush();
+    assert.strictEqual(timerCount(), 1);
+    await runNextTimer(); await flush();
     assert.ok(els['#wall-lib-state'].textContent.includes('已生成 2 张'));
     assert.ok(els['#wall-lib-task'].classList.contains('hidden'));
+    assert.strictEqual(timerCount(), 0, '终态后不再轮询');
+    assert.strictEqual(els['#wall-lib-run'].disabled, false);
   });
 
-  // 8. 切页返回/刷新接回同一任务, 不重复轮询
-  test('重进设置页接回运行中任务且只有一套轮询', async () => {
+  // 8. 切页返回/刷新接回同一任务, 不重复查询
+  test('重进设置页接回运行中任务且只有一条查询链', async () => {
     reset();
     apiHandler = async () => runningTask('检查图片', 1, 3);
     await loadWallLib();
     await flush();
     assert.strictEqual(els['#wall-lib-run'].disabled, true);
-    assert.ok(intervalFns.filter(Boolean).length === 1,
-              '接回任务应只有一套轮询: ' + intervalFns.length);
+    const getCalls = () => apiCalls.filter(c =>
+      String(c.url).includes('/api/wallpaper/lib')
+      && !(c.opts && c.opts.method)).length;
+    const n1 = getCalls();
+    assert.ok(n1 >= 1, '接回任务应发一次主查询');
+    assert.strictEqual(timerCount(), 1, '接回后应只有一条轮询链');
     await loadWallLib();
     await flush();
-    assert.ok(intervalFns.filter(Boolean).length === 1,
-              '重复进入不应再加轮询: ' + intervalFns.length);
+    assert.strictEqual(getCalls(), n1, '重复进入不应另发查询');
+    assert.strictEqual(timerCount(), 1);
+  });
+
+  // 9. 同一条任务链不并发查询
+  test('上一请求未结束时不发下一次状态查询', async () => {
+    reset();
+    let resolveFirst;
+    let gets = 0;
+    apiHandler = () => {
+      gets += 1;
+      if (gets === 1) return new Promise(r => { resolveFirst = r; });
+      return runningTask('检查图片', 2, 6);
+    };
+    paintWallLibTask(runningTask('检查图片', 1, 6));
+    startWallLibPolling();
+    await flush();
+    assert.strictEqual(gets, 1);
+    assert.strictEqual(timerCount(), 0, '请求在途时不应安排下一次');
+    resolveFirst(runningTask('检查图片', 2, 6));
+    await flush();
+    assert.strictEqual(gets, 1, '上一请求结束前不应发第二次');
+    assert.strictEqual(timerCount(), 1);
+    await runNextTimer(); await flush();
+    assert.strictEqual(gets, 2, '上一次结束后才发下一次');
+  });
+
+  // 10. 终态后迟到的旧 running 不覆盖结果
+  test('终态后迟到的旧 running 不覆盖结果和按钮', async () => {
+    reset();
+    let resolveOld;
+    apiHandler = () => new Promise(r => { resolveOld = r; });
+    const p = loadWallLib();
+    await flush();
+    // 该链已被停止/终态接管; 旧请求此时才返回 running
+    stopWallLibPolling();
+    const done = doneTask({ scanned: 2, passed: 1, added: 1, skipped_exist: 1,
+                            skipped_size: 0, skipped_ratio: 0, skipped_ext: 0,
+                            missing: 0, errors: [], elapsed: 0.1 }, 2, 2);
+    paintWallLibTask(done);
+    wallLibPaint(done);
+    const before = els['#wall-lib-state'].textContent;
+    resolveOld(runningTask('检查图片', 1, 2));
+    await p; await flush();
+    assert.strictEqual(els['#wall-lib-state'].textContent, before);
+    assert.ok(before.includes('已生成 1 张'));
+    assert.strictEqual(els['#wall-lib-run'].disabled, false);
+    assert.strictEqual(timerCount(), 0, '迟到回包不应重新启动轮询');
+    assert.ok(els['#wall-lib-task'].classList.contains('hidden'));
+  });
+
+  // 11. 新任务启动后旧任务的终态回包不覆盖新进度
+  test('新任务启动后旧任务终态返回不覆盖', async () => {
+    reset();
+    let oldResolve, postResolve;
+    let gets = 0;
+    apiHandler = (url, opts) => {
+      if (opts && opts.method === 'POST') {
+        return new Promise(r => { postResolve = r; });
+      }
+      gets += 1;
+      if (gets === 1) return new Promise(r => { oldResolve = r; });
+      return new Promise(() => {});   // 新任务的查询先挂起
+    };
+    const oldP = loadWallLib();
+    await flush();
+    const newP = runWallLib();
+    await flush();
+    postResolve({ ok: true, dir: 'x', task: runningTask('检查图片', 0, 3) });
+    await newP; await flush();
+    assert.strictEqual(els['#wall-lib-run'].disabled, true);
+    assert.ok(els['#wall-lib-state'].textContent.includes('正在生成'));
+    // 旧任务此时才返回 done
+    oldResolve(doneTask({ scanned: 2, passed: 1, added: 1, skipped_exist: 1,
+                          skipped_size: 0, skipped_ratio: 0, skipped_ext: 0,
+                          missing: 0, errors: [], elapsed: 0.1 }, 2, 2));
+    await oldP; await flush();
+    assert.ok(els['#wall-lib-state'].textContent.includes('正在生成'));
+    assert.strictEqual(els['#wall-lib-run'].disabled, true);
+    assert.ok(!els['#wall-lib-task'].classList.contains('hidden'));
+    assert.strictEqual(_wallLibInFlight, true, '旧回包不能清掉新任务的在途标记');
+    assert.strictEqual(timerCount(), 0);
   });
 
   // 9. 快速完成只留结果
