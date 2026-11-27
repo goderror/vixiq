@@ -937,66 +937,121 @@ async function wallCopyLink(aid) {
 // 壁纸夹里有 784 张和图库某页**字节一致**的副本 (约 5.37 GB): 删掉壁纸夹里那份不丢任何东西。
 // 两条硬规矩就落在这里 —— ① 绝不自动删, 逐条勾选; ② 只走 Windows 电脑回收站, 可还原。
 let wallDupesTimer = null, wallDupesSel = new Set(), wallDupesLast = null;
+let _wallDupesGen = 0;
+let _wallDupesInFlight = false;
+let _wallDupesStarting = false;
 
-async function wallDupesOpen() {
-  wallDupesSel = new Set();
-  openLibModal('🧹 壁纸副本清理', '<div class="hint">正在读扫描结果…</div>', { lg: true });
-  await wallDupesTick();
+function wallDupesModalAlive() {
+  const m = $('#lib-modal');
+  return !!(m && m.style.display !== 'none' && $('#wall-dupes-progress'));
 }
 
-function wallDupesClose() {
-  if (wallDupesTimer) { clearInterval(wallDupesTimer); wallDupesTimer = null; }
-  closeLibModal();
+function stopWallDupesPolling() {
+  // 先作废当前链: 关闭弹窗/换任务后, 已发出的旧回包不能再绘制
+  _wallDupesGen += 1;
+  if (wallDupesTimer) { clearTimeout(wallDupesTimer); wallDupesTimer = null; }
+  _wallDupesInFlight = false;
 }
 
-async function wallDupesScan() {
-  const r = await api('/api/wallpaper/dupes/scan', { method: 'POST' });
-  const e = apiErr(r);
-  if (e) { toast(e, 'err'); return; }
-  wallDupesTick();
+function ensureWallDupesControls() {
+  const host = $('#wall-dupes-progress');
+  if (!host) return null;
+  if (host.dataset.ready !== '1') {
+    host.innerHTML = opProgressHtml('wall-dupes-flow', {
+        mode: 'flow', text: '正在核对壁纸夹与图库索引…' }) +
+      opProgressHtml('wall-dupes-count', {
+        mode: 'count', label: '壁纸副本扫描',
+        text: '已扫描 0／0 张', hidden: true });
+    host.dataset.ready = '1';
+  }
+  return host;
 }
 
-async function wallDupesTick() {
-  if ($('#lib-modal').style.display === 'none') {   // 面板被关了 (含右上角 ✕) 就停轮询
-    if (wallDupesTimer) { clearInterval(wallDupesTimer); wallDupesTimer = null; }
+function resetWallDupesReveal() {
+  const host = $('#wall-dupes-progress');
+  if (!host) return;
+  if (host.querySelectorAll) {
+    host.querySelectorAll('.op-progress').forEach(el => {
+      el.classList.remove('op-fade-in', 'op-shown');
+      delete el.dataset.opReveal;
+    });
+  }
+  opRevealProgressIn(host);
+}
+
+function showWallDupesFlow(text) {
+  const area = $('#wall-dupes-task');
+  if (area) area.classList.remove('hidden');
+  ensureWallDupesControls();
+  opProgressPaint('wall-dupes-flow', {
+    mode: 'flow', hidden: false, stage: '核对壁纸夹与图库索引', text,
+  });
+  opProgressPaint('wall-dupes-count', { mode: 'count', hidden: true });
+}
+
+function paintWallDupesTask(d) {
+  const area = $('#wall-dupes-task');
+  const running = !!(d && d.status === 'scanning');
+  if (!running) {
+    if (area) area.classList.add('hidden');
     return;
   }
-  let d = null;
-  try { d = await api('/api/wallpaper/dupes'); } catch (e) { return; }
-  wallDupesLast = d;
-  const scanning = d.status === 'scanning';
-  if (!scanning && wallDupesTimer) { clearInterval(wallDupesTimer); wallDupesTimer = null; }
-  if (scanning && !wallDupesTimer) wallDupesTimer = setInterval(wallDupesTick, 1000);
-  wallDupesPaint(d);
+  if (area) area.classList.remove('hidden');
+  ensureWallDupesControls();
+  const total = Number(d.total || 0);
+  const done = Math.min(Number(d.done || 0), total || Number(d.done || 0));
+  const counting = total > 0;
+  const stage = counting ? '扫描壁纸' : '核对壁纸夹与图库索引';
+  opProgressPaint('wall-dupes-flow', {
+    mode: 'flow', hidden: counting, stage,
+    text: counting ? '正在扫描壁纸…' : '正在核对壁纸夹与图库索引…',
+  });
+  opProgressPaint('wall-dupes-count', {
+    mode: 'count', hidden: !counting, done, total,
+    label: '壁纸副本扫描', stage,
+    text: `已扫描 ${done}／${total} 张`,
+  });
 }
 
-function wallDupesPaint(d) {
-  const body = $('#lib-modal-body');
-  if (!body) return;
-  const res = d.result || null;
-  let head = '';
-  if (d.status === 'scanning') {
-    const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
-    head = '<div class="hint">扫描中 ' + pct + '%（' + d.done + '/' + d.total + '）'
-         + (d.current ? ' · ' + esc(d.current) : '') + '</div>';
-  } else if (d.status === 'error') {
-    head = '<div class="hint err-text">扫描失败：' + esc(d.error || '') + '</div>';
-  } else if (!res) {
-    head = '<div class="hint">还没扫过。'
-         + '<button class="btn accent" onclick="wallDupesScan()">扫描副本</button></div>';
-    body.innerHTML = head;
-    return;
-  } else if (!res.count) {
-    head = '<div class="hint">扫了 ' + res.scanned + ' 张，没有发现与图库字节一致的副本 ✓ '
-         + '<button class="btn ghost" onclick="wallDupesScan()">重扫</button></div>';
-    body.innerHTML = head;
-    return;
+function wallDupesResultHead(d) {
+  const res = d && d.result;
+  if (d && d.status === 'error') {
+    return '<div class="hint err-text">扫描失败：' + esc(d.error || '未知错误')
+      + ' <button class="btn ghost" onclick="wallDupesScan(this)">重扫</button></div>';
+  }
+  if (!res) {
+    return '<div class="hint">还没扫过。'
+      + '<button class="btn accent" onclick="wallDupesScan(this)">扫描副本</button></div>';
+  }
+  const scanned = Number(res.scanned || 0);
+  const count = Number(res.count || 0);
+  const failed = Number(res.failed || 0);
+  const rescan = '<button class="btn ghost" onclick="wallDupesScan(this)">重扫</button>';
+  let head;
+  if (!scanned) {
+    head = '<div class="hint">壁纸夹没有可扫描的图片 ' + rescan + '</div>';
+  } else if (count) {
+    head = '<div class="hint">已扫描 ' + scanned + ' 张 · 发现 <b>' + count + '</b> 张副本'
+      + ' · 可释放 <b>' + fmtSize(res.bytes || 0) + '</b>（以实际回收结果为准）'
+      + '。删掉壁纸夹里这份不会丢图（库内那份还在）。' + rescan + '</div>';
+  } else if (failed) {
+    head = '<div class="hint">已扫描 ' + scanned + ' 张 · 暂未确认副本 '
+      + rescan + '</div>';
   } else {
-    head = '<div class="hint">扫了 ' + res.scanned + ' 张，其中 <b>' + res.count + '</b> 张与图库里的文件'
-         + '字节一致，共占 <b>' + fmtSize(res.bytes) + '</b>。删掉壁纸夹里这份不会丢图（库内那份还在）。'
-         + '<button class="btn ghost" onclick="wallDupesScan()">重扫</button></div>';
+    head = '<div class="hint">已扫描 ' + scanned + ' 张 · 没有发现与图库字节一致的副本 ✓ '
+      + rescan + '</div>';
   }
-  const rows = (res.items || []).map(it => {
+  if (failed) {
+    head += '<div class="hint err-text">' + failed + ' 张未完成：'
+      + esc(((res.errors || [])[0]) || '原因未知') + '</div>';
+  }
+  return head;
+}
+
+function wallDupesListHtml(res) {
+  const items = (res && res.items) || [];
+  if (!items.length) return '';
+  const rows = items.map(it => {
     const who = it.artwork_id ? ('#' + esc(it.artwork_id) + ' · ' + esc(it.author_name || '')) : '';
     const cur = it.current ? ' <span class="wall-badge ok">正显示</span>' : '';
     return '<tr>'
@@ -1007,10 +1062,9 @@ function wallDupesPaint(d) {
       + '<td>' + who + '<div class="muted dupe-title">' + esc(it.title || '') + '</div></td>'
       + '</tr>';
   }).join('');
-  const selBytes = (res.items || []).filter(it => wallDupesSel.has(it.name))
+  const selBytes = items.filter(it => wallDupesSel.has(it.name))
     .reduce((s, it) => s + (it.size || 0), 0);
-  body.innerHTML = head
-    + '<div style="max-height:52vh;overflow:auto"><table class="dupe-table">'
+  return '<div style="max-height:52vh;overflow:auto"><table class="dupe-table">'
     + '<thead><tr><th style="width:34px"><input type="checkbox" onchange="wallDupesPickAll(this.checked)"></th>'
     + '<th>壁纸文件</th><th>大小</th><th>库内对应的那一页</th></tr></thead>'
     + '<tbody>' + rows + '</tbody></table></div>'
@@ -1020,6 +1074,136 @@ function wallDupesPaint(d) {
     +   '<button class="btn ghost" onclick="wallDupesClose()">关闭</button>'
     +   '<button class="btn danger" onclick="wallDupesDelete()">🗑️ 移出勾选的（进回收站）</button>'
     + '</div>';
+}
+
+function wallDupesPaint(d) {
+  if (!wallDupesModalAlive()) return;
+  const head = $('#wall-dupes-head');
+  const list = $('#wall-dupes-list');
+  if (!head || !list) return;
+  const scanning = !!(d && d.status === 'scanning');
+  paintWallDupesTask(d);
+  if (scanning) {
+    head.innerHTML = '';
+    list.innerHTML = '';
+    return;
+  }
+  head.innerHTML = wallDupesResultHead(d);
+  list.innerHTML = wallDupesListHtml(d && d.result);
+}
+
+function startWallDupesPolling() {
+  if (wallDupesTimer || _wallDupesInFlight) return;
+  const gen = ++_wallDupesGen;
+  const tick = async () => {
+    wallDupesTimer = null;
+    if (gen !== _wallDupesGen) return;
+    if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
+    _wallDupesInFlight = true;
+    let d = null;
+    try { d = await opFetchJson('/api/wallpaper/dupes', 5000); }
+    catch (e) {
+      if (gen !== _wallDupesGen) return;   // 旧链回包: 不碰新任务的在途标记
+      _wallDupesInFlight = false;
+      if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
+      // 短暂查询失败: 保留最后进度, 稍后再查
+      wallDupesTimer = setTimeout(tick, 1000);
+      return;
+    }
+    if (gen !== _wallDupesGen) return;     // 迟到回包: 不绘制
+    _wallDupesInFlight = false;
+    if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
+    wallDupesLast = d;
+    wallDupesPaint(d);
+    if (d.status === 'scanning') {
+      wallDupesTimer = setTimeout(tick, 800);
+      return;
+    }
+    stopWallDupesPolling();                // 终态: 停止并让结果稳定
+  };
+  tick();
+}
+
+async function loadWallDupes(force) {
+  if (!wallDupesModalAlive()) return;
+  if (!force && (_wallDupesStarting || wallDupesTimer || _wallDupesInFlight)) return;
+  const gen = ++_wallDupesGen;
+  _wallDupesInFlight = true;
+  let d = null;
+  try { d = await opFetchJson('/api/wallpaper/dupes', 5000); }
+  catch (e) {
+    if (gen !== _wallDupesGen) return;
+    _wallDupesInFlight = false;
+    if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
+    if (!(wallDupesLast && wallDupesLast.status === 'scanning')) {
+      wallDupesLast = { status: 'error', stage: '', result: null,
+                        error: '读取扫描状态失败：' + (e.message || e) };
+      wallDupesPaint(wallDupesLast);
+    }
+    return;
+  }
+  if (gen !== _wallDupesGen) return;
+  _wallDupesInFlight = false;
+  if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
+  wallDupesLast = d;
+  wallDupesPaint(d);
+  if (d && d.status === 'scanning') startWallDupesPolling();
+}
+
+async function wallDupesOpen() {
+  wallDupesSel = new Set();
+  _wallDupesStarting = false;
+  stopWallDupesPolling();
+  openLibModal('🧹 壁纸副本清理',
+    '<div id="wall-dupes-task" class="hidden"><div id="wall-dupes-progress"></div></div>'
+    + '<div id="wall-dupes-head" class="hint">正在读取扫描结果…</div>'
+    + '<div id="wall-dupes-list"></div>', { lg: true });
+  showWallDupesFlow('正在读取扫描状态…');
+  resetWallDupesReveal();
+  await loadWallDupes(true);
+}
+
+function wallDupesClose() {
+  stopWallDupesPolling();
+  closeLibModal();
+}
+
+async function wallDupesScan(btn) {
+  if (_wallDupesStarting || _wallDupesInFlight) return;
+  if (!wallDupesModalAlive()) return;
+  _wallDupesStarting = true;
+  if (btn) btn.disabled = true;
+  stopWallDupesPolling();
+  showWallDupesFlow('正在核对壁纸夹与图库索引…');
+  resetWallDupesReveal();
+  const head = $('#wall-dupes-head');
+  if (head) head.innerHTML = '';
+  const list = $('#wall-dupes-list');
+  if (list) list.innerHTML = '';
+  try {
+    const r = await api('/api/wallpaper/dupes/scan', { method: 'POST' });
+    if (!r || r.status !== 'ok') {
+      throw new Error((r && (r.msg || r.error)) || '启动扫描失败');
+    }
+    if (r.task) {
+      wallDupesLast = r.task;
+      wallDupesPaint(r.task);
+    }
+    if (r.task && r.task.status === 'scanning') startWallDupesPolling();
+    else await loadWallDupes(true);
+  } catch (e) {
+    stopWallDupesPolling();
+    wallDupesLast = { status: 'error', stage: '', result: null,
+                      error: (e.message || String(e)) };
+    if (wallDupesModalAlive()) wallDupesPaint(wallDupesLast);
+    toast('扫描失败: ' + (e.message || e), 'err');
+  } finally {
+    _wallDupesStarting = false;
+    if (wallDupesModalAlive()
+        && !(wallDupesLast && wallDupesLast.status === 'scanning')) {
+      wallDupesPaint(wallDupesLast || { status: 'idle', result: null });
+    }
+  }
 }
 
 // 勾选态只改这一行文字, 不整体重画 (重画会把滚动位置和鼠标焦点一起弄丢)
@@ -1055,7 +1239,7 @@ async function wallDupesDelete() {
   if (e) { toast(e, 'err'); return; }
   toast('已移出 ' + r.recycled + ' 个副本，释放 ' + fmtSize(r.freed || 0), 'ok');
   wallDupesSel = new Set();
-  wallDupesTick();
+  await loadWallDupes(true);
 }
 
 window.wallRefresh = wallRefresh;

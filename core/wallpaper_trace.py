@@ -217,6 +217,8 @@ def apply_wallpaper(p: Path) -> bool:
 # 之后每次扫副本都是秒回 (新增/改动的文件才重算)。
 WALL_MD5_CACHE: "dict[str, str]" = {}
 WALL_MD5_LOCK = threading.Lock()
+# 副本扫描的失败明细上限; 总数另记 failed, 不能让界面把 20 当成失败总数
+WALL_DUPES_MAX_ERRORS = 20
 
 
 def md5_cached(p: Path) -> str:
@@ -276,7 +278,9 @@ def find_wall_dupes(wall_dir: Path, db_factory, progress_cb=None) -> dict:
     (必须**逐条人工确认 + 走 Windows 回收站**, 不许自动清理)。
     所以本函数是**纯只读**的 —— 删不删、删哪几条, 一律由界面上的勾选决定。
 
-    ``progress_cb(done, total, name)`` 在每张图前调一次 (7.4 GB 要跑几十秒, 得有进度)。
+    ``progress_cb(done, total, name)``: 壁纸夹候选和图库索引都准备好后先报一次
+    ``(0, total, "")``, 之后每张**处理完**再报 ``(i, total, name)`` —— 界面上的
+    「已扫描 N／M 张」按真正检查完的数量走, 读不到指纹的也算检查过并计入 failed。
     """
     files = wallpaper_folder_images(wall_dir)
     try:
@@ -285,34 +289,57 @@ def find_wall_dupes(wall_dir: Path, db_factory, progress_cb=None) -> dict:
         cur = None
     with db_factory() as db:
         index = library_md5_index(db)
+    total = len(files)
+    if progress_cb:
+        try:
+            progress_cb(0, total, "")
+        except Exception:
+            pass                            # 进度回调坏了不能连累扫描
     items: list = []
     total_bytes = 0
+    failed = 0
+    errors: list = []
     for i, f in enumerate(files, 1):
-        if progress_cb:
-            progress_cb(i, len(files), f.name)
         try:
-            sz = f.stat().st_size
-        except OSError:
-            continue
-        h = md5_cached(f)
-        hit = index.get(h) if h else None
-        if not hit:
-            continue
-        total_bytes += sz
-        items.append({
-            "name": f.name,
-            "size": sz,
-            "md5": h,
-            "current": 1 if (cur is not None and f == cur) else 0,
-            "artwork_id": hit["artwork_id"],
-            "page_num": hit["page_num"],
-            "rel": hit["rel"],
-            "title": hit["title"],
-            "author_name": hit["author_name"],
-        })
+            try:
+                sz = f.stat().st_size
+            except OSError as e:
+                failed += 1
+                if len(errors) < WALL_DUPES_MAX_ERRORS:
+                    errors.append(f"{f.name}: {type(e).__name__}: {e}")
+                continue
+            h = md5_cached(f)
+            if not h:
+                # 缺少指纹 = 无法确认是不是副本, 不能当成「已确认非副本」静默放过
+                failed += 1
+                if len(errors) < WALL_DUPES_MAX_ERRORS:
+                    errors.append(f"{f.name}: 无法读取文件指纹")
+                continue
+            hit = index.get(h)
+            if not hit:
+                continue
+            total_bytes += sz
+            items.append({
+                "name": f.name,
+                "size": sz,
+                "md5": h,
+                "current": 1 if (cur is not None and f == cur) else 0,
+                "artwork_id": hit["artwork_id"],
+                "page_num": hit["page_num"],
+                "rel": hit["rel"],
+                "title": hit["title"],
+                "author_name": hit["author_name"],
+            })
+        finally:
+            if progress_cb:
+                try:
+                    progress_cb(i, total, f.name)
+                except Exception:
+                    pass
     items.sort(key=lambda x: (-int(x["size"]), str(x["name"]).lower()))
     return {"dir": str(wall_dir), "scanned": len(files), "count": len(items),
-            "bytes": total_bytes, "index_size": len(index), "items": items}
+            "bytes": total_bytes, "index_size": len(index), "items": items,
+            "failed": failed, "errors": errors}
 
 
 def wallpaper_size(p: Path) -> "tuple[int, int]":

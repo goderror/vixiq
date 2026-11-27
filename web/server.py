@@ -2822,8 +2822,8 @@ def _shuffle_arg() -> bool:
 # ── 🧹 壁纸副本清理 (「省空间」) —— 2026-09-24 只做省空间, 且必须逐条人工确认 ──
 # 壁纸夹 7.4 GB / 1181 张, 全量算 MD5 要几十秒, 请求里等不起 → 后台线程扫 + 前端轮询进度。
 # 结果**只报告, 绝不自动删**: 删哪几条一律由界面上的勾选决定, 且只进 Windows 回收站 (可还原)。
-_WALL_DUPES = {"status": "idle", "done": 0, "total": 0, "current": "", "error": "",
-               "at": 0.0, "result": None}
+_WALL_DUPES = {"status": "idle", "stage": "", "done": 0, "total": 0,
+               "current": "", "error": "", "at": 0.0, "result": None}
 _WALL_DUPES_LOCK = threading.Lock()
 
 # ── 🖼 壁纸夹归属扫描 (壁纸管理页) ──
@@ -9862,7 +9862,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         """上一次「扫副本」的状态与结果 (只读)。
 
         status: ``idle`` 还没扫过 / ``scanning`` 正在扫 / ``done`` / ``error``。
-        扫的过程中 ``done/total/current`` 就是进度。
+        ``stage``: 核对壁纸夹与图库索引 → 扫描壁纸; ``done/total/current`` 就是进度。
         """
         with _WALL_DUPES_LOCK:
             return jsonify(dict(_WALL_DUPES))
@@ -9879,28 +9879,40 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return jsonify({"status": "error", "msg": "读不到当前壁纸路径"}), 400
         with _WALL_DUPES_LOCK:
             if _WALL_DUPES["status"] == "scanning":
-                return jsonify({"status": "ok", "already": True})
-            _WALL_DUPES.update({"status": "scanning", "done": 0, "total": 0,
-                                "current": "", "error": "", "result": None})
+                return jsonify({"status": "ok", "already": True,
+                                "task": dict(_WALL_DUPES)})
+            _WALL_DUPES.update({"status": "scanning",
+                                "stage": "核对壁纸夹与图库索引",
+                                "done": 0, "total": 0, "current": "",
+                                "error": "", "result": None})
+            started = dict(_WALL_DUPES)
         wall_dir = candidates_dir(cur)      # 用户指定的壁纸夹优先, 没配才是当前壁纸所在文件夹
 
         def _task():
             try:
                 def _prog(done, total, name):
+                    # 候选数出来前是「核对壁纸夹与图库索引」, 之后按文件推进
+                    stage = ("扫描壁纸" if int(total or 0) > 0
+                             else "核对壁纸夹与图库索引")
                     with _WALL_DUPES_LOCK:
-                        _WALL_DUPES.update({"done": done, "total": total, "current": name})
+                        _WALL_DUPES.update({"stage": stage,
+                                            "done": int(done or 0),
+                                            "total": int(total or 0),
+                                            "current": name or ""})
 
                 res = find_wall_dupes(wall_dir, _db, progress_cb=_prog)
             except Exception as e:
                 with _WALL_DUPES_LOCK:
-                    _WALL_DUPES.update({"status": "error", "error": str(e), "current": ""})
+                    _WALL_DUPES.update({"status": "error", "stage": "",
+                                        "error": str(e), "current": ""})
                 return
             with _WALL_DUPES_LOCK:
-                _WALL_DUPES.update({"status": "done", "at": time.time(),
-                                    "current": "", "result": res})
+                _WALL_DUPES.update({"status": "done", "stage": "",
+                                    "at": time.time(), "current": "",
+                                    "result": res})
 
         threading.Thread(target=_task, daemon=True, name="wall-dupes").start()
-        return jsonify({"status": "ok"})
+        return jsonify({"status": "ok", "task": started})
 
     @app.route("/api/wallpaper/dupes/recycle", methods=["POST"])
     def api_wallpaper_dupes_recycle():
