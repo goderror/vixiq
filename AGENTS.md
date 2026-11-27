@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127p`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127q`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127p`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127q`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.85 以图搜图文件身份核验与旧缓存迁移（2026-11-27，前端 `20261127q`，已发布到安装版）
+
+- **内容指纹**：特征 npz 增加 `src_md5`（提取时源文件 MD5）；服务器用
+  `_ls_md5_map()` 一次读出 `pages.local_path → md5` 作为可信业务指纹，任务、同步
+  接口和壁纸溯源共用。判定顺序：无 `src_md5` 的旧缓存一次性补建；大小/mtime 变了
+  → 过期；两项没变 → 先比登记 MD5，个别无登记的文件才现场算一次当前文件 MD5。
+  正常图库无变化时不做整库原图哈希。
+- **旧缓存迁移**：历史 npz 不再按源图与 npz 新旧时间升级，一律重提一次，数量通过
+  `extract_plan` 进入任务分母与进度；过期特征先删后提，失败保留原因并下次重试，
+  旧特征不参与检索。
+- **回归**：T200 用正常入口覆盖同大小同时间 `os.replace` / `copy2` 内容替换
+  （图库 MD5 已更新、TOP1 正确、盘上身份一致）、历史格式冷启动（旧时间戳也不沿用）
+  与直接冷启动；保留新入库、普通换图、无变化直搜、失败重试、另一入口持锁等用例。
+  全量 **191/191**（190.27 s），日志
+  `_dev_runtime/diagnostics/trae-20261127q-library-similar-identity-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 23:39:55`，前端 `20261127q`）在 7813
+  隔离图库通过新增身份核验/补建 API 检查与以图搜图 UI 检查，恢复配置后通过既有
+  **12 项**检查（日志 `trae-20261127q-candidate-checks.log`）。回滚清单
+  `_dev_runtime/backups/publish-20261127q-20261127-234447.json`（3 个旧文件、
+  6 个替换项、14,464,099 字节）。dist 与安装版 exe `d4ec82ea4dd3…`、base_library
+  `7cbd32499508…`、app.js `0bdca1cc1d34…`、index.html `8e5e9723146a…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127q-1795789644-1795695345-1795519082`、健康正常，以图搜图/副本扫描/
+  壁纸库/回收站 UI 检查通过。安装版首次真实搜图会一次性补建旧特征缓存。
 
 ### 4.84 图库以图搜图增量索引返修（2026-11-27，前端 `20261127p`，已发布到安装版）
 

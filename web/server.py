@@ -2844,6 +2844,24 @@ _WALL_LIB = {"status": "idle", "stage": "", "done": 0, "total": 0,
 _WALL_LIB_LOCK = threading.Lock()
 
 
+def _ls_md5_map() -> "dict[str, str]":
+    """图库登记的可信内容指纹 (rel → md5)。
+
+    以图搜图/壁纸溯源共用: 同一路径被替换但大小、修改时间都没变时, 靠它识别
+    内容已变化; 图库没有登记 md5 的文件才由检索器按需现场核验。
+    """
+    try:
+        with _db() as db:
+            rows = db.conn.execute(
+                "SELECT local_path, md5 FROM pages "
+                "WHERE local_path IS NOT NULL AND local_path<>'' "
+                "AND md5 IS NOT NULL AND md5<>''").fetchall()
+        return {str(r["local_path"]).replace("\\", "/"):
+                str(r["md5"]).strip().lower() for r in rows}
+    except Exception:
+        return {}
+
+
 def _wall_orb_candidates(f: Path, img_root: Path) -> "list[dict]":
     """ORB+颜色融合兜底溯源 (慢路): 用整库检索器找出最像的几页。
     检索器与 /api/library/similar 共用同一个单例 (首次要加载整库特征, 之后秒回)。"""
@@ -2854,7 +2872,8 @@ def _wall_orb_candidates(f: Path, img_root: Path) -> "list[dict]":
                 from core.local_search import ImageSearcher
                 from utils.reporter import PrintReporter
                 _ls_searcher = ImageSearcher(library_path=str(img_root),
-                                             reporter=PrintReporter(), config=_config)
+                                             reporter=PrintReporter(), config=_config,
+                                             content_md5=_ls_md5_map())
             hits = _ls_searcher.search(str(f), top_k=5)
     except Exception as e:
         return [{"error": str(e).splitlines()[0]}]
@@ -2947,6 +2966,7 @@ def _sim_run(task_id: str, query_path: str) -> None:
     # 壁纸深扫/别的检索可能正占着同一份特征库 → 这里只显示「正在检查图库特征」
     with _ls_lock:
         searcher = _ls_searcher
+        md5_map = _ls_md5_map()
         if searcher is None:
             try:
                 from core.local_search import ImageSearcher
@@ -2954,7 +2974,8 @@ def _sim_run(task_id: str, query_path: str) -> None:
                 img_root = str(Path(paths.user_data(_config["paths"]["img_subdir"])))
                 searcher = ImageSearcher(library_path=img_root,
                                          reporter=PrintReporter(),
-                                         config=_config, progress_cb=_cb)
+                                         config=_config, content_md5=md5_map,
+                                         progress_cb=_cb)
                 _ls_searcher = searcher
             except Exception as e:
                 _upd(status="error", stage="", finished_at=time.time(),
@@ -2964,7 +2985,7 @@ def _sim_run(task_id: str, query_path: str) -> None:
             # 已经加载的检索器也要先按图库增量更新: 新入库/同路径换图
             # 必须进入本次结果, 不能让旧内存索引继续冒充当前图库。
             try:
-                searcher.refresh(progress_cb=_cb)
+                searcher.refresh(progress_cb=_cb, content_md5=md5_map)
             except Exception as e:
                 _upd(status="error", stage="", finished_at=time.time(),
                      error=f"构建特征库失败：{type(e).__name__}: {e}")
@@ -9146,15 +9167,17 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         try:
             global _ls_searcher
             with _ls_lock:
+                md5_map = _ls_md5_map()
                 if _ls_searcher is None:
                     from core.local_search import ImageSearcher
                     from utils.reporter import PrintReporter
                     img_root = str(Path(paths.user_data(_config["paths"]["img_subdir"])))
                     _ls_searcher = ImageSearcher(library_path=img_root,
-                                                 reporter=PrintReporter(), config=_config)
+                                                 reporter=PrintReporter(), config=_config,
+                                                 content_md5=md5_map)
                 else:
                     # 旧同步入口同样先增量更新, 与后台任务共用同一份内存索引
-                    _ls_searcher.refresh()
+                    _ls_searcher.refresh(content_md5=md5_map)
                 results = _ls_searcher.search(tmp, top_k=12)
         except Exception as e:
             return jsonify({"status": "error",

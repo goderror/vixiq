@@ -44,10 +44,12 @@ class ImageSearcher:
     def __init__(self, library_path: "str | None" = None,
                  reporter: "Reporter | None" = None,
                  config: "dict | None" = None,
+                 content_md5: "dict | None" = None,
                  progress_cb=None):
         self.config = config or load_config()
         self.reporter = reporter or PrintReporter()
         self.progress_cb = progress_cb
+        self.content_md5 = content_md5 or {}
         lcfg = self.config["local_search"]
         self.library_path = library_path or lcfg["library_path"]
 
@@ -238,12 +240,24 @@ class ImageSearcher:
         st = os.stat(path)
         return int(st.st_size), int(st.st_mtime_ns)
 
-    def refresh(self, progress_cb=None) -> bool:
+    @staticmethod
+    def _file_md5(path):
+        """当前文件内容指纹; 只在大小与时间都没变、又缺业务指纹时按需计算。"""
+        import hashlib as _hl
+        h = _hl.md5()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def refresh(self, progress_cb=None, content_md5=None) -> bool:
         """按当前图库更新特征库与内存索引, 返回是否有实际变化。
 
         已创建的单例在下一次检索前调用: 新增/变更文件按真实数量回调进度;
         图库无变化时不重载内存缓存, 保持快速检索。
         """
+        if content_md5 is not None:
+            self.content_md5 = content_md5
         old = self.progress_cb
         if progress_cb is not None:
             self.progress_cb = progress_cb
@@ -279,22 +293,24 @@ class ImageSearcher:
         import hashlib as _hl
 
         # 清理过期特征文件 (npz 内嵌 rel 不在当前文件列表 → 删), 同时读出
-        # 每份特征记录的文件身份。旧格式没有身份 → 下面按修改时间安全升级。
+        # 每份特征记录的文件身份与内容指纹。没有内容指纹的旧缓存无法证明来源,
+        # 不按新旧时间沿用, 下一轮一次性补建。
         existing = [f for f in os.listdir(feature_dir) if f.endswith('.npz')]
         removed_count = 0
-        meta = {}   # rel -> (npz 文件名, 存下的身份或 None, npz 修改时间 ns)
+        meta = {}   # rel -> (npz 文件名, 文件身份或 None, 内容指纹或 None)
         for f in existing:
             fp = os.path.join(feature_dir, f)
             sig = None
+            src_md5 = None
             try:
                 with np.load(fp) as data:
                     rel = _rel_to_str(data['rel'])
                     if 'sig_size' in data.files and 'sig_mtime_ns' in data.files:
                         sig = (int(data['sig_size']), int(data['sig_mtime_ns']))
-                npz_mtime = os.stat(fp).st_mtime_ns
+                    if 'src_md5' in data.files:
+                        src_md5 = _rel_to_str(data['src_md5']).strip().lower() or None
             except Exception:
                 rel = os.path.splitext(f)[0]  # 旧格式 (无 rel): 用文件名兜底
-                npz_mtime = 0
             if rel not in all_files_set:
                 try:
                     os.remove(fp)
@@ -302,44 +318,48 @@ class ImageSearcher:
                     pass
                 removed_count += 1
                 continue
-            meta[rel] = (f, sig, npz_mtime)
+            meta[rel] = (f, sig, src_md5)
         if removed_count > 0:
             self.reporter.log(f"清理了 {removed_count} 个过期特征文件")
 
-        # 判定新增与变更: 新格式逐项比较大小 + 修改时间; 旧格式没有身份时,
-        # 只有图片比特征文件新才视为过期, 否则补齐身份 (安全升级, 不重复提取)。
+        # 判定新增与变更:
+        #   ① 没有内容指纹的旧缓存 → 一次性补建 (不再凭 mtime 升级);
+        #   ② 大小或修改时间变了 → 过期;
+        #   ③ 两项都没变 → 用图库登记的可信 MD5 核对内容; 没有业务指纹时
+        #      才现场算一次当前文件 MD5。无变化时不做整库重算。
+        trusted = self.content_md5 or {}
         stale = {rel for rel in all_files if rel not in meta}
-        upgrades = []
+        checked_md5 = {}
         for rel in all_files:
             info = meta.get(rel)
             if not info:
                 continue
-            fname, sig, npz_mtime = info
+            _fname, sig, src_md5 = info
             img_path = os.path.join(library_path, *rel.split("/"))
             try:
                 cur = self._file_sig(img_path)
             except OSError:
                 stale.add(rel)      # 读不到 → 走提取, 由提取阶段报告 skip/fail
                 continue
-            if sig is None:
-                if npz_mtime and cur[1] > npz_mtime:
-                    stale.add(rel)
-                else:
-                    upgrades.append((rel, fname, cur))
-            elif sig != cur:
+            if sig is None or src_md5 is None:
+                stale.add(rel)      # 旧缓存无法证明来源 → 一次性补建
+                continue
+            if sig != cur:
                 stale.add(rel)
-
-        for rel, fname, cur in upgrades:
-            fp = os.path.join(feature_dir, fname)
+                continue
+            db_md5 = str(trusted.get(rel) or "").strip().lower()
+            if db_md5:
+                if db_md5 != src_md5:
+                    stale.add(rel)
+                continue
             try:
-                with np.load(fp) as data:
-                    des = data['des']
-                    hist = data['color_hist']
-                    relb = data['rel']
-                np.savez(fp, des=des, color_hist=hist, rel=relb,
-                         sig_size=np.int64(cur[0]), sig_mtime_ns=np.int64(cur[1]))
-            except Exception:
-                stale.add(rel)      # 升级失败 → 按过期重提取
+                cur_md5 = self._file_md5(img_path)
+            except OSError:
+                stale.add(rel)
+                continue
+            checked_md5[rel] = cur_md5
+            if cur_md5 != src_md5:
+                stale.add(rel)
 
         # 过期特征先删掉: 重提失败时旧特征绝不参与检索, 下次检索仍会重试
         for rel in stale:
@@ -370,6 +390,7 @@ class ImageSearcher:
             try:
                 img_path = os.path.join(library_path, *rel.split("/"))
                 fsig = self._file_sig(img_path)   # 读图前记录身份
+                src_md5 = checked_md5.get(rel) or self._file_md5(img_path)
                 img_color = self.cv_imread(img_path)
                 img_gray = self.cv_imread_gray(img_path)
 
@@ -397,6 +418,7 @@ class ImageSearcher:
                         rel=rel.encode("utf-8"),
                         sig_size=np.int64(fsig[0]),
                         sig_mtime_ns=np.int64(fsig[1]),
+                        src_md5=src_md5.encode("ascii"),
                     )
                     outcome, detail = "ok", ""
                 else:
