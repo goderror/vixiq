@@ -22913,7 +22913,10 @@ def t195_normalize_png_progress() -> None:
                       "normalizePreviewResumeStarting",
                       "normalizeApplyStart", "normalizeApplyShowBusy",
                       "normalizeApplyRetryPending", "opModalSame(waiter.seq || seq)",
-                      "opModalSame(modalSeq)"):
+                      "opModalSame(modalSeq)",
+                      "normalizePreviewShowError", "normalizePreviewRetry",
+                      "normalizeApplyShowError", "normalizeApplyRetryFailed",
+                      "重试预览", "重试转换"):
             assert token in js, f"批量转 PNG 进度接线缺失: {token}"
         node_test = PROJECT_ROOT / "autotest" / "test_normalize_job_ownership.cjs"
         nr = _subprocess.run(

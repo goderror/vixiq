@@ -5267,10 +5267,7 @@ function normalizePreviewWatch(jobId) {
       if (!_normPreview || _normPreview.id !== jobId) return;
       if (e.job) {
         _normPreview = { ...e.job, state: 'error' };
-        if (opModalMatches(owner)) {
-          normalizePreviewPaint(_normPreview);
-          normalizeOpenError(owner, e.message);
-        }
+        if (opModalMatches(owner)) normalizePreviewShowError();
         return;
       }
       _normPreview = { ..._normPreview, pollError: e.message };
@@ -5279,13 +5276,23 @@ function normalizePreviewWatch(jobId) {
   });
 }
 
-function normalizeOpenError(owner, msg) {
-  openLibModal('🖼️ 转为 PNG',
-    `<div class="hint err-text">${esc(msg)}</div>
-     <div class="modal-actions"><button class="btn ghost" onclick="closeLibModal()">关闭</button></div>`,
-    { lg: true });
-  opClaimModal(owner);
+function normalizePreviewShowError() {
+  // 终态失败从原入口接回: 只展示上次原因, 用户点重试才发新请求
+  const j = _normPreview || {};
+  openLibModal('⚠ 预览失败', `
+    <div class="hint err-text">${esc(j.error || '上次预览失败')}</div>
+    <div class="hint">这是上一次任务的结果，点「重试预览」才会重新发送请求。</div>
+    <div class="modal-actions">
+      <button class="btn accent" onclick="normalizePreviewRetry()">🔄 重试预览</button>
+      <button class="btn ghost" onclick="closeLibModal()">关闭</button>
+    </div>`, { lg: true });
+  opClaimModal('normalize-preview-error');
 }
+
+window.normalizePreviewRetry = function () {
+  _normPreview = null;
+  normalizePreviewStart();
+};
 
 function normalizePreviewResume() {
   const j = _normPreview;
@@ -5329,20 +5336,18 @@ async function normalizePreviewStart() {
     start = await api('/api/library/normalize-pending/preview/job', { method: 'POST' });
   } catch (e) {
     if (_normPreviewStart === waiter) _normPreviewStart = null;
-    const msg = '预览失败：' + e.message;
-    _normPreview = { state: 'error', error: msg };
-    if (opModalSame(waiter.seq || seq)) {
-      normalizeOpenError('normalize-preview-start', msg);
-    }
+    _normPreview = { state: 'error', error: '预览失败：' + e.message };
+    if (opModalSame(waiter.seq || seq)) normalizePreviewShowError();
     return;
   }
   if (_normPreviewStart === waiter) _normPreviewStart = null;
   const waitSeq = waiter.seq || seq;
   const same = opModalSame(waitSeq);
   if (!start || start.status !== 'ok' || !start.job_id) {
-    const msg = '预览失败：' + ((start && (start.error || start.message)) || '未知错误');
-    _normPreview = { state: 'error', error: msg };
-    if (same) normalizeOpenError('normalize-preview-start', msg);
+    _normPreview = { state: 'error',
+                     error: '预览失败：'
+                       + ((start && (start.error || start.message)) || '未知错误') };
+    if (same) normalizePreviewShowError();
     return;
   }
   _normPreview = { id: start.job_id, state: 'running',
@@ -5362,6 +5367,8 @@ window.openNormalizePreview = function () {
     return;
   }
   if (_normApplyPending) { normalizeApplyShowBusy(); return; }
+  if (_normApply && _normApply.state === 'error') { normalizeApplyShowError(); return; }
+  if (_normPreview && _normPreview.state === 'error') { normalizePreviewShowError(); return; }
   if (_normPreview && _normPreview.state === 'done' && _normPreview.result) {
     normalizePreviewShow(_normPreview.result); return;
   }
@@ -5475,11 +5482,9 @@ async function normalizeApplyStart(items, recycle, total) {
     });
   } catch (e) {
     if (_normApplyStart === waiter) _normApplyStart = null;
-    const msg = '转换失败：' + e.message;
-    _normApply = { state: 'error', error: msg };
-    if (opModalSame(waiter.seq || seq)) {
-      normalizeOpenError('normalize-apply-start', msg);
-    }
+    _normApply = { state: 'error', error: '转换失败：' + e.message,
+                   retry: { items, recycle, total } };
+    if (opModalSame(waiter.seq || seq)) normalizeApplyShowError();
     return;
   }
   if (_normApplyStart === waiter) _normApplyStart = null;
@@ -5499,10 +5504,9 @@ async function normalizeApplyStart(items, recycle, total) {
   }
   if (!start || start.status !== 'ok' || !start.job_id) {
     const msg = (start && (start.error || start.message)) || '未知错误';
-    _normApply = { state: 'error', error: '转换失败：' + msg };
-    if (same) {
-      normalizeOpenError('normalize-apply-start', '转换失败：' + msg);
-    }
+    _normApply = { state: 'error', error: '转换失败：' + msg,
+                   retry: { items, recycle, total } };
+    if (same) normalizeApplyShowError();
     return;
   }
   _normApply = { id: start.job_id, state: 'running', done: 0,
@@ -5530,6 +5534,29 @@ function normalizeApplyShowBusy() {
     </div>`, { lg: true });
   opClaimModal('normalize-apply-busy');
 }
+
+function normalizeApplyShowError() {
+  // 终态失败从原入口接回: 展示上次原因, 用户点重试/重新预览才发新请求
+  const j = _normApply || {};
+  const r = j.retry;
+  const canRetry = !!(r && r.items && r.items.length);
+  openLibModal('⚠ 转换失败', `
+    <div class="hint err-text">${esc(j.error || '上次转换失败')}</div>
+    <div class="hint">这是上一次任务的结果，点「重试转换」或「重新预览」后才会重新发送请求。</div>
+    <div class="modal-actions">
+      ${canRetry ? '<button class="btn accent" onclick="normalizeApplyRetryFailed()">🔄 重试转换</button>' : ''}
+      <button class="btn ${canRetry ? 'ghost' : 'accent'}" onclick="normalizeRestartPreview()">重新预览</button>
+      <button class="btn ghost" onclick="closeLibModal()">关闭</button>
+    </div>`, { lg: true });
+  opClaimModal('normalize-apply-error');
+}
+
+window.normalizeApplyRetryFailed = function () {
+  const r = _normApply && _normApply.retry;
+  if (!r || !r.items || !r.items.length) { normalizeRestartPreview(); return; }
+  _normApply = null;
+  normalizeApplyStart(r.items, r.recycle, r.total);
+};
 
 window.normalizeApplyRetryPending = function () {
   const p = _normApplyPending;
@@ -5624,10 +5651,7 @@ function normalizeApplyWatch(jobId) {
       if (!_normApply || _normApply.id !== jobId) return;
       if (e.job) {
         _normApply = { ...e.job, state: 'error' };
-        if (opModalMatches(owner)) {
-          normalizeApplyPaint(_normApply);
-          normalizeOpenError(owner, e.message);
-        }
+        if (opModalMatches(owner)) normalizeApplyShowError();
         return;
       }
       _normApply = { ..._normApply, pollError: e.message };

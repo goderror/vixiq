@@ -394,6 +394,89 @@ function harnessBody() {
     assert.strictEqual(_normApply.pollError, '网络断开');
   });
 
+  // 13. 预览启动迟到失败: 重开显示原因且不发新 POST, 点重试才重新请求
+  test('预览失败重开显示原因, 点重试才发新请求', async () => {
+    reset();
+    let resolveStart;
+    apiHandler = () => new Promise(r => { resolveStart = r; });
+    const p = normalizePreviewStart();
+    otherModal('设置', '<div id="settings6">失败时打开</div>');
+    const html = modalBody.innerHTML;
+    resolveStart({ status: 'error', error: '模拟预览启动失败' });
+    await p;
+    await flush();
+    assert.strictEqual(modalBody.innerHTML, html, '迟到的失败回包不得接管其他弹窗');
+    assert.strictEqual(_normPreview.state, 'error');
+    const posts = apiCalls.length;
+    window.openNormalizePreview();
+    assert.strictEqual(apiCalls.length, posts, '重开入口不得自动重发请求');
+    assert.strictEqual(modalTitle.textContent, '⚠ 预览失败');
+    assert.ok(modalBody.innerHTML.includes('模拟预览启动失败'));
+    assert.ok(modalBody.innerHTML.includes('重试预览'));
+    apiHandler = async () => ({ status: 'ok', job_id: 'pv-retry' });
+    window.normalizePreviewRetry();
+    await flush();
+    assert.strictEqual(apiCalls.length, posts + 1, '点重试后才应发起新请求');
+    assert.ok(apiCalls[apiCalls.length - 1].url.includes('/preview/job'));
+    assert.strictEqual(_normPreview.id, 'pv-retry');
+  });
+
+  // 14. 执行启动迟到失败: 重开显示原因与重试, 点重试按原清单重新提交
+  test('转换失败重开显示原因, 点重试按原清单重发', async () => {
+    reset();
+    plan();
+    let resolveStart;
+    apiHandler = () => new Promise(r => { resolveStart = r; });
+    const p = window.applyNormalizePending();
+    otherModal('设置', '<div id="settings7">失败时打开</div>');
+    const html = modalBody.innerHTML;
+    resolveStart({ status: 'error', error: '模拟转换启动失败' });
+    await p;
+    await flush();
+    assert.strictEqual(modalBody.innerHTML, html);
+    assert.strictEqual(_normApply.state, 'error');
+    assert.ok(_normApply.retry && _normApply.retry.items.length === 2);
+    const posts = apiCalls.length;
+    window.openNormalizePreview();
+    assert.strictEqual(apiCalls.length, posts, '重开入口不得自动重发请求');
+    assert.strictEqual(modalTitle.textContent, '⚠ 转换失败');
+    assert.ok(modalBody.innerHTML.includes('模拟转换启动失败'));
+    assert.ok(modalBody.innerHTML.includes('重试转换'));
+    apiHandler = async () => ({ status: 'ok', job_id: 'ap-retry-fail', total: 2 });
+    window.normalizeApplyRetryFailed();
+    await flush();
+    assert.strictEqual(apiCalls.length, posts + 1, '点重试后才应发起新请求');
+    const body = JSON.parse(apiCalls[apiCalls.length - 1].opts.body);
+    assert.deepStrictEqual(body.items.map(x => x.preview_id), ['tok-a', 'tok-b']);
+    assert.strictEqual(body.recycle_old, true);
+    assert.strictEqual(_normApply.id, 'ap-retry-fail');
+  });
+
+  // 15. 执行任务本身失败: 重开显示原因, 不提供会失效的重试, 只提示重新预览
+  test('执行任务失败重开显示原因且不自动重发', async () => {
+    reset();
+    plan();
+    apiHandler = async () => ({ status: 'ok', job_id: 'ap-jobfail', total: 2 });
+    await window.applyNormalizePending();
+    const rec = pollCalls[pollCalls.length - 1];
+    otherModal('设置', '<div id="settings8">任务失败时打开</div>');
+    const html = modalBody.innerHTML;
+    const err = new Error('模拟任务内部失败');
+    err.job = { id: 'ap-jobfail', state: 'error', error: '模拟任务内部失败' };
+    rec.fail(err);
+    await flush(); await flush();
+    assert.strictEqual(modalBody.innerHTML, html);
+    assert.strictEqual(_normApply.state, 'error');
+    const posts = apiCalls.length;
+    window.openNormalizePreview();
+    assert.strictEqual(apiCalls.length, posts, '重开入口不得自动重发请求');
+    assert.strictEqual(modalTitle.textContent, '⚠ 转换失败');
+    assert.ok(modalBody.innerHTML.includes('模拟任务内部失败'));
+    assert.ok(!modalBody.innerHTML.includes('normalizeApplyRetryFailed()'),
+              '任务内部失败不得复用旧令牌重试');
+    assert.ok(modalBody.innerHTML.includes('重新预览'));
+  });
+
   (async () => {
     for (const [name, fn] of cases) {
       await fn();
