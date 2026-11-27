@@ -4378,12 +4378,12 @@ def _thumb_progress_cb(task_id: str):
     return _cb
 
 
-# 图库回收站「全部恢复」共用任务: 作品视图按作品数, 图片视图按图片数
+# 图库回收站「全部恢复」共用任务: 确认/结果按作品或图片, 执行进度按本次文件数
 _trash_restore_lock = threading.Lock()
 _trash_restore_task = {
-    "id": "", "kind": "", "state": "idle", "stage": "", "done": 0,
-    "total": 0, "message": "", "result": None, "error": None,
-    "created_at": None, "finished_at": None,
+    "id": "", "kind": "", "batch_key": "", "state": "idle", "stage": "",
+    "done": 0, "total": 0, "candidate_total": 0, "message": "",
+    "result": None, "error": None, "created_at": None, "finished_at": None,
 }
 
 
@@ -4392,18 +4392,35 @@ def _trash_restore_snapshot() -> dict:
         return dict(_trash_restore_task)
 
 
-def _trash_restore_begin(kind: str):
+def _trash_restore_batch_key(kind: str, ids: "list[str]",
+                             items: "list[dict]") -> str:
+    """本次确认清单的稳定指纹: 同一批运行中重复提交只接回原任务。"""
+    norm = {
+        "kind": kind,
+        "ids": sorted(str(x) for x in ids),
+        "items": sorted([[str(x.get("artwork_id") or ""),
+                          int(x.get("page_num"))] for x in items]),
+    }
+    return hashlib.md5(json.dumps(norm, ensure_ascii=False,
+                                  sort_keys=True).encode()).hexdigest()
+
+
+def _trash_restore_begin(kind: str, batch_key: str, candidate_total: int):
     with _trash_restore_lock:
-        if _trash_restore_task.get("state") == "running":
-            return dict(_trash_restore_task), False
+        cur = _trash_restore_task
+        if cur.get("state") == "running":
+            if cur.get("kind") == kind and cur.get("batch_key") == batch_key:
+                return dict(cur), "reused"
+            return dict(cur), "busy"
         now = time.time()
-        task = {"id": uuid.uuid4().hex, "kind": kind, "state": "running",
-                "stage": "锁定候选", "done": 0, "total": 0, "message": "",
-                "result": None, "error": None, "created_at": now,
-                "finished_at": None}
+        task = {"id": uuid.uuid4().hex, "kind": kind, "batch_key": batch_key,
+                "state": "running", "stage": "核对恢复位置", "done": 0,
+                "total": 0, "candidate_total": int(candidate_total),
+                "message": "", "result": None, "error": None,
+                "created_at": now, "finished_at": None}
         _trash_restore_task.clear()
         _trash_restore_task.update(task)
-        return dict(task), True
+        return dict(task), "created"
 
 
 def _trash_restore_update(task_id: str, **fields) -> None:
@@ -4425,69 +4442,221 @@ def _trash_restore_finish(task_id: str, result=None, error: str = "",
         _trash_restore_task["finished_at"] = time.time()
 
 
+def _trash_restore_move_file(f: dict, trash_root: Path, img_root: Path) -> str:
+    """搬一张回收站文件到原位; 目标同内容视为已就位, 不同内容拒绝覆盖。"""
+    from utils.hashutil import md5_of
+    src = Path(trash_root) / str(f["src"]).replace("\\", "/")
+    dst = Path(img_root) / str(f["dst"]).replace("\\", "/")
+    if not src.is_file():
+        raise FileNotFoundError(f"源文件不存在: {f['src']}")
+    if dst.exists():
+        if f.get("md5") and md5_of(dst) == f["md5"]:
+            return "already"
+        if md5_of(src) == md5_of(dst):
+            return "already"
+        raise FileExistsError(f"目标已存在不同内容, 未覆盖: {f['dst']}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    os.rename(str(src), str(dst))
+    return "moved"
+
+
+def _trash_restore_rollback(moved: "list[dict]", trash_root: Path,
+                            img_root: Path) -> "list[str]":
+    """把本次已搬出的文件退回回收站; 绝不删除原位已有文件, 失败时报实际位置。"""
+    from utils.hashutil import md5_of
+    errors = []
+    for f in reversed(moved or []):
+        src = Path(trash_root) / str(f["src"]).replace("\\", "/")
+        dst = Path(img_root) / str(f["dst"]).replace("\\", "/")
+        try:
+            if not dst.is_file():
+                errors.append(f"回退时目标已不存在: {dst}")
+                continue
+            if f.get("md5") and md5_of(dst) != f["md5"]:
+                errors.append(f"回退时目标内容已变化, 未回退: {dst}")
+                continue
+            if src.exists():
+                errors.append(f"回退位置已有文件, 未回退: {src}（实际位置: {dst}）")
+                continue
+            src.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(str(dst), str(src))
+        except Exception as e:
+            errors.append(f"{f['src']} ↔ {f['dst']}: {e}（实际位置: {dst}）")
+    return errors
+
+
+def _trash_restore_plan_one(db, kind: str, cand: dict, img_root: Path,
+                            trash_root: Path):
+    """核对单个候选项的回收状态/冲突并列出本次要搬的文件; 返回 (plan, skip)。"""
+    aid = str(cand.get("artwork_id") or "")
+    if kind == "artwork":
+        row = db.conn.execute(
+            "SELECT trashed_at FROM artworks WHERE artwork_id=?", (aid,)).fetchone()
+        if not row or not row[0]:
+            return None, {"item": {"artwork_id": aid}, "type": "not_trashed",
+                          "detail": "已不在作品回收站（可能已被恢复或彻底删除）"}
+        conflicts = db._page_conflicts(aid, img_root, trash_root=trash_root)
+        item = {"artwork_id": aid}
+        rows = db.conn.execute(
+            "SELECT page_num, local_path, trash_rel_path, md5 FROM pages "
+            "WHERE artwork_id=? AND trashed_at IS NOT NULL", (aid,)).fetchall()
+    else:
+        pn = int(cand.get("page_num") or 0)
+        row = db.conn.execute(
+            "SELECT p.trashed_at, a.trashed_at FROM pages p "
+            "JOIN artworks a ON a.artwork_id=p.artwork_id "
+            "WHERE p.artwork_id=? AND p.page_num=?", (aid, pn)).fetchone()
+        if not row or not row[0] or row[1]:
+            return None, {"item": {"artwork_id": aid, "page_num": pn},
+                          "type": "not_trashed",
+                          "detail": "已不在图片回收站（可能已被恢复、随作品回收或彻底删除）"}
+        conflicts = db._page_conflicts(aid, img_root, only_pns={pn},
+                                       trash_root=trash_root)
+        item = {"artwork_id": aid, "page_num": pn}
+        rows = db.conn.execute(
+            "SELECT page_num, local_path, trash_rel_path, md5 FROM pages "
+            "WHERE artwork_id=? AND page_num=? AND trashed_at IS NOT NULL",
+            (aid, pn)).fetchall()
+    if conflicts:
+        detail = "; ".join(c["detail"] for c in conflicts[:3])
+        if len(conflicts) > 3:
+            detail += f" 等 {len(conflicts)} 处"
+        return None, {"item": item, "type": conflicts[0]["type"],
+                      "detail": detail}
+    files = []
+    for r in rows:
+        src, dst = db._trash_move_pair(aid, r)
+        if not (src and dst):
+            continue
+        # 源文件缺失沿用现有「只清标记」语义: 不占本次文件清单, 由登记阶段处理
+        if not (Path(trash_root) / src.replace("\\", "/")).is_file():
+            continue
+        files.append({"src": src, "dst": dst, "md5": r["md5"] or ""})
+    return {"item": item, "files": files}, None
+
+
 def _trash_restore_run(task_id: str, kind: str,
                        ids: "list[str]", items: "list[dict]") -> None:
-    """逐个候选恢复并搬文件, 让进度与成功/跳过/搬回失败三类结果可核对。"""
+    """按确认批次逐个候选恢复: 先核对位置, 再按本次文件清单搬回并登记。
+
+    每个候选只有文件全部安全落位且登记成功才计入「已恢复」; 搬回/登记失败
+    会回退已搬文件并保留回收标记, 失败项仍可在回收站查看和重试。"""
     unit = "个作品" if kind == "artwork" else "张图片"
-    total = len(ids) + len(items)
+    candidates = ([{"artwork_id": str(x)} for x in ids] if kind == "artwork"
+                  else [{"artwork_id": str(x.get("artwork_id")),
+                         "page_num": int(x.get("page_num"))} for x in items])
     img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
     trash_root = _trash_root()
-    _trash_restore_update(task_id, stage="恢复中", done=0, total=total)
+    _trash_restore_update(task_id, stage="核对恢复位置", done=0, total=0,
+                           candidate_total=len(candidates))
     restored = 0
     skipped: "list[dict]" = []
     move_failed: "list[dict]" = []
+    register_failed: "list[dict]" = []
     files_moved = 0
     restored_aids: "set[str]" = set()
+    plans: "list[dict]" = []
+    total_files = 0
+    done = 0
     try:
         with _db() as db:
-            for i in range(total):
-                if kind == "artwork":
-                    aid = ids[i]
-                    item = {"artwork_id": aid}
-                    res = db.restore_trashed(artwork_ids=[aid], img_root=img_root,
-                                             trash_root=trash_root)
+            for cand in candidates:
+                plan, skip = _trash_restore_plan_one(
+                    db, kind, cand, img_root, trash_root)
+                if skip:
+                    skipped.append(skip)
                 else:
-                    it = items[i]
-                    aid = str(it["artwork_id"])
-                    pn = int(it["page_num"])
-                    item = {"artwork_id": aid, "page_num": pn}
-                    res = db.restore_trashed(
-                        items=[{"artwork_id": aid, "page_num": pn}],
-                        img_root=img_root, trash_root=trash_root)
-                n = len(res["restored_artworks"]) + len(res["restored_pages"])
-                if res["skipped"]:
-                    skipped.append(res["skipped"][0])
-                elif n <= 0:
-                    skipped.append({"item": item, "type": "not_trashed",
-                                    "detail": "已不在回收站里（可能已被恢复或彻底删除）"})
-                else:
-                    moved, bad = _apply_rel_moves(res["rel_moves"], trash_root, img_root)
-                    files_moved += moved
-                    if bad:
-                        move_failed.append({"item": item, "errors": bad[:5]})
+                    plans.append(plan)
+                    total_files += len(plan["files"])
+            _trash_restore_update(task_id, stage="恢复中", done=0,
+                                   total=total_files)
+            for plan in plans:
+                moved: "list[dict]" = []
+                already: "list[dict]" = []
+                errors: "list[str]" = []
+                for f in plan["files"]:
+                    try:
+                        status = _trash_restore_move_file(f, trash_root, img_root)
+                        if status == "moved":
+                            moved.append(f)
+                        else:
+                            already.append(f)
+                    except Exception as e:
+                        errors.append(f"{f['src']}: {e}")
+                    done += 1
+                    _trash_restore_update(task_id, done=done)
+                if errors:
+                    rb = _trash_restore_rollback(moved, trash_root, img_root)
+                    move_failed.append({"item": plan["item"],
+                                        "errors": errors[:5],
+                                        "rollback_errors": rb[:5]})
+                    continue
+                try:
+                    if kind == "artwork":
+                        res = db.restore_trashed(
+                            artwork_ids=[plan["item"]["artwork_id"]],
+                            img_root=img_root, trash_root=trash_root)
                     else:
-                        restored += 1
-                        for a in res["restored_artworks"]:
-                            restored_aids.add(str(a))
-                        for p in res["restored_pages"]:
-                            restored_aids.add(str(p["artwork_id"]))
-                _trash_restore_update(task_id, done=i + 1)
-        if total <= 0:
-            msg = "回收站是空的"
-        elif not skipped and not move_failed:
+                        res = db.restore_trashed(
+                            items=[plan["item"]],
+                            img_root=img_root, trash_root=trash_root)
+                except Exception as e:
+                    rb = _trash_restore_rollback(moved, trash_root, img_root)
+                    register_failed.append({
+                        "item": plan["item"],
+                        "error": str(e) or e.__class__.__name__,
+                        "rollback_errors": rb[:5]})
+                    continue
+                if res["skipped"]:
+                    rb = _trash_restore_rollback(moved, trash_root, img_root)
+                    skip = dict(res["skipped"][0])
+                    if rb:
+                        skip["rollback_errors"] = rb[:5]
+                    skipped.append(skip)
+                    continue
+                n = len(res["restored_artworks"]) + len(res["restored_pages"])
+                if n <= 0:
+                    rb = _trash_restore_rollback(moved, trash_root, img_root)
+                    skipped.append({
+                        "item": plan["item"], "type": "not_trashed",
+                        "detail": "登记时已不在回收站（可能已被别处处理）",
+                        "rollback_errors": rb[:5]})
+                    continue
+                # 原位同内容副本: 登记成功后再清理回收站里的副本 (best effort)
+                for f in already:
+                    try:
+                        (Path(trash_root)
+                         / f["src"].replace("\\", "/")).unlink()
+                    except OSError:
+                        pass
+                restored += 1
+                files_moved += len(moved) + len(already)
+                for a in res["restored_artworks"]:
+                    restored_aids.add(str(a))
+                for p in res["restored_pages"]:
+                    restored_aids.add(str(p["artwork_id"]))
+        if not candidates:
+            msg = "没有可恢复的条目"
+        elif not skipped and not move_failed and not register_failed:
             msg = f"已恢复 {restored} {unit}"
         else:
-            msg = (f"已恢复 {restored} {unit}：跳过 {len(skipped)} {unit}，"
-                   f"文件搬回失败 {len(move_failed)} {unit}")
-        result = {"kind": kind, "total": total, "restored": restored,
+            msg = (f"已恢复 {restored} {unit}：跳过 {len(skipped)}，"
+                   f"文件搬回失败 {len(move_failed)}，"
+                   f"登记失败 {len(register_failed)}")
+        result = {"kind": kind, "total": len(candidates),
+                  "files_total": total_files, "restored": restored,
                   "skipped": skipped, "move_failed": move_failed,
+                  "register_failed": register_failed,
                   "files_moved": files_moved}
         _trash_restore_finish(task_id, result=result, message=msg)
-        if restored or skipped or move_failed:
+        if restored or skipped or move_failed or register_failed:
             audit_log.record("update", "从回收站全部恢复", msg, restored,
                              ids=sorted(restored_aids) or None)
             mark_dirty("artworks", "pages", "facets", "stats", "search", "ops",
                        ids=sorted(restored_aids))
+        for item in move_failed + register_failed:
+            for e in item.get("rollback_errors") or []:
+                _reporter().log(f"♻️ 回收站恢复回退失败: {e}")
     except Exception as e:
         _trash_restore_finish(task_id, error=str(e) or e.__class__.__name__)
 
@@ -11523,37 +11692,50 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
     @app.route("/api/library/trash/restore/task", methods=["POST"])
     def api_library_trash_restore_task_start():
-        """图库回收站「全部恢复」后台任务: 先锁定候选, 再逐个恢复。
+        """图库回收站「全部恢复」后台任务: 只恢复用户确认的那一批。
 
-        body: {"kind": "artwork"|"page"}。作品视图按作品数、图片视图按图片数计数;
-        每个候选按「恢复成功 / 冲突跳过 / 文件搬回失败」分别收口。
+        body: {"kind":"artwork","ids":[...]} 或
+              {"kind":"page","items":[{"artwork_id","page_num"}, ...]}。
+        前端读取清单后固定候选并随请求提交; 确认以后新入回收站的条目不处理。
+        同一批运行中重复提交接回原任务, 不重复搬文件。
         """
         data = request.get_json(silent=True) or {}
         kind = str(data.get("kind") or "").strip()
         if kind not in ("artwork", "page"):
             return jsonify({"status": "error", "error": "未知恢复视图"}), 400
-        with _db() as db:
-            listed = db.list_trashed(kind)
-        raw = listed.get("items") or []
+        raw_ids = data.get("ids") or []
+        raw_items = data.get("items") or []
         if kind == "artwork":
-            ids = [str(x["artwork_id"]) for x in raw]
+            ids = list(dict.fromkeys(
+                str(x) for x in raw_ids if str(x).strip()))
             items: "list[dict]" = []
         else:
             ids = []
-            items = [{"artwork_id": str(x["artwork_id"]),
-                      "page_num": int(x["page_num"])} for x in raw]
-        total = len(ids) + len(items)
-        task, created = _trash_restore_begin(kind)
-        if not created:
+            items = []
+            seen: "set[tuple[str, int]]" = set()
+            for it in raw_items:
+                if not isinstance(it, dict):
+                    continue
+                aid = str(it.get("artwork_id") or "").strip()
+                try:
+                    pn = int(it.get("page_num"))
+                except (TypeError, ValueError):
+                    continue
+                if not aid or (aid, pn) in seen:
+                    continue
+                seen.add((aid, pn))
+                items.append({"artwork_id": aid, "page_num": pn})
+        if not ids and not items:
+            return jsonify({"status": "error",
+                            "error": "缺少已确认的恢复清单"}), 400
+        batch_key = _trash_restore_batch_key(kind, ids, items)
+        task, mode = _trash_restore_begin(
+            kind, batch_key, len(ids) + len(items))
+        if mode == "reused":
+            return jsonify({"status": "ok", "task": task, "reused": True})
+        if mode == "busy":
             return jsonify({"status": "error", "busy": True, "task": task,
-                            "message": "已有恢复任务正在执行"}), 409
-        if total == 0:
-            _trash_restore_finish(
-                task["id"],
-                result={"kind": kind, "total": 0, "restored": 0,
-                        "skipped": [], "move_failed": [], "files_moved": 0},
-                message="回收站是空的")
-            return jsonify({"status": "ok", "task": _trash_restore_snapshot()})
+                            "message": "已有其他批次的恢复任务正在执行"}), 409
         try:
             threading.Thread(target=_trash_restore_run,
                              args=(task["id"], kind, ids, items),

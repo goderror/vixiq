@@ -8005,6 +8005,7 @@ async function libBatchDelete() {
 let trashKind = 'artwork';
 let _trashListCount = 0;
 let _trashRestoreRunning = false;
+let _trashRestoreLocking = false;
 let _trashRestoreTimer = null;
 let _trashRestoreStatsTick = 0;
 
@@ -8156,7 +8157,7 @@ function _trashRestoreUnit(kind) { return kind === 'page' ? '张图片' : '个�
 
 function _refreshTrashRestoreBtn() {
   const b = $('#trash-restore-all');
-  if (b) b.disabled = !_trashListCount || _trashRestoreRunning;
+  if (b) b.disabled = !_trashListCount || _trashRestoreRunning || _trashRestoreLocking;
 }
 
 function ensureTrashRestoreControls() {
@@ -8190,22 +8191,36 @@ function trashRestoreResultHtml(t) {
   if (!total) return '回收站是空的';
   const skipped = Array.isArray(r.skipped) ? r.skipped : [];
   const moveFailed = Array.isArray(r.move_failed) ? r.move_failed : [];
+  const registerFailed = Array.isArray(r.register_failed) ? r.register_failed : [];
+  const _rb = s => {
+    const errors = Array.isArray(s.rollback_errors) ? s.rollback_errors : [];
+    return errors.length
+      ? `（回退失败：${esc(errors.slice(0, 2).join('；'))}）` : '';
+  };
   let head = `已恢复 ${Number(r.restored || 0)} ${unit}`;
-  if (skipped.length || moveFailed.length) {
+  if (skipped.length || moveFailed.length || registerFailed.length) {
     head += `；跳过 ${skipped.length}，文件搬回失败 ${moveFailed.length}`;
+    if (registerFailed.length) head += `，登记失败 ${registerFailed.length}`;
   }
   let html = `<div>${head}</div>`;
   if (skipped.length) {
     const lines = skipped.slice(0, 3).map(s =>
-      `${_trashRestoreItemLabel(s.item, kind)}：${esc(s.detail || '冲突')}`);
+      `${_trashRestoreItemLabel(s.item, kind)}：${esc(s.detail || '冲突')}${_rb(s)}`);
     html += `<div class="hint">冲突跳过：${lines.join('；')}`
       + (skipped.length > 3 ? `；等 ${skipped.length} 项` : '') + '</div>';
   }
   if (moveFailed.length) {
     const lines = moveFailed.slice(0, 3).map(s =>
-      `${_trashRestoreItemLabel(s.item, kind)}：${esc((s.errors || []).join('；'))}`);
+      `${_trashRestoreItemLabel(s.item, kind)}：`
+      + `${esc((s.errors || []).join('；'))}${_rb(s)}`);
     html += `<div class="hint err-text">文件搬回失败：${lines.join('；')}`
       + (moveFailed.length > 3 ? `；等 ${moveFailed.length} 项` : '') + '</div>';
+  }
+  if (registerFailed.length) {
+    const lines = registerFailed.slice(0, 3).map(s =>
+      `${_trashRestoreItemLabel(s.item, kind)}：${esc(s.error || '登记失败')}${_rb(s)}`);
+    html += `<div class="hint err-text">登记失败：${lines.join('；')}`
+      + (registerFailed.length > 3 ? `；等 ${registerFailed.length} 项` : '') + '</div>';
   }
   return html;
 }
@@ -8227,7 +8242,6 @@ function paintTrashRestoreTask(t) {
   const done = Math.min(Number(t.done || 0), total || Number(t.done || 0));
   const counting = running && total > 0;
   const kind = t.kind || (t.result && t.result.kind) || 'artwork';
-  const unit = _trashRestoreUnit(kind);
   const stage = t.stage || (running ? '恢复中' : '');
   opProgressPaint('trash-restore-flow', {
     mode: 'flow', hidden: !running || counting, stage,
@@ -8235,7 +8249,7 @@ function paintTrashRestoreTask(t) {
   });
   opProgressPaint('trash-restore-count', {
     mode: 'count', hidden: !counting, done, total, label: '全部恢复', stage,
-    text: `已处理 ${done}／${total} ${unit}`,
+    text: `已处理 ${done}／${total} 张`,
   });
   const note = $('#trash-restore-note');
   if (note) {
@@ -8275,7 +8289,7 @@ async function loadTrashRestoreTask() {
   }
 }
 
-async function startTrashRestoreAll(kind) {
+async function startTrashRestoreAll(kind, batch) {
   if (_trashRestoreRunning) return;
   _trashRestoreRunning = true;
   _refreshTrashRestoreBtn();
@@ -8286,7 +8300,7 @@ async function startTrashRestoreAll(kind) {
   try {
     r = await api('/api/library/trash/restore/task', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind }),
+      body: JSON.stringify({ kind, ...(batch || {}) }),
     });
   } catch (e) {
     _trashRestoreRunning = false;
@@ -8311,12 +8325,47 @@ async function startTrashRestoreAll(kind) {
 
 window.trashRestoreAll = async function () {
   if (trashKind === 'wallpaper') return wallTrashAll('restore');
-  let r0;
-  try { r0 = await api('/api/library/trash/list?kind=' + trashKind); } catch (e) { r0 = null; }
+  if (_trashRestoreLocking) return;
+  const kind = trashKind;   // 固定点击时的视图, 等待期间切页不改变已确认对象
+  _trashRestoreLocking = true;
+  _refreshTrashRestoreBtn();
+  ensureTrashRestoreControls();
+  const area = $('#trash-restore-task');
+  if (area) area.classList.remove('hidden');
+  opProgressPaint('trash-restore-flow', {
+    mode: 'flow', hidden: false, stage: '锁定回收站候选',
+    text: '正在锁定回收站候选…',
+  });
+  let r0 = null;
+  try {
+    r0 = await api('/api/library/trash/list?kind=' + kind);
+  } catch (e) {
+    _trashRestoreLocking = false;
+    paintTrashRestoreTask({ state: 'idle' });
+    toast('读取回收站失败: ' + e.message, 'err');
+    return;
+  }
   const items = (r0 && r0.items) || [];
-  if (!items.length) { toast('回收站是空的', 'info'); return; }
-  if (!confirm(`恢复当前视图的全部 ${items.length} 项？\n\n与图库现有内容冲突的项会被跳过，绝不会覆盖。`)) return;
-  await startTrashRestoreAll(trashKind);
+  if (!items.length) {
+    _trashRestoreLocking = false;
+    paintTrashRestoreTask({ state: 'idle' });
+    toast('回收站是空的', 'info');
+    return;
+  }
+  opProgressPaint('trash-restore-flow', { mode: 'flow', hidden: true });
+  const unit = kind === 'artwork' ? '个作品' : '张图片';
+  if (!confirm(`恢复当前视图的全部 ${items.length} ${unit}？\n\n`
+               + '与图库现有内容冲突的项会被跳过，绝不会覆盖。')) {
+    _trashRestoreLocking = false;
+    paintTrashRestoreTask({ state: 'idle' });
+    return;   // 取消确认: 不创建恢复任务
+  }
+  const batch = kind === 'artwork'
+    ? { ids: items.map(x => String(x.artwork_id)) }
+    : { items: items.map(x => ({ artwork_id: String(x.artwork_id),
+                                 page_num: Number(x.page_num) })) };
+  _trashRestoreLocking = false;
+  await startTrashRestoreAll(kind, batch);
 };
 
 // ============ 🗑️ 回收站清空/彻底删除 ============

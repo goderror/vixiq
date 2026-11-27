@@ -62,7 +62,9 @@ function harnessBody() {
 
   let toastLog = [];
   function toast(msg, type) { toastLog.push({ msg, type }); }
-  function confirm() { return true; }
+  let confirmResult = true;
+  let confirmLog = [];
+  function confirm(msg) { confirmLog.push(msg); return confirmResult; }
 
   let intervalFn = null;
   let intervalCleared = false;
@@ -74,11 +76,14 @@ function harnessBody() {
   function loadLibrary() {}
   function loadStats() {}
   function loadLibFacets() {}
+  function wallTrashAll() {}
 
   const window = {};
 
+  let trashKind = 'artwork';
   let _trashListCount = 0;
   let _trashRestoreRunning = false;
+  let _trashRestoreLocking = false;
   let _trashRestoreTimer = null;
   let _trashRestoreStatsTick = 0;
 
@@ -95,11 +100,15 @@ function harnessBody() {
     progressCalls = [];
     apiCalls = [];
     toastLog = [];
+    confirmLog = [];
+    confirmResult = true;
     intervalFn = null;
     intervalCleared = false;
     _trashRestoreTimer = null;
     _trashRestoreRunning = false;
+    _trashRestoreLocking = false;
     _trashListCount = 0;
+    trashKind = 'artwork';
     reloads = 0;
     Object.values(els).forEach(el => {
       el.innerHTML = '';
@@ -134,22 +143,22 @@ function harnessBody() {
     assert.ok(els['#trash-restore-note'].textContent.includes('锁定候选'));
   });
 
-  // 2. 作品/图片两种计数单位
-  test('作品视图按作品数计数', () => {
+  // 2. 执行进度按本次文件清单计数 (统一「张」)
+  test('执行进度按文件数计数', () => {
     reset();
     _trashListCount = 5;
     paintTrashRestoreTask(runningTask('artwork', '恢复中', 2, 5));
     const c = lastPaint('trash-restore-count');
     assert.ok(c && c.hidden === false);
-    assert.ok(c.text.includes('已处理 2／5 个作品'), c.text);
+    assert.ok(c.text.includes('已处理 2／5 张'), c.text);
     assert.strictEqual(lastPaint('trash-restore-flow').hidden, true);
   });
-  test('图片视图按图片数计数', () => {
+  test('图片视图执行同样按文件数计数', () => {
     reset();
     _trashListCount = 3;
     paintTrashRestoreTask(runningTask('page', '恢复中', 1, 3));
     const c = lastPaint('trash-restore-count');
-    assert.ok(c.text.includes('已处理 1／3 张图片'), c.text);
+    assert.ok(c.text.includes('已处理 1／3 张'), c.text);
   });
 
   // 3. 恢复成功/冲突跳过/文件搬回失败结果
@@ -220,7 +229,7 @@ function harnessBody() {
     await loadTrashRestoreTask();
     await flush();
     assert.ok(intervalFn, '运行中任务应启动轮询');
-    assert.ok(lastPaint('trash-restore-count').text.includes('已处理 1／3 张图片'));
+    assert.ok(lastPaint('trash-restore-count').text.includes('已处理 1／3 张'));
     assert.strictEqual(els['#trash-restore-all'].disabled, true);
 
     apiHandler = async () => ({
@@ -236,8 +245,8 @@ function harnessBody() {
     assert.ok(reloads >= 1, '完成后应刷新回收站列表');
   });
 
-  // 6. 启动全部恢复: POST kind, 立即禁用, 轮询接回
-  test('启动恢复任务按视图提交并轮询', async () => {
+  // 6. 启动全部恢复: POST 固定批次, 立即禁用, 轮询接回
+  test('启动恢复任务提交固定批次并轮询', async () => {
     reset();
     _trashListCount = 2;
     let sent = null;
@@ -248,12 +257,108 @@ function harnessBody() {
       }
       return { status: 'ok', task: runningTask('artwork', '恢复中', 1, 2) };
     };
-    await startTrashRestoreAll('artwork');
+    await startTrashRestoreAll('artwork', { ids: ['11', '22'] });
     await flush();
-    assert.deepStrictEqual(sent, { kind: 'artwork' });
+    assert.deepStrictEqual(sent, { kind: 'artwork', ids: ['11', '22'] });
     assert.ok(intervalFn);
     assert.strictEqual(els['#trash-restore-all'].disabled, true);
-    assert.ok(lastPaint('trash-restore-count').text.includes('已处理 1／2 个作品'));
+    assert.ok(lastPaint('trash-restore-count').text.includes('已处理 1／2 张'));
+  });
+
+  // 7. 「全部恢复」先锁清单再确认: 请求体带确认批次
+  test('确认后提交的是点击时固定的批次', async () => {
+    reset();
+    _trashListCount = 2;
+    let sent = null;
+    apiHandler = async (url, opts) => {
+      if (String(url).includes('/trash/list')) {
+        return { status: 'ok', items: [{ artwork_id: '11' }, { artwork_id: '22' }] };
+      }
+      if (opts && opts.method === 'POST') {
+        sent = JSON.parse(opts.body);
+        return { status: 'ok', task: runningTask('artwork', '恢复中', 0, 2) };
+      }
+      return { status: 'ok', task: runningTask('artwork', '恢复中', 1, 2) };
+    };
+    await window.trashRestoreAll();
+    await flush();
+    assert.ok(confirmLog[0].includes('2 个作品'), confirmLog[0]);
+    assert.deepStrictEqual(sent, { kind: 'artwork', ids: ['11', '22'] });
+  });
+
+  // 8. 清单请求未完成时切换视图: 确认与提交仍用点击时视图
+  test('清单未返回时切换视图不改变确认对象', async () => {
+    reset();
+    _trashListCount = 2;
+    trashKind = 'artwork';
+    let resolveList;
+    let sent = null;
+    apiHandler = async (url, opts) => {
+      if (String(url).includes('/trash/list')) {
+        return new Promise(r => { resolveList = r; });
+      }
+      if (opts && opts.method === 'POST') {
+        sent = JSON.parse(opts.body);
+        return { status: 'ok', task: runningTask('artwork', '恢复中', 0, 2) };
+      }
+      return { status: 'ok', task: runningTask('artwork', '恢复中', 1, 2) };
+    };
+    const p = window.trashRestoreAll();
+    trashKind = 'page';               // 等待期间切到图片视图
+    resolveList({ status: 'ok', items: [{ artwork_id: '11' }, { artwork_id: '22' }] });
+    await p; await flush();
+    assert.ok(confirmLog[0].includes('2 个作品'), confirmLog[0]);
+    assert.deepStrictEqual(sent, { kind: 'artwork', ids: ['11', '22'] });
+  });
+
+  // 9. 取消确认不创建任务
+  test('取消确认不创建恢复任务', async () => {
+    reset();
+    _trashListCount = 1;
+    confirmResult = false;
+    apiHandler = async (url) => {
+      if (String(url).includes('/trash/list')) {
+        return { status: 'ok', items: [{ artwork_id: '11' }] };
+      }
+      return { status: 'error', error: '不应提交' };
+    };
+    await window.trashRestoreAll();
+    await flush();
+    assert.ok(confirmLog[0].includes('1 个作品'), confirmLog[0]);
+    assert.ok(!apiCalls.some(c => c.opts && c.opts.method === 'POST'), '取消后不应 POST');
+    assert.ok(els['#trash-restore-task'].classList.contains('hidden'));
+  });
+
+  // 10. 运行中同一批重复点击不重复提交
+  test('运行中重复点击不重复提交', async () => {
+    reset();
+    _trashListCount = 2;
+    _trashRestoreRunning = true;
+    let posts = 0;
+    apiHandler = async (url, opts) => {
+      if (opts && opts.method === 'POST') posts += 1;
+      return { status: 'ok', task: runningTask('artwork', '恢复中', 0, 2) };
+    };
+    await startTrashRestoreAll('artwork', { ids: ['11', '22'] });
+    assert.strictEqual(posts, 0);
+  });
+
+  // 11. 登记失败与回退失败在结果中交代原因
+  test('登记失败与回退失败显示原因', () => {
+    reset();
+    _trashListCount = 2;
+    paintTrashRestoreTask(doneTask('artwork', {
+      kind: 'artwork', total: 2, restored: 1, skipped: [], move_failed: [],
+      register_failed: [{ item: { artwork_id: '444' },
+                          error: '数据库写入失败',
+                          rollback_errors: ['回退位置已有文件, 未回退: x（实际位置: y）'] }],
+      files_moved: 1,
+    }));
+    const html = els['#trash-restore-note'].innerHTML;
+    assert.ok(html.includes('登记失败 1'), html);
+    assert.ok(html.includes('数据库写入失败'), html);
+    assert.ok(html.includes('回退失败'), html);
+    assert.ok(html.includes('实际位置'), html);
   });
 
   (async () => {
