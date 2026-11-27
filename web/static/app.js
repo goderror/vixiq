@@ -8003,6 +8003,10 @@ async function libBatchDelete() {
 // 双层保护的前端: 删除=移进来(可恢复), 彻底删除=卸载记录且文件只进 Windows 电脑回收站。
 // 恢复遇冲突由后端判、只跳过不覆盖, 前端如实把"哪几项被跳过、为什么"摆给用户看。
 let trashKind = 'artwork';
+let _trashListCount = 0;
+let _trashRestoreRunning = false;
+let _trashRestoreTimer = null;
+let _trashRestoreStatsTick = 0;
 
 window.trashSwitchKind = function (kind) {
   trashKind = ['page', 'wallpaper'].includes(kind) ? kind : 'artwork';
@@ -8034,20 +8038,23 @@ async function loadTrash() {
   try { r = await api('/api/library/trash/list?kind=' + trashKind); }
   catch (e) { cont.innerHTML = '<div class="hint">加载失败：' + esc(e.message) + '</div>'; return; }
   const items = (r && r.items) || [];
+  _trashListCount = items.length;
   const tot = $('#trash-total');
   if (tot) tot.textContent = items.length
     ? `共 ${items.length} ${trashKind === 'artwork' ? '个作品' : '张图片'}` : '';
   // 空的时候把批量按钮禁掉: 点了只能得到"已彻底删除 0 项"这种没意义的提示 (浏览器实测后改)
   const raBtn = $('#trash-restore-all'), paBtn = $('#trash-purge-all');
-  if (raBtn) raBtn.disabled = !items.length;
+  if (raBtn) raBtn.disabled = !items.length || _trashRestoreRunning;
   if (paBtn) paBtn.disabled = !items.length;
   if (!items.length) {
     cont.innerHTML = '<div class="hint">回收站是空的 ✓</div>';
     loadTrashBadge();
+    loadTrashRestoreTask();
     return;
   }
   cont.innerHTML = (trashKind === 'artwork') ? _trashArtworkHtml(items) : _trashPageHtml(items);
   loadTrashBadge();
+  loadTrashRestoreTask();
 }
 
 function _trashArtworkHtml(items) {
@@ -8144,6 +8151,164 @@ window.trashPurgePage = async function (aid, pn) {
   await _trashPurge({ items: [{ artwork_id: String(aid), page_num: Number(pn) }] });
 };
 
+// ============ ♻️ 回收站全部恢复进度 ============
+function _trashRestoreUnit(kind) { return kind === 'page' ? '张图片' : '个作品'; }
+
+function _refreshTrashRestoreBtn() {
+  const b = $('#trash-restore-all');
+  if (b) b.disabled = !_trashListCount || _trashRestoreRunning;
+}
+
+function ensureTrashRestoreControls() {
+  const host = $('#trash-restore-progress');
+  if (!host) return null;
+  if (host.dataset.ready !== '1') {
+    host.innerHTML = opProgressHtml('trash-restore-flow', {
+        mode: 'flow', text: '正在锁定回收站候选…' }) +
+      opProgressHtml('trash-restore-count', {
+        mode: 'count', label: '全部恢复', text: '已处理 0／0 项', hidden: true });
+    host.dataset.ready = '1';
+    opRevealProgressIn(host);
+  }
+  return host;
+}
+
+function _trashRestoreItemLabel(item, kind) {
+  const aid = esc(String((item && item.artwork_id) || ''));
+  if (kind === 'page' || (item && item.page_num != null)) {
+    return `作品 ${aid} 第 ${Number(item.page_num) + 1} 张`;
+  }
+  return `作品 ${aid}`;
+}
+
+function trashRestoreResultHtml(t) {
+  const r = t.result || {};
+  const kind = r.kind || t.kind || 'artwork';
+  const unit = _trashRestoreUnit(kind);
+  if (t.state === 'error') return `恢复失败：${esc(t.error || '未知错误')}`;
+  const total = Number(r.total || 0);
+  if (!total) return '回收站是空的';
+  const skipped = Array.isArray(r.skipped) ? r.skipped : [];
+  const moveFailed = Array.isArray(r.move_failed) ? r.move_failed : [];
+  let head = `已恢复 ${Number(r.restored || 0)} ${unit}`;
+  if (skipped.length || moveFailed.length) {
+    head += `；跳过 ${skipped.length}，文件搬回失败 ${moveFailed.length}`;
+  }
+  let html = `<div>${head}</div>`;
+  if (skipped.length) {
+    const lines = skipped.slice(0, 3).map(s =>
+      `${_trashRestoreItemLabel(s.item, kind)}：${esc(s.detail || '冲突')}`);
+    html += `<div class="hint">冲突跳过：${lines.join('；')}`
+      + (skipped.length > 3 ? `；等 ${skipped.length} 项` : '') + '</div>';
+  }
+  if (moveFailed.length) {
+    const lines = moveFailed.slice(0, 3).map(s =>
+      `${_trashRestoreItemLabel(s.item, kind)}：${esc((s.errors || []).join('；'))}`);
+    html += `<div class="hint err-text">文件搬回失败：${lines.join('；')}`
+      + (moveFailed.length > 3 ? `；等 ${moveFailed.length} 项` : '') + '</div>';
+  }
+  return html;
+}
+
+function paintTrashRestoreTask(t) {
+  const area = $('#trash-restore-task');
+  if (!area) return;
+  if (!t || !t.state || t.state === 'idle') {
+    area.classList.add('hidden');
+    _trashRestoreRunning = false;
+    _refreshTrashRestoreBtn();
+    return;
+  }
+  ensureTrashRestoreControls();
+  area.classList.remove('hidden');
+  const running = t.state === 'running';
+  _trashRestoreRunning = running;
+  const total = Number(t.total || 0);
+  const done = Math.min(Number(t.done || 0), total || Number(t.done || 0));
+  const counting = running && total > 0;
+  const kind = t.kind || (t.result && t.result.kind) || 'artwork';
+  const unit = _trashRestoreUnit(kind);
+  const stage = t.stage || (running ? '恢复中' : '');
+  opProgressPaint('trash-restore-flow', {
+    mode: 'flow', hidden: !running || counting, stage,
+    text: (stage || '正在恢复') + '…',
+  });
+  opProgressPaint('trash-restore-count', {
+    mode: 'count', hidden: !counting, done, total, label: '全部恢复', stage,
+    text: `已处理 ${done}／${total} ${unit}`,
+  });
+  const note = $('#trash-restore-note');
+  if (note) {
+    if (running) note.textContent = `${stage || '恢复中'}…`;
+    else note.innerHTML = trashRestoreResultHtml(t);
+  }
+  _refreshTrashRestoreBtn();
+}
+
+function startTrashRestorePolling() {
+  if (_trashRestoreTimer) return;
+  const tick = async () => {
+    let r = null;
+    try { r = await api('/api/library/trash/restore/task'); } catch (e) { return; }
+    const t = r && r.task;
+    if (!t) return;
+    paintTrashRestoreTask(t);
+    if (t.state !== 'running') {
+      clearInterval(_trashRestoreTimer);
+      _trashRestoreTimer = null;
+      loadTrash(); loadLibrary(); loadStats(); loadLibFacets();
+    }
+  };
+  tick();
+  _trashRestoreTimer = setInterval(tick, 500);
+}
+
+async function loadTrashRestoreTask() {
+  let r = null;
+  try { r = await api('/api/library/trash/restore/task'); } catch (e) { return; }
+  const t = r && r.task;
+  paintTrashRestoreTask(t || { state: 'idle' });
+  if (t && t.state === 'running') startTrashRestorePolling();
+  else if (_trashRestoreTimer) {
+    clearInterval(_trashRestoreTimer);
+    _trashRestoreTimer = null;
+  }
+}
+
+async function startTrashRestoreAll(kind) {
+  if (_trashRestoreRunning) return;
+  _trashRestoreRunning = true;
+  _refreshTrashRestoreBtn();
+  ensureTrashRestoreControls();
+  const area = $('#trash-restore-task');
+  if (area) area.classList.remove('hidden');
+  let r = null;
+  try {
+    r = await api('/api/library/trash/restore/task', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+  } catch (e) {
+    _trashRestoreRunning = false;
+    _refreshTrashRestoreBtn();
+    toast('恢复失败: ' + e.message, 'err');
+    return;
+  }
+  if (r && r.task) paintTrashRestoreTask(r.task);
+  if (r && r.task && r.task.state === 'running') {
+    startTrashRestorePolling();
+  } else if (r && r.status === 'ok') {
+    _trashRestoreRunning = false;
+    _refreshTrashRestoreBtn();
+    if (r.task) paintTrashRestoreTask(r.task);
+    loadTrash(); loadLibrary(); loadStats(); loadLibFacets();
+  } else {
+    _trashRestoreRunning = false;
+    _refreshTrashRestoreBtn();
+    if (r && r.error) toast('恢复失败: ' + r.error, 'err');
+  }
+}
+
 window.trashRestoreAll = async function () {
   if (trashKind === 'wallpaper') return wallTrashAll('restore');
   let r0;
@@ -8151,14 +8316,10 @@ window.trashRestoreAll = async function () {
   const items = (r0 && r0.items) || [];
   if (!items.length) { toast('回收站是空的', 'info'); return; }
   if (!confirm(`恢复当前视图的全部 ${items.length} 项？\n\n与图库现有内容冲突的项会被跳过，绝不会覆盖。`)) return;
-  if (trashKind === 'artwork') {
-    await _trashRestore({ ids: items.map(x => String(x.artwork_id)) });
-  } else {
-    await _trashRestore({ items: items.map(x => ({
-      artwork_id: String(x.artwork_id), page_num: Number(x.page_num) })) });
-  }
+  await startTrashRestoreAll(trashKind);
 };
 
+// ============ 🗑️ 回收站清空/彻底删除 ============
 window.trashPurgeAll = async function () {
   if (trashKind === 'wallpaper') return wallTrashAll('purge');
   if (!confirm('清空回收站？\n\n所有记录会被卸载；图片文件全部送进 **Windows 电脑回收站**（仍可还原），并记入操作日志。\n\n这是最深的一层删除，确定继续？')) return;

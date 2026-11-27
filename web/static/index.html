@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261127g">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261127g">
+<link rel="stylesheet" href="/static/style.css?v=20261127h">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261127h">
 </head>
 <body>
 
@@ -403,6 +403,10 @@
       </div>
       <div class="hint" style="margin:6px 0 10px">
         删过但还没真正删掉的东西在这里。恢复＝原样搬回图库；彻底删除＝文件送进 Windows 电脑回收站（仍可还原）。原位置被占用时只跳过，不覆盖。
+      </div>
+      <div id="trash-restore-task" class="hidden" style="margin:0 0 10px">
+        <div id="trash-restore-progress"></div>
+        <div id="trash-restore-note" class="hint"></div>
       </div>
       <div class="btn-row" style="margin-bottom:8px">
         <button class="btn ghost trash-kind active" data-kind="artwork" onclick="trashSwitchKind('artwork')">📦 作品</button>
@@ -988,10 +992,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261127g"></script>
-<script src="/static/wallpaper-admin.js?v=20261127g"></script>
-<script src="/static/management-drawer-state.js?v=20261127g"></script>
-<script src="/static/management-toolbar.js?v=20261127g"></script>
+<script src="/static/app.js?v=20261127h"></script>
+<script src="/static/wallpaper-admin.js?v=20261127h"></script>
+<script src="/static/management-drawer-state.js?v=20261127h"></script>
+<script src="/static/management-toolbar.js?v=20261127h"></script>
 </body>
 </html>
 

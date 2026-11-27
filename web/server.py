@@ -282,6 +282,9 @@ def _scopes_for_request(path: str, method: str, body: "dict | None",
     if p.startswith("/api/library/db-backup/job"):
         # 任务启动/轮询本身不改数据; 完成时由任务线程按真实结果登记数据域
         return (), ids
+    if p.startswith("/api/library/trash/restore/task"):
+        # 全部恢复任务启动/轮询本身不改数据; 完成时由任务线程登记
+        return (), ids
     if p.startswith("/api/library/backup") or p.startswith("/api/library/db-backup"):
         # 备份/恢复/删除只影响备份清单; 恢复是"用旧文件覆盖当前图" → 图库那几张也要重画
         if "/restore" in p:
@@ -4373,6 +4376,120 @@ def _thumb_progress_cb(task_id: str):
                            done=int(ev.get("done") or 0),
                            total=int(ev.get("total") or 0))
     return _cb
+
+
+# 图库回收站「全部恢复」共用任务: 作品视图按作品数, 图片视图按图片数
+_trash_restore_lock = threading.Lock()
+_trash_restore_task = {
+    "id": "", "kind": "", "state": "idle", "stage": "", "done": 0,
+    "total": 0, "message": "", "result": None, "error": None,
+    "created_at": None, "finished_at": None,
+}
+
+
+def _trash_restore_snapshot() -> dict:
+    with _trash_restore_lock:
+        return dict(_trash_restore_task)
+
+
+def _trash_restore_begin(kind: str):
+    with _trash_restore_lock:
+        if _trash_restore_task.get("state") == "running":
+            return dict(_trash_restore_task), False
+        now = time.time()
+        task = {"id": uuid.uuid4().hex, "kind": kind, "state": "running",
+                "stage": "锁定候选", "done": 0, "total": 0, "message": "",
+                "result": None, "error": None, "created_at": now,
+                "finished_at": None}
+        _trash_restore_task.clear()
+        _trash_restore_task.update(task)
+        return dict(task), True
+
+
+def _trash_restore_update(task_id: str, **fields) -> None:
+    with _trash_restore_lock:
+        if _trash_restore_task.get("id") != task_id:
+            return
+        _trash_restore_task.update(fields)
+
+
+def _trash_restore_finish(task_id: str, result=None, error: str = "",
+                          message: str = "") -> None:
+    with _trash_restore_lock:
+        if _trash_restore_task.get("id") != task_id:
+            return
+        _trash_restore_task["result"] = result
+        _trash_restore_task["error"] = error or None
+        _trash_restore_task["message"] = message or (error or "")
+        _trash_restore_task["state"] = "error" if error else "done"
+        _trash_restore_task["finished_at"] = time.time()
+
+
+def _trash_restore_run(task_id: str, kind: str,
+                       ids: "list[str]", items: "list[dict]") -> None:
+    """逐个候选恢复并搬文件, 让进度与成功/跳过/搬回失败三类结果可核对。"""
+    unit = "个作品" if kind == "artwork" else "张图片"
+    total = len(ids) + len(items)
+    img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
+    trash_root = _trash_root()
+    _trash_restore_update(task_id, stage="恢复中", done=0, total=total)
+    restored = 0
+    skipped: "list[dict]" = []
+    move_failed: "list[dict]" = []
+    files_moved = 0
+    restored_aids: "set[str]" = set()
+    try:
+        with _db() as db:
+            for i in range(total):
+                if kind == "artwork":
+                    aid = ids[i]
+                    item = {"artwork_id": aid}
+                    res = db.restore_trashed(artwork_ids=[aid], img_root=img_root,
+                                             trash_root=trash_root)
+                else:
+                    it = items[i]
+                    aid = str(it["artwork_id"])
+                    pn = int(it["page_num"])
+                    item = {"artwork_id": aid, "page_num": pn}
+                    res = db.restore_trashed(
+                        items=[{"artwork_id": aid, "page_num": pn}],
+                        img_root=img_root, trash_root=trash_root)
+                n = len(res["restored_artworks"]) + len(res["restored_pages"])
+                if res["skipped"]:
+                    skipped.append(res["skipped"][0])
+                elif n <= 0:
+                    skipped.append({"item": item, "type": "not_trashed",
+                                    "detail": "已不在回收站里（可能已被恢复或彻底删除）"})
+                else:
+                    moved, bad = _apply_rel_moves(res["rel_moves"], trash_root, img_root)
+                    files_moved += moved
+                    if bad:
+                        move_failed.append({"item": item, "errors": bad[:5]})
+                    else:
+                        restored += 1
+                        for a in res["restored_artworks"]:
+                            restored_aids.add(str(a))
+                        for p in res["restored_pages"]:
+                            restored_aids.add(str(p["artwork_id"]))
+                _trash_restore_update(task_id, done=i + 1)
+        if total <= 0:
+            msg = "回收站是空的"
+        elif not skipped and not move_failed:
+            msg = f"已恢复 {restored} {unit}"
+        else:
+            msg = (f"已恢复 {restored} {unit}：跳过 {len(skipped)} {unit}，"
+                   f"文件搬回失败 {len(move_failed)} {unit}")
+        result = {"kind": kind, "total": total, "restored": restored,
+                  "skipped": skipped, "move_failed": move_failed,
+                  "files_moved": files_moved}
+        _trash_restore_finish(task_id, result=result, message=msg)
+        if restored or skipped or move_failed:
+            audit_log.record("update", "从回收站全部恢复", msg, restored,
+                             ids=sorted(restored_aids) or None)
+            mark_dirty("artworks", "pages", "facets", "stats", "search", "ops",
+                       ids=sorted(restored_aids))
+    except Exception as e:
+        _trash_restore_finish(task_id, error=str(e) or e.__class__.__name__)
 
 
 def warm_thumbs_background(force: bool = False, task_id: "str | None" = None):
@@ -11398,6 +11515,54 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                         "restored_pages": res["restored_pages"],
                         "skipped": res["skipped"],
                         "files_moved": moved, "move_errors": bad[:5]})
+
+    @app.route("/api/library/trash/restore/task", methods=["GET"])
+    def api_library_trash_restore_task():
+        """读取「全部恢复」任务; 关闭回收站页再回来可接回。"""
+        return jsonify({"status": "ok", "task": _trash_restore_snapshot()})
+
+    @app.route("/api/library/trash/restore/task", methods=["POST"])
+    def api_library_trash_restore_task_start():
+        """图库回收站「全部恢复」后台任务: 先锁定候选, 再逐个恢复。
+
+        body: {"kind": "artwork"|"page"}。作品视图按作品数、图片视图按图片数计数;
+        每个候选按「恢复成功 / 冲突跳过 / 文件搬回失败」分别收口。
+        """
+        data = request.get_json(silent=True) or {}
+        kind = str(data.get("kind") or "").strip()
+        if kind not in ("artwork", "page"):
+            return jsonify({"status": "error", "error": "未知恢复视图"}), 400
+        with _db() as db:
+            listed = db.list_trashed(kind)
+        raw = listed.get("items") or []
+        if kind == "artwork":
+            ids = [str(x["artwork_id"]) for x in raw]
+            items: "list[dict]" = []
+        else:
+            ids = []
+            items = [{"artwork_id": str(x["artwork_id"]),
+                      "page_num": int(x["page_num"])} for x in raw]
+        total = len(ids) + len(items)
+        task, created = _trash_restore_begin(kind)
+        if not created:
+            return jsonify({"status": "error", "busy": True, "task": task,
+                            "message": "已有恢复任务正在执行"}), 409
+        if total == 0:
+            _trash_restore_finish(
+                task["id"],
+                result={"kind": kind, "total": 0, "restored": 0,
+                        "skipped": [], "move_failed": [], "files_moved": 0},
+                message="回收站是空的")
+            return jsonify({"status": "ok", "task": _trash_restore_snapshot()})
+        try:
+            threading.Thread(target=_trash_restore_run,
+                             args=(task["id"], kind, ids, items),
+                             daemon=True).start()
+        except Exception as e:
+            err = f"无法启动后台任务：{str(e).splitlines()[0]}"
+            _trash_restore_finish(task["id"], error=err)
+            return jsonify({"status": "error", "error": err}), 500
+        return jsonify({"status": "ok", "task": _trash_restore_snapshot()})
 
     @app.route("/api/library/trash/purge", methods=["POST"])
     def api_library_trash_purge():

@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127g`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127h`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127g`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127h`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,29 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.76 图库回收站「全部恢复」共用进度（2026-11-27，前端 `20261127h`，已发布到安装版）
+
+- **范围**：只接图库回收站的「全部恢复」，作品视图与单张图片视图各一套；壁纸回收站与
+  单个行内恢复保持原样。
+- **后端**：新增 `GET/POST /api/library/trash/restore/task`。启动时用
+  `list_trashed(kind)` 锁定候选，后台逐个恢复，作品视图按作品数、图片视图按图片数计数。
+  每个候选按「恢复成功 / 冲突跳过 / 文件搬回失败」分别收口；搬文件失败不并进成功数。
+  任务完成登记 artworks/pages/facets/stats/search/ops，并写操作日志。
+- **前端**：回收站页新增共用任务区（流动锁定候选 → 计数 → 结果）。关闭回收站页再回来
+  可接回运行中任务；运行期间「全部恢复」按钮禁用。结果明确列出恢复成功数、冲突跳过
+  数及原因、文件搬回失败数及原因。
+- **回归**：新增 T198：作品视图与图片视图各造 3 个候选（正常 / 原路径不同内容冲突 /
+  `os.replace` 失败），核对计数、三类结果、文件去向与部件文案；新增
+  `test_trash_restore_progress.cjs`（真实前端函数 9 项）。全量 **189/189**（159.27 s），
+  日志 `_dev_runtime/diagnostics/trae-20261127h-trash-restore-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 15:50:54`，前端 `20261127h`）在 7813
+  通过三个接口检查与四个 UI 检查；回滚清单
+  `_dev_runtime/backups/publish-20261127h-20261127-155242.json`（4 个旧文件、8 个
+  替换项、15,178,305 字节）。dist 与安装版 exe `0aeb8b1eae0d…`、base_library
+  `f8d3271843e5…`、app.js `a19093cc209c…`、index.html `1707ff199ec7…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127h-1795765854-1795695345-1795519082`、健康正常。
 
 ### 4.75 缩略图缓存复验返修：壁纸离线保护 + 预热启动失败解锁 + 结果文案（2026-11-27，前端 `20261127g`，已发布到安装版）
 
