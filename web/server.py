@@ -4891,6 +4891,286 @@ def _miss_snapshot_locked() -> dict:
     return copy.deepcopy(_MISS_TASK)
 
 
+# 🧹 手动清理临时目录: 设置页点击后后台逐顶层项清理; 同一时间只允许一个执行窗口。
+# 与启动/atexit 的 paths._cleanup_temp 分开 —— 手动清理要逐项报告, 且链接/联接点
+# 只删链接本身, 不碰根外数据。
+_TEMP_TASK_LOCK = threading.Lock()
+_TEMP_EXEC_LOCK = threading.Lock()
+_TEMP_TASK = {
+    "id": "", "status": "idle", "stage": "", "done": 0, "total": 0,
+    "current": "", "cleaned": 0, "skipped": 0, "failed": 0,
+    "freed_bytes": 0, "freed_mb": 0.0,
+    "skipped_items": [], "failed_items": [], "errors": [],
+    "empty": False, "error": "", "root": "", "created_at": 0.0,
+    "finished_at": 0.0, "result": None,
+}
+# 完成事件不能放进 _TEMP_TASK (deepcopy 对 Lock/Event 会失败); 只保留当前任务的。
+_TEMP_TASK_EVENTS: "dict[str, threading.Event]" = {}
+# 测试钩子 (生产为 None): 覆盖临时根 / 在 scan、item 阶段插入动作。
+_TEMP_TASK_ROOT = None
+_TEMP_TASK_HOOK = None
+
+
+def _temp_snapshot_locked() -> dict:
+    return copy.deepcopy(_TEMP_TASK)
+
+
+def _temp_event_set(task_id: str) -> None:
+    with _TEMP_TASK_LOCK:
+        ev = _TEMP_TASK_EVENTS.get(task_id)
+    if ev is not None:
+        ev.set()
+
+
+def _temp_call_hook(phase: str, **info) -> None:
+    hook = _TEMP_TASK_HOOK
+    if not hook:
+        return
+    try:
+        hook(phase, info)
+    except Exception:
+        pass
+
+
+def _temp_active_reasons(root: Path) -> "dict[str, str]":
+    """本次枚举到的顶层条目中, 当前应用任务正在使用的项 → 跳过原因。"""
+    out: "dict[str, str]" = {}
+    try:
+        if _cart_busy.is_set():
+            out["downloads"] = "下载任务正在使用"
+    except Exception:
+        pass
+    try:
+        br = paths.browser_temp_root()
+        root_abs = Path(os.path.abspath(str(root)))
+        br_abs = Path(os.path.abspath(str(br)))
+        try:
+            rel = br_abs.relative_to(root_abs)
+        except ValueError:
+            rel = None
+        if rel is not None and len(rel.parts) == 1:
+            busy = (_manual_driver is not None or _search_client is not None
+                    or bool(_REVERSE_PROGRESS.get("running"))
+                    or bool(_SRC_SEARCH.get("running")))
+            if busy:
+                out[rel.parts[0]] = "搜索或登录浏览器正在使用"
+    except Exception:
+        pass
+    try:
+        out[f"pixiv_mem_db_{os.getpid()}"] = "当前进程正在使用的数据库临时目录"
+    except Exception:
+        pass
+    return out
+
+
+def _temp_run(task_id: str, root: Path) -> None:
+    """后台执行一次手动临时目录清理; 每个顶层项结算后才推进 N。"""
+    def upd(**kw) -> None:
+        with _TEMP_TASK_LOCK:
+            if _TEMP_TASK["id"] == task_id:
+                _TEMP_TASK.update(kw)
+
+    def is_current() -> bool:
+        with _TEMP_TASK_LOCK:
+            return _TEMP_TASK["id"] == task_id
+
+    def fail(msg: str) -> None:
+        upd(status="error", stage="", current="", error=msg,
+            finished_at=time.time())
+        try:
+            _reporter().warn(f"🧹 临时目录清理失败: {msg}")
+        except Exception:
+            pass
+
+    def settle(outcome: str, name: str, reason: str = "",
+               freed: int = 0) -> bool:
+        with _TEMP_TASK_LOCK:
+            if _TEMP_TASK["id"] != task_id:
+                return False
+            _TEMP_TASK["done"] = int(_TEMP_TASK["done"]) + 1
+            _TEMP_TASK["current"] = ""
+            _TEMP_TASK["freed_bytes"] = (int(_TEMP_TASK["freed_bytes"])
+                                         + max(0, int(freed or 0)))
+            if outcome == "cleaned":
+                _TEMP_TASK["cleaned"] = int(_TEMP_TASK["cleaned"]) + 1
+            elif outcome == "skipped":
+                _TEMP_TASK["skipped"] = int(_TEMP_TASK["skipped"]) + 1
+                if len(_TEMP_TASK["skipped_items"]) < 50:
+                    _TEMP_TASK["skipped_items"].append(
+                        {"name": name, "reason": reason})
+            else:
+                _TEMP_TASK["failed"] = int(_TEMP_TASK["failed"]) + 1
+                if len(_TEMP_TASK["failed_items"]) < 50:
+                    _TEMP_TASK["failed_items"].append(
+                        {"name": name, "reason": reason})
+                if len(_TEMP_TASK["errors"]) < 50:
+                    _TEMP_TASK["errors"].append(f"{name}：{reason}")
+            return True
+
+    try:
+        if not root.is_dir():
+            fail(f"临时目录不可用：{root}")
+            return
+        try:
+            entries = paths.list_temp_entries(root)
+        except OSError as e:
+            fail(f"无法读取临时目录：{e}")
+            return
+        _temp_call_hook("scan", root=str(root), entries=entries)
+        total = len(entries)
+        upd(stage="cleaning", total=total)
+        if not total:
+            with _TEMP_TASK_LOCK:
+                if _TEMP_TASK["id"] != task_id:
+                    return
+                _TEMP_TASK.update({
+                    "status": "done", "stage": "", "current": "",
+                    "done": 0, "cleaned": 0, "skipped": 0, "failed": 0,
+                    "freed_bytes": 0, "freed_mb": 0.0, "empty": True,
+                    "finished_at": time.time(),
+                    "result": {"total": 0, "cleaned": 0, "skipped": 0,
+                               "failed": 0, "freed_bytes": 0, "freed_mb": 0.0,
+                               "empty": True, "skipped_items": [],
+                               "failed_items": [], "root": str(root)},
+                })
+            mark_dirty("settings")
+            try:
+                _reporter().log("🧹 临时目录为空，无需清理")
+            except Exception:
+                pass
+            return
+
+        active = _temp_active_reasons(root)
+        for idx, entry in enumerate(entries):
+            if not is_current():
+                return
+            name = str(entry.get("name") or "")
+            upd(current=name)
+            _temp_call_hook("item", name=name, index=idx, total=total)
+            reason = active.get(name) or ""
+            if reason:
+                settle("skipped", name, reason)
+                continue
+            try:
+                res = paths.remove_temp_entry(entry, root)
+            except Exception as e:
+                res = {"outcome": "failed",
+                       "reason": f"{type(e).__name__}: {e}", "freed": 0}
+            outcome = str((res or {}).get("outcome") or "failed")
+            if outcome not in ("cleaned", "skipped", "failed"):
+                outcome = "failed"
+            settle(outcome, name, str((res or {}).get("reason") or ""),
+                   int((res or {}).get("freed") or 0))
+
+        with _TEMP_TASK_LOCK:
+            if _TEMP_TASK["id"] != task_id:
+                return
+            cleaned = int(_TEMP_TASK["cleaned"])
+            skipped = int(_TEMP_TASK["skipped"])
+            failed = int(_TEMP_TASK["failed"])
+            freed_bytes = int(_TEMP_TASK["freed_bytes"])
+            freed_mb = round(freed_bytes / 1048576, 2)
+            result = {
+                "total": total, "cleaned": cleaned, "skipped": skipped,
+                "failed": failed, "freed_bytes": freed_bytes,
+                "freed_mb": freed_mb, "empty": False,
+                "skipped_items": list(_TEMP_TASK["skipped_items"]),
+                "failed_items": list(_TEMP_TASK["failed_items"]),
+                "root": str(root),
+            }
+            _TEMP_TASK.update({
+                "status": "done", "stage": "", "current": "",
+                "done": cleaned + skipped + failed, "cleaned": cleaned,
+                "skipped": skipped, "failed": failed,
+                "freed_bytes": freed_bytes, "freed_mb": freed_mb,
+                "empty": False, "finished_at": time.time(), "result": result,
+            })
+        mark_dirty("settings")
+        try:
+            _reporter().log(f"🧹 临时目录已清理: 清理 {cleaned} 项, "
+                            f"跳过 {skipped}, 失败 {failed}, 释放 {freed_mb} MB")
+        except Exception:
+            pass
+    except Exception as e:
+        fail(f"清理任务异常：{type(e).__name__}: {e}")
+
+
+def _temp_task_start() -> "tuple[str, dict]":
+    """启动/接回一次手动临时目录清理。返回 (started|already|busy, 快照)。"""
+    with _TEMP_TASK_LOCK:
+        if _TEMP_TASK["status"] == "running":
+            return "already", _temp_snapshot_locked()
+    if not _TEMP_EXEC_LOCK.acquire(blocking=False):
+        with _TEMP_TASK_LOCK:
+            return "busy", _temp_snapshot_locked()
+    with _TEMP_TASK_LOCK:
+        if _TEMP_TASK["status"] == "running":
+            _TEMP_EXEC_LOCK.release()
+            return "already", _temp_snapshot_locked()
+        tid = uuid.uuid4().hex
+        ev = threading.Event()
+        _TEMP_TASK_EVENTS.clear()
+        _TEMP_TASK_EVENTS[tid] = ev
+        try:
+            root = (Path(_TEMP_TASK_ROOT) if _TEMP_TASK_ROOT is not None
+                    else paths.temp_root())
+        except Exception as e:
+            _TEMP_TASK.update({
+                "id": tid, "status": "error", "stage": "", "done": 0,
+                "total": 0, "current": "", "cleaned": 0, "skipped": 0,
+                "failed": 0, "freed_bytes": 0, "freed_mb": 0.0,
+                "skipped_items": [], "failed_items": [], "errors": [],
+                "empty": False, "error": f"临时目录不可用：{e}",
+                "root": "", "created_at": time.time(),
+                "finished_at": time.time(), "result": None,
+            })
+            ev.set()
+            _TEMP_EXEC_LOCK.release()
+            return "started", _temp_snapshot_locked()
+        _TEMP_TASK.update({
+            "id": tid, "status": "running", "stage": "scanning", "done": 0,
+            "total": 0, "current": "", "cleaned": 0, "skipped": 0, "failed": 0,
+            "freed_bytes": 0, "freed_mb": 0.0, "skipped_items": [],
+            "failed_items": [], "errors": [], "empty": False, "error": "",
+            "root": str(root), "created_at": time.time(),
+            "finished_at": 0.0, "result": None,
+        })
+        started = _temp_snapshot_locked()
+
+    def _task():
+        try:
+            _temp_run(tid, root)
+        finally:
+            _temp_event_set(tid)
+            try:
+                _TEMP_EXEC_LOCK.release()
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_task, daemon=True, name="temp-clean").start()
+    except Exception as e:
+        msg = f"无法启动清理线程：{type(e).__name__}: {e}"
+        with _TEMP_TASK_LOCK:
+            if _TEMP_TASK["id"] == tid:
+                _TEMP_TASK.update({"status": "error", "stage": "",
+                                   "finished_at": time.time(), "error": msg})
+        _temp_event_set(tid)
+        _TEMP_EXEC_LOCK.release()
+    return "started", started
+
+
+def _temp_task_wait(task_id: str, timeout: float = 600.0) -> "dict | None":
+    with _TEMP_TASK_LOCK:
+        ev = _TEMP_TASK_EVENTS.get(task_id)
+    if ev is not None:
+        ev.wait(timeout)
+    with _TEMP_TASK_LOCK:
+        if _TEMP_TASK["id"] == task_id:
+            return _temp_snapshot_locked()
+    return None
+
+
 # 设置页三个缩略图缓存操作共用一条可重开的任务状态
 _thumb_task_lock = threading.Lock()
 _thumb_task = {
@@ -6204,6 +6484,14 @@ def _size_mb(target: "str | Path", *, cap: int = 30000) -> "float | None":
                 for e in it:
                     try:
                         if e.is_dir(follow_symlinks=False):
+                            # 链接/目录联接点不跟进去: 统计占用不能出根, 也不能成环
+                            try:
+                                if (e.is_symlink()
+                                        or (getattr(e, "is_junction", None)
+                                            and e.is_junction())):
+                                    continue
+                            except OSError:
+                                continue
                             stack.append(Path(e.path))
                         elif e.is_file(follow_symlinks=False):
                             total += e.stat(follow_symlinks=False).st_size
@@ -15824,20 +16112,65 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         mark_dirty("settings")
         return jsonify({"ok": True, "saved": True, "restart_required": True, **payload})
 
+    @app.route("/api/paths/temp/clean/task", methods=["POST"])
+    def api_paths_temp_clean_task_start():
+        """启动/接回一次手动临时目录清理 (设置页共用进度)。
+
+        同一临时目录同时只允许一个执行窗口: 正在运行则重复提交返回 already + 当前
+        任务快照; 极小的启动窗口竞争返回 busy + 快照。任务在后台线程逐顶层项推进,
+        结果凭任务 id 读取。
+        """
+        kind, task = _temp_task_start()
+        if kind == "busy":
+            return jsonify({"status": "busy",
+                            "error": "已有临时目录清理任务在执行，请稍后重试",
+                            "task": task}), 409
+        if kind == "already":
+            return jsonify({"status": "ok", "already": True, "task": task})
+        return jsonify({"status": "ok", "task": task})
+
+    @app.route("/api/paths/temp/clean/task", methods=["GET"])
+    def api_paths_temp_clean_task_status():
+        """读取当前手动临时清理任务; 不带 id 或 id 过期一律不返回结果。"""
+        tid = str(request.args.get("id") or "").strip()
+        with _TEMP_TASK_LOCK:
+            if not tid or _TEMP_TASK["id"] != tid:
+                return jsonify({"status": "idle", "task": None}), 404
+            return jsonify({"status": "ok", "task": _temp_snapshot_locked()})
+
     @app.route("/api/paths/temp/clean", methods=["POST"])
     def api_paths_temp_clean():
         """一键清空临时目录 (浏览器 profile / 上传缓冲 / 各种临时文件)。
 
-        临时目录本来就是「随时可整删」的, 手动清与启动时那次自动清理同一套逻辑
-        (``aggressive=True`` 表示连当前进程正在用的也删, 下次用时重建)。"""
-        from utils import paths as _p
-        try:
-            st = _p._cleanup_temp(max_age_h=0, aggressive=True)
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
-        _reporter().log(f"🧹 临时目录已清理: 删除 {st.get('removed', 0)} 项, 释放 {st.get('freed_mb', 0)} MB")
-        return jsonify({"ok": True, "removed": st.get("removed", 0),
-                        "freed_mb": st.get("freed_mb", 0), "sizes": _paths_snapshot()["sizes"]})
+        旧调用保留同步等待与原有返回字段 (ok/removed/freed_mb/sizes), 内部复用
+        设置页的后台任务: 空闲时启动同一任务并等它结束; 已有任务在跑则接回等待。
+        链接/联接点只删链接本身, 不碰根外数据。
+        """
+        kind, task = _temp_task_start()
+        if kind == "busy":
+            if (task and task.get("status") == "running"
+                    and task.get("id")):
+                task = _temp_task_wait(str(task["id"]), 600.0)
+            else:
+                return jsonify({"ok": False,
+                                "error": "已有临时目录清理任务在执行"}), 409
+        elif task and task.get("status") == "running":
+            task = _temp_task_wait(str(task.get("id") or ""), 600.0)
+        if not task:
+            return jsonify({"ok": False, "error": "清理任务状态不可用"}), 500
+        if task.get("status") == "error":
+            return jsonify({"ok": False,
+                            "error": task.get("error") or "清理失败"}), 500
+        if task.get("status") == "running":
+            return jsonify({"ok": False,
+                            "error": "清理超时，请稍后查看任务状态"}), 500
+        sizes = _paths_snapshot()["sizes"]
+        return jsonify({"ok": True, "removed": int(task.get("cleaned") or 0),
+                        "freed_mb": float(task.get("freed_mb") or 0),
+                        "sizes": sizes,
+                        "skipped": int(task.get("skipped") or 0),
+                        "failed": int(task.get("failed") or 0),
+                        "freed_bytes": int(task.get("freed_bytes") or 0)})
 
     # ---------------- ✨ 壁纸文案 AI ----------------
     @app.route("/api/ai")

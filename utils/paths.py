@@ -16,6 +16,7 @@ temp/ 必须是项目独占、可随时整删、不混进系统盘通用 Temp �
 """
 import atexit
 import os
+import stat
 import sys
 import tempfile
 import time
@@ -205,6 +206,198 @@ def _dir_size_bytes(p: Path) -> int:
             except OSError:
                 pass
     return s
+
+
+# ---------- 手动清理临时目录: 顶层条目枚举 + 安全删除 ----------
+# 手动清理与启动/atexit 的 _cleanup_temp 分开: 前者要逐顶层项报告进度,
+# 且必须保证链接/目录联接点只删链接本身, 不碰根外数据。
+
+_FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+
+def _lstat(p: Path):
+    try:
+        return os.lstat(str(p))
+    except OSError:
+        return None
+
+
+def _is_reparse_point(p: Path, st=None) -> bool:
+    """符号链接 / 目录联接点。用 lstat 属性判断, 不跟随目标。"""
+    st = st if st is not None else _lstat(p)
+    if st is None:
+        return False
+    attrs = int(getattr(st, "st_file_attributes", 0) or 0)
+    if attrs and (attrs & _FILE_ATTRIBUTE_REPARSE_POINT):
+        return True
+    try:
+        if p.is_symlink():
+            return True
+    except OSError:
+        pass
+    try:
+        is_j = getattr(p, "is_junction", None)
+        if callable(is_j) and is_j():
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def temp_entry_identity(p: Path) -> "tuple | None":
+    """顶层条目身份。目录 mtime/size 随直接子项变化, 用于发现扫描后被替换/新增。"""
+    st = _lstat(p)
+    if st is None:
+        return None
+    reparse = _is_reparse_point(p, st)
+    if reparse:
+        kind = "link"
+    elif stat.S_ISDIR(st.st_mode):
+        kind = "dir"
+    else:
+        kind = "file"
+    return (int(getattr(st, "st_dev", 0) or 0),
+            int(getattr(st, "st_ino", 0) or 0),
+            kind,
+            int(getattr(st, "st_reparse_tag", 0) or 0),
+            int(getattr(st, "st_size", 0) or 0),
+            int(getattr(st, "st_mtime_ns", 0) or 0))
+
+
+def list_temp_entries(root: "str | Path") -> "list[dict]":
+    """只枚举临时根顶层条目; 根不可读时抛 OSError。"""
+    root_p = Path(root)
+    out: "list[dict]" = []
+    with os.scandir(str(root_p)) as it:
+        for e in it:
+            p = Path(e.path)
+            ident = temp_entry_identity(p)
+            if ident is None:
+                continue
+            out.append({"name": e.name, "path": str(p),
+                        "kind": ident[2], "identity": ident})
+    out.sort(key=lambda x: str(x.get("name") or "").lower())
+    return out
+
+
+def _remove_link(p: Path) -> None:
+    """只删链接本身。目录联接点 unlink 会失败, 回退 rmdir (不会删目标内容)。"""
+    try:
+        os.unlink(str(p))
+        return
+    except OSError:
+        pass
+    os.rmdir(str(p))
+
+
+def _remove_tree(path: Path, errors: "list[str]") -> int:
+    """删除普通目录内容, 不跟随任何 reparse point; 返回实际删除的文件字节。"""
+    freed = 0
+    stack = [(path, False)]
+    while stack:
+        cur, visited = stack.pop()
+        if visited:
+            try:
+                os.rmdir(str(cur))
+            except OSError as e:
+                if not os.path.exists(str(cur)):
+                    continue
+                errors.append(f"{cur.name or cur}: {e}")
+            continue
+        st = _lstat(cur)
+        if st is not None and _is_reparse_point(cur, st):
+            try:
+                _remove_link(cur)
+            except OSError as e:
+                errors.append(f"{cur.name or cur}: {e}")
+            continue
+        try:
+            with os.scandir(str(cur)) as it:
+                children = list(it)
+        except OSError as e:
+            errors.append(f"{cur.name or cur}: {e}")
+            continue
+        stack.append((cur, True))
+        for e in children:
+            cp = Path(e.path)
+            cst = _lstat(cp)
+            if cst is None:
+                continue
+            if _is_reparse_point(cp, cst):
+                try:
+                    _remove_link(cp)
+                except OSError as ex:
+                    errors.append(f"{cp.name}: {ex}")
+                continue
+            if stat.S_ISDIR(cst.st_mode):
+                stack.append((cp, False))
+                continue
+            size = int(getattr(cst, "st_size", 0) or 0)
+            try:
+                os.unlink(str(cp))
+                freed += size
+            except OSError as ex:
+                errors.append(f"{cp.name}: {ex}")
+    return freed
+
+
+def _same_path(a: "str | Path", b: "str | Path") -> bool:
+    return (os.path.normcase(os.path.abspath(str(a)))
+            == os.path.normcase(os.path.abspath(str(b))))
+
+
+def remove_temp_entry(entry: dict, root: "str | Path") -> dict:
+    """删除一个已枚举的顶层条目。
+
+    返回 ``{outcome: cleaned|skipped|failed, reason, freed}``。
+    链接/联接点只删链接本身; 目录失败时 freed 只含实际删除的文件字节。
+    """
+    p = Path(str((entry or {}).get("path") or ""))
+    if not p.name or not _same_path(p.parent, root):
+        return {"outcome": "skipped", "reason": "目标已不在临时目录根内",
+                "freed": 0}
+    ident = temp_entry_identity(p)
+    if ident is None:
+        return {"outcome": "cleaned", "reason": "目标已不存在", "freed": 0}
+    if entry.get("identity") is not None and ident != entry.get("identity"):
+        return {"outcome": "skipped", "reason": "处理前已被替换或修改",
+                "freed": 0}
+    st = _lstat(p)
+    if st is None:
+        return {"outcome": "cleaned", "reason": "目标已不存在", "freed": 0}
+    if _is_reparse_point(p, st):
+        try:
+            _remove_link(p)
+            return {"outcome": "cleaned", "reason": "已删除链接，目标数据保留",
+                    "freed": 0}
+        except OSError as e:
+            return {"outcome": "failed", "reason": f"链接无法删除：{e}",
+                    "freed": 0}
+    if stat.S_ISDIR(st.st_mode):
+        errors: "list[str]" = []
+        freed = _remove_tree(p, errors)
+        if not os.path.exists(str(p)):
+            if errors:
+                return {"outcome": "failed",
+                        "reason": f"部分文件未能删除：{errors[0]}",
+                        "freed": freed}
+            return {"outcome": "cleaned", "reason": "", "freed": freed}
+        try:
+            os.rmdir(str(p))
+            return {"outcome": "cleaned", "reason": "", "freed": freed}
+        except OSError as e:
+            if not os.path.exists(str(p)):
+                return {"outcome": "cleaned", "reason": "", "freed": freed}
+            reason = (f"部分文件未能删除：{errors[0]}" if errors
+                      else f"目录无法删除：{e}")
+            return {"outcome": "failed", "reason": reason, "freed": freed}
+    size = int(getattr(st, "st_size", 0) or 0)
+    try:
+        os.unlink(str(p))
+        return {"outcome": "cleaned", "reason": "", "freed": size}
+    except OSError as e:
+        return {"outcome": "failed",
+                "reason": f"文件无法删除（可能被占用）：{e}", "freed": 0}
 
 
 def _cleanup_temp(max_age_h: "int | None" = None,

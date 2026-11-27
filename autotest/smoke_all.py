@@ -3145,6 +3145,7 @@ def run_suite() -> SuiteResult:
     suite.add("T199", "🧹 壁纸副本扫描: 核对→计数阶段 + 读取失败统计 + 只读 (隔离数据)", t199_wall_dupes_progress)
     suite.add("T200", "🔍 图库以图搜图: 特征提取/加载/检索阶段 + 任务号读取 + 临时图清理 (隔离数据)", t200_library_similar_progress)
     suite.add("T201", "🗑️ 清理缺失作品: 预览核对 + 复核/清理/回收阶段 + 跳过失败与任务归属 (隔离数据)", t201_missing_cleanup_progress)
+    suite.add("T202", "🧹 清理临时目录: 扫描→逐顶层项计数 + 跳过/失败/链接保护 + 互斥 (隔离数据)", t202_temp_clean_progress)
     suite.write_report()
     return suite
 
@@ -10488,7 +10489,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261128c" and _mss.group(1) == "20261128c", \
+    assert _mjs and _mss and _mjs.group(1) == "20261128d" and _mss.group(1) == "20261128d", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10583,7 +10584,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261128c', html) and _re.search(r'app\.js\?v=20261128c', html), \
+    assert _re.search(r'style\.css\?v=20261128d', html) and _re.search(r'app\.js\?v=20261128d', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10991,7 +10992,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html, \
+        assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13265,7 +13266,7 @@ def t134_launcher_hotapply_and_paths() -> None:
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
         for _need in ("loadPaths()", "function paintPaths(", "function pickPathDir(",
                       "function clearPathDir(", "function cleanTempDir(",
-                      "'/api/paths'", "'/api/paths/pick'", "'/api/paths/temp/clean'",
+                      "'/api/paths'", "'/api/paths/pick'", "'/api/paths/temp/clean/task'",
                       "const PATH_EDITABLE"):
             assert _need in js, f"前端少了 {_need}"
         for _id in ('id="path-img-input"', 'id="path-data-input"', 'id="path-temp-input"',
@@ -13564,7 +13565,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261128c" in _h and "style.css?v=20261128c" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261128d" in _h and "style.css?v=20261128d" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14933,7 +14934,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html
+            assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -15042,7 +15043,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html
+            assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -15153,7 +15154,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html
+    assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -15193,7 +15194,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261128c" in html
+    assert "20261128d" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15904,7 +15905,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261128c" in html
+    assert "同步磁盘索引" in html and "20261128d" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16320,7 +16321,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128c" in html
+    assert "20261128d" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -17054,7 +17055,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128c" in html
+    assert "20261128d" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -19604,7 +19605,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261128c" in html and "app.js?v=20261128c" in html
+    assert "style.css?v=20261128d" in html and "app.js?v=20261128d" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -19810,7 +19811,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261128c" in html
+    assert "20261128d" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20272,7 +20273,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261128c" in html
+    assert "20261128d" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20380,7 +20381,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261128c" in html
+    assert "20261128d" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20492,7 +20493,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261128c" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128d" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20637,7 +20638,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261128c" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128d" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -21008,7 +21009,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261128c" in html
+    assert "20261128d" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -21034,7 +21035,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128c" in html
+    assert "20261128d" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -21060,7 +21061,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261128c" in html
+    assert "20261128d" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -21086,7 +21087,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128c" in html
+    assert "20261128d" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -21111,7 +21112,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128c" in html
+    assert "20261128d" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -21129,7 +21130,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128c" in html
+    assert "20261128d" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -22820,7 +22821,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261128c" in html
+        assert "20261128d" in html
     finally:
         for _d in dbs:
             try:
@@ -23122,7 +23123,7 @@ def t195_normalize_png_progress() -> None:
             (nr.returncode, nr.stdout, nr.stderr)
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
             encoding="utf-8")
-        assert "app.js?v=20261128c" in html and "style.css?v=20261128c" in html
+        assert "app.js?v=20261128d" in html and "style.css?v=20261128d" in html
     finally:
         cif.normalize_to_png = orig_norm
         ucfg.ingest_auto_png = patched
@@ -23149,7 +23150,7 @@ def t196_jpg_progress_ui() -> None:
         assert token in js, f"单张转 JPG 进度接线缺失: {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
-    assert "app.js?v=20261128c" in html and "style.css?v=20261128c" in html
+    assert "app.js?v=20261128d" in html and "style.css?v=20261128d" in html
 
     node_test = PROJECT_ROOT / "autotest" / "test_jpg_progress_ui.cjs"
     nr = _subprocess.run(
@@ -25405,6 +25406,411 @@ def t201_missing_cleanup_progress() -> None:
                                   "skipped_items": [], "failed_items": [],
                                   "cleaned_ids": [], "recycle_failed": [],
                                   "recycle_skipped": [], "errors": [], "ids": []})
+        shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t202_temp_clean_progress() -> None:
+    """T202: 清理临时目录共用进度 (隔离临时根/合成文件)。
+
+    覆盖扫描→逐顶层项计数、空根、不可读根、占用/部分失败、下载/浏览器活跃项跳过、
+    扫描后新增与同名替换、顶层/嵌套目录联接点保留根外数据、重复提交接回、
+    旧接口字段与阻塞等待、静态接线与 Node 前端用例。"""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+    import threading
+    import time
+
+    import utils.paths as upaths
+    import web.server as ws
+
+    tmp = Path(tempfile.mkdtemp(prefix="t202temp_",
+                                dir=str(upaths.temp_root())))
+    outside = tmp / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_bytes(b"KEEP")
+
+    orig_root = ws._TEMP_TASK_ROOT
+    orig_hook = ws._TEMP_TASK_HOOK
+    orig_snapshot = ws._paths_snapshot
+    orig_list = upaths.list_temp_entries
+    orig_browser_root = upaths.browser_temp_root
+    orig_search = ws._search_client
+    orig_manual = ws._manual_driver
+    cart_was_set = ws._cart_busy.is_set()
+
+    ws._paths_snapshot = lambda: {
+        "saved": {}, "effective": {"temp_root": str(tmp)},
+        "sizes": {"temp": 0.0, "db": 0.0, "thumbs": 0.0,
+                  "feature_db": 0.0, "img": 0.0},
+    }
+    gates: "list[threading.Event]" = []
+
+    def reset_state() -> None:
+        ws._TEMP_TASK_HOOK = None
+        with ws._TEMP_TASK_LOCK:
+            ws._TEMP_TASK.update({
+                "id": "", "status": "idle", "stage": "", "done": 0,
+                "total": 0, "current": "", "cleaned": 0, "skipped": 0,
+                "failed": 0, "freed_bytes": 0, "freed_mb": 0.0,
+                "skipped_items": [], "failed_items": [], "errors": [],
+                "empty": False, "error": "", "root": "", "created_at": 0.0,
+                "finished_at": 0.0, "result": None})
+            ws._TEMP_TASK_EVENTS.clear()
+
+    client = ws.create_app().test_client()
+
+    def wait_task(tid: str, timeout: float = 30.0):
+        end = time.time() + timeout
+        states = []
+        got = {}
+        while time.time() < end:
+            resp = client.get(f"/api/paths/temp/clean/task?id={tid}")
+            if resp.status_code == 404:
+                return resp.get_json(), states
+            got = (resp.get_json() or {}).get("task") or {}
+            states.append((got.get("status"), got.get("stage"),
+                           int(got.get("done") or 0),
+                           int(got.get("total") or 0)))
+            if got.get("status") != "running":
+                time.sleep(0.08)   # 终态写入后线程还要释放执行窗口
+                return got, states
+            time.sleep(0.02)
+        raise AssertionError(f"临时目录清理任务超时: {got}")
+
+    def start(root: Path):
+        ws._TEMP_TASK_ROOT = root
+        return client.post("/api/paths/temp/clean/task")
+
+    def run(root: Path):
+        r = start(root)
+        assert r.status_code == 200, r.data
+        j = r.get_json()
+        assert j["status"] == "ok" and j.get("task"), j
+        return j["task"], *wait_task(j["task"]["id"])
+
+    def make_junction(link: Path, target: Path) -> None:
+        cmd = f'cmd /c mklink /J "{link}" "{target}"'
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        ok = bool(getattr(link, "is_junction", lambda: False)())
+        if r.returncode != 0 or not ok:
+            try:
+                os.symlink(str(target), str(link), target_is_directory=True)
+            except OSError as e:
+                raise AssertionError(
+                    f"无法创建目录联接点: rc={r.returncode} "
+                    f"out={r.stdout} err={r.stderr} {e}")
+
+    try:
+        # ① 顶层文件 + 多子项目录 + 空目录 + 联接点: 扫描后固定 M, 逐项结算
+        reset_state()
+        root1 = tmp / "case1"
+        (root1 / "folder" / "nested").mkdir(parents=True)
+        (root1 / "folder" / "a.txt").write_bytes(b"AAAAA")
+        (root1 / "folder" / "nested" / "b.txt").write_bytes(b"BBBBBBB")
+        (root1 / "empty_dir").mkdir()
+        (root1 / "loose.bin").write_bytes(b"0123456789")
+        (root1 / "replace.bin").write_bytes(b"OLD")
+        make_junction(root1 / "linkdir", outside)
+
+        scan_ready = threading.Event()
+        item_ready = threading.Event()
+        item_gate = threading.Event()
+        gates.extend([item_gate])
+        seen = {"n": 0}
+
+        def hook(phase, info):
+            if phase == "scan":
+                (root1 / "new-after-scan.bin").write_bytes(b"NEW")
+                (root1 / "replace.bin").write_bytes(b"REPLACED")
+                scan_ready.set()
+                return
+            if phase == "item":
+                seen["n"] += 1
+                if seen["n"] == 2:
+                    item_ready.set()
+                    item_gate.wait(10)
+
+        ws._TEMP_TASK_HOOK = hook
+        r = start(root1)
+        assert r.status_code == 200, r.data
+        started = r.get_json()["task"]
+        assert started["status"] == "running" and started["stage"] == "scanning", started
+        assert scan_ready.wait(5), "扫描钩子未执行"
+        mid = (client.get(f"/api/paths/temp/clean/task?id={started['id']}")
+               .get_json() or {}).get("task") or {}
+        assert mid["status"] == "running" and mid["stage"] == "cleaning", mid
+        assert int(mid["total"]) == 5, mid   # empty_dir/folder/linkdir/loose/replace
+        assert int(mid["done"]) == 0, mid
+        assert item_ready.wait(5), "第二项钩子未执行"
+        mid2 = (client.get(f"/api/paths/temp/clean/task?id={started['id']}")
+                .get_json() or {}).get("task") or {}
+        assert int(mid2["done"]) == 1 and int(mid2["total"]) == 5, mid2
+        assert mid2.get("current"), mid2
+        item_gate.set()
+        done, states = wait_task(started["id"])
+        assert done["status"] == "done", done
+        res = done["result"]
+        assert res["total"] == 5, res
+        assert res["cleaned"] == 4, res
+        assert res["skipped"] == 1, res
+        assert res["failed"] == 0, res
+        assert int(res["freed_bytes"]) == 22, res   # loose 10 + folder 5+7
+        assert res["skipped_items"][0]["name"] == "replace.bin", res
+        assert "替换" in res["skipped_items"][0]["reason"], res
+        assert not (root1 / "empty_dir").exists()
+        assert not (root1 / "folder").exists()
+        assert not (root1 / "loose.bin").exists()
+        assert not os.path.lexists(str(root1 / "linkdir")), "顶层联接点未删除"
+        assert (outside / "keep.txt").read_bytes() == b"KEEP", "根外数据被改动"
+        assert (root1 / "replace.bin").read_bytes() == b"REPLACED"
+        assert (root1 / "new-after-scan.bin").read_bytes() == b"NEW", \
+            "扫描后新增的顶层条目不得被删除"
+        assert any(s[1] == "cleaning" for s in states), states
+
+        # ② 空根: 直接完成并标记 empty
+        reset_state()
+        root2 = tmp / "case2"
+        root2.mkdir()
+        _, done2, _ = run(root2)
+        assert done2["status"] == "done" and done2["result"]["empty"] is True, done2
+        assert done2["result"]["total"] == 0, done2
+
+        # ③ 不可读根: 明确失败, 文件保留
+        reset_state()
+        root3 = tmp / "case3"
+        root3.mkdir()
+        (root3 / "keep.bin").write_bytes(b"KEEP3")
+
+        def bad_list(_root):
+            raise PermissionError("拒绝访问")
+
+        upaths.list_temp_entries = bad_list
+        _, done3, _ = run(root3)
+        assert done3["status"] == "error", done3
+        assert "无法读取临时目录" in (done3.get("error") or ""), done3
+        assert (root3 / "keep.bin").read_bytes() == b"KEEP3"
+        upaths.list_temp_entries = orig_list
+
+        # ④ 被占用 + 部分失败: 只算实际删除字节, 目录不得按整目录释放
+        reset_state()
+        root4 = tmp / "case4"
+        (root4 / "locked_dir").mkdir(parents=True)
+        (root4 / "locked_dir" / "ok.txt").write_bytes(b"OKOKO")
+        lock_path = root4 / "locked_dir" / "locked.bin"
+        lock_path.write_bytes(b"LOCKED7")
+        fh = open(lock_path, "rb")
+        try:
+            _, done4, _ = run(root4)
+            assert done4["result"]["failed"] == 1, done4
+            assert done4["result"]["cleaned"] == 0, done4
+            assert int(done4["result"]["freed_bytes"]) == 5, done4
+            assert not (root4 / "locked_dir" / "ok.txt").exists()
+            assert lock_path.read_bytes() == b"LOCKED7"
+            reason = done4["result"]["failed_items"][0]["reason"]
+            assert "未能删除" in reason or "占用" in reason, reason
+        finally:
+            fh.close()
+        _, done4b, _ = run(root4)
+        assert done4b["result"]["cleaned"] == 1, done4b
+        assert not (root4 / "locked_dir").exists()
+
+        # ⑤ 下载任务正在使用 downloads: 跳过; 结束后可清理
+        reset_state()
+        root5 = tmp / "case5"
+        (root5 / "downloads").mkdir(parents=True)
+        (root5 / "downloads" / "keep.bin").write_bytes(b"DL")
+        (root5 / "other.bin").write_bytes(b"OTHER")
+        ws._cart_busy.set()
+        try:
+            _, done5, _ = run(root5)
+            assert done5["result"]["skipped"] == 1, done5
+            assert done5["result"]["cleaned"] == 1, done5
+            assert (root5 / "downloads" / "keep.bin").read_bytes() == b"DL"
+            assert not (root5 / "other.bin").exists()
+            assert "下载任务" in done5["result"]["skipped_items"][0]["reason"], done5
+        finally:
+            if not cart_was_set:
+                ws._cart_busy.clear()
+        _, done5b, _ = run(root5)
+        assert done5b["result"]["cleaned"] == 1, done5b
+        assert not (root5 / "downloads").exists()
+
+        # ⑥ 搜索/登录浏览器正在使用 browser: 跳过; 结束后可清理
+        reset_state()
+        root6 = tmp / "case6"
+        (root6 / "browser" / "profile").mkdir(parents=True)
+        (root6 / "browser" / "profile" / "x.bin").write_bytes(b"B")
+        upaths.browser_temp_root = lambda: root6 / "browser"
+        saved_manual = ws._manual_driver
+        saved_rev_running = ws._REVERSE_PROGRESS.get("running")
+        saved_src_running = ws._SRC_SEARCH.get("running")
+        ws._manual_driver = None
+        ws._REVERSE_PROGRESS["running"] = False
+        ws._SRC_SEARCH["running"] = False
+        ws._search_client = object()
+        try:
+            _, done6, _ = run(root6)
+            assert done6["result"]["skipped"] == 1, done6
+            assert (root6 / "browser" / "profile" / "x.bin").read_bytes() == b"B"
+            assert "浏览器" in done6["result"]["skipped_items"][0]["reason"], done6
+            ws._search_client = None
+            _, done6b, _ = run(root6)
+            assert done6b["result"]["cleaned"] == 1, done6b
+            assert not (root6 / "browser").exists()
+        finally:
+            ws._search_client = orig_search
+            ws._manual_driver = saved_manual
+            ws._REVERSE_PROGRESS["running"] = saved_rev_running
+            ws._SRC_SEARCH["running"] = saved_src_running
+        upaths.browser_temp_root = orig_browser_root
+
+        # ⑦ 重复 POST 接回同一任务; 错 id 404
+        reset_state()
+        root7 = tmp / "case7"
+        root7.mkdir()
+        (root7 / "big.bin").write_bytes(b"BIG")
+        item_started = threading.Event()
+        gate7 = threading.Event()
+        gates.append(gate7)
+
+        def hook7(phase, info):
+            if phase == "item":
+                item_started.set()
+                gate7.wait(10)
+
+        ws._TEMP_TASK_HOOK = hook7
+        r7 = start(root7)
+        tid7 = r7.get_json()["task"]["id"]
+        assert item_started.wait(5), "第一项钩子未执行"
+        r7b = start(root7)
+        j7b = r7b.get_json()
+        assert j7b.get("status") == "ok" and j7b.get("already") is True, j7b
+        assert j7b["task"]["id"] == tid7, j7b
+        assert client.get("/api/paths/temp/clean/task?id=wrong").status_code == 404
+        gate7.set()
+        done7, _ = wait_task(tid7)
+        assert done7["result"]["cleaned"] == 1, done7
+        assert not (root7 / "big.bin").exists()
+
+        # ⑧ 旧接口: 保留同步字段; 任务运行中调用会等待同批结果
+        reset_state()
+        root8 = tmp / "case8"
+        root8.mkdir()
+        (root8 / "file.bin").write_bytes(b"FILE12345678")
+        ws._TEMP_TASK_ROOT = root8
+        r8 = client.post("/api/paths/temp/clean")
+        assert r8.status_code == 200, r8.data
+        j8 = r8.get_json()
+        assert j8.get("ok") is True, j8
+        assert j8.get("removed") == 1, j8
+        assert "freed_mb" in j8 and "sizes" in j8, j8
+        assert not (root8 / "file.bin").exists()
+
+        reset_state()
+        root9 = tmp / "case9"
+        root9.mkdir()
+        (root9 / "file.bin").write_bytes(b"JOIN")
+        gate9 = threading.Event()
+        started9 = threading.Event()
+        gates.append(gate9)
+
+        def hook9(phase, info):
+            if phase == "item":
+                started9.set()
+                gate9.wait(10)
+
+        ws._TEMP_TASK_HOOK = hook9
+        r9 = start(root9)
+        tid9 = r9.get_json()["task"]["id"]
+        assert started9.wait(5), "旧接口等待用例的钩子未执行"
+        client2 = ws.create_app().test_client()
+        legacy_box = {}
+
+        def legacy_call():
+            legacy_box["resp"] = client2.post("/api/paths/temp/clean")
+
+        th = threading.Thread(target=legacy_call, daemon=True)
+        th.start()
+        time.sleep(0.15)
+        assert th.is_alive(), "旧接口在任务运行时应等待而不是立刻返回"
+        gate9.set()
+        th.join(10)
+        assert not th.is_alive(), "旧接口等待超时"
+        j9 = (legacy_box.get("resp").get_json() if legacy_box.get("resp") else {})
+        assert j9.get("ok") is True and j9.get("removed") == 1, j9
+        done9, _ = wait_task(tid9)
+        assert done9["result"]["cleaned"] == 1, done9
+        assert not (root9 / "file.bin").exists()
+
+        # ⑨ 嵌套联接点: 只删链接, 目录内其他文件正常清理
+        reset_state()
+        outside2 = tmp / "outside2"
+        outside2.mkdir()
+        (outside2 / "keep2.txt").write_bytes(b"KEEP2")
+        root10 = tmp / "case10"
+        (root10 / "tree").mkdir(parents=True)
+        (root10 / "tree" / "normal.txt").write_bytes(b"NORMAL")
+        make_junction(root10 / "tree" / "nested_link", outside2)
+        _, done10, _ = run(root10)
+        assert done10["result"]["cleaned"] == 1, done10
+        assert not (root10 / "tree").exists()
+        assert (outside2 / "keep2.txt").read_bytes() == b"KEEP2", "嵌套联接点目标被改动"
+
+        # ⑩ 静态接线 + Node 前端真实函数用例
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+        for token in ("path-temp-task", "temp-clean-flow", "temp-clean-count",
+                      "cleanTempDir", "loadTempCleanTask", "startTempCleanPolling",
+                      "正在核对临时目录", "已处理 ", "跳过 ", "释放 ",
+                      "vixiq.tempclean.task", "loadTempCleanTask();"):
+            assert token in js, f"临时目录清理进度接线缺失: {token}"
+        for token in ('id="path-temp-task"', 'id="path-temp-progress"',
+                      'id="path-temp-note"', 'id="path-temp-clean"'):
+            assert token in html, f"设置页临时目录进度容器缺失: {token}"
+        for token in ("_TEMP_TASK", "_TEMP_EXEC_LOCK", "_temp_run",
+                      "_temp_active_reasons", "temp/clean/task",
+                      "skipped_items", "freed_bytes", "already"):
+            assert token in srv, f"临时目录清理服务端接线缺失: {token}"
+        node_test = PROJECT_ROOT / "autotest" / "test_temp_clean_progress.cjs"
+        nr = subprocess.run(["node", str(node_test)], capture_output=True,
+                            text=True, encoding="utf-8", errors="replace",
+                            timeout=60)
+        assert nr.returncode == 0 and "NODE OK" in (nr.stdout or ""), \
+            (nr.returncode, nr.stdout, nr.stderr)
+    finally:
+        for g in gates:
+            try:
+                g.set()
+            except Exception:
+                pass
+        time.sleep(0.1)
+        ws._TEMP_TASK_HOOK = orig_hook
+        ws._TEMP_TASK_ROOT = orig_root
+        ws._paths_snapshot = orig_snapshot
+        upaths.list_temp_entries = orig_list
+        upaths.browser_temp_root = orig_browser_root
+        ws._search_client = orig_search
+        ws._manual_driver = orig_manual
+        if not cart_was_set:
+            ws._cart_busy.clear()
+        try:
+            if ws._TEMP_EXEC_LOCK.locked():
+                ws._TEMP_EXEC_LOCK.release()
+        except Exception:
+            pass
+        with ws._TEMP_TASK_LOCK:
+            ws._TEMP_TASK.update({
+                "id": "", "status": "idle", "stage": "", "done": 0,
+                "total": 0, "current": "", "cleaned": 0, "skipped": 0,
+                "failed": 0, "freed_bytes": 0, "freed_mb": 0.0,
+                "skipped_items": [], "failed_items": [], "errors": [],
+                "empty": False, "error": "", "root": "", "created_at": 0.0,
+                "finished_at": 0.0, "result": None})
+            ws._TEMP_TASK_EVENTS.clear()
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 

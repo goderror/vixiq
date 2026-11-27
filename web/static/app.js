@@ -3726,6 +3726,8 @@ const PATH_EDITABLE = {
 };
 
 async function loadPaths() {
+  // 切页/刷新回来时凭会话任务号接回临时目录清理(读取失败也要接回, 进度区独立)
+  void loadTempCleanTask();
   try { pathsState = await api('/api/paths'); }
   catch (e) {
     pathsState = {};
@@ -3785,18 +3787,275 @@ async function pickPathDir(which) {
   finally { if (btn) btn.disabled = false; }
 }
 
-async function cleanTempDir() {
-  const btn = $('#path-temp-clean');
-  if (btn) btn.disabled = true;
+// 设置页临时目录清理: 后台任务 + 共用进度 (点击即受理, 切页凭任务号接回)
+const TEMP_CLEAN_SESSION_KEY = 'vixiq.tempclean.task';
+let _tempCleanId = '';
+try { _tempCleanId = sessionStorage.getItem(TEMP_CLEAN_SESSION_KEY) || ''; } catch (e) {}
+let _tempCleanTimer = null;
+let _tempCleanGen = 0;
+let _tempCleanInFlight = false;
+let _tempCleanStarting = false;
+let _tempCleanLast = null;
+
+function tempCleanSessionSet(id) {
   try {
-    const r = await api('/api/paths/temp/clean', { method: 'POST' });
-    if (!r || r.ok !== true) throw new Error((r && r.error) || '服务端没有返回结果');
-    if (r.sizes) pathsState.sizes = r.sizes;
-    paintPaths();
-    toast('临时目录已清理：删除 ' + (r.removed || 0) + ' 项，释放 ' + (r.freed_mb || 0) + ' MB', 'ok');
-  } catch (e) { toast('清理失败: ' + (e.message || e), 'err'); }
-  finally { if (btn) btn.disabled = false; }
+    if (id) sessionStorage.setItem(TEMP_CLEAN_SESSION_KEY, id);
+    else sessionStorage.removeItem(TEMP_CLEAN_SESSION_KEY);
+  } catch (e) {}
 }
+
+function stopTempCleanPolling() {
+  _tempCleanGen += 1;
+  if (_tempCleanTimer) { clearTimeout(_tempCleanTimer); _tempCleanTimer = null; }
+  _tempCleanInFlight = false;
+}
+
+function setTempCleanBusy(busy) {
+  const btn = $('#path-temp-clean');
+  if (!btn) return;
+  btn.disabled = !!busy;
+  btn.textContent = busy ? '清理中…' : '🧹 清理';
+}
+
+function ensureTempCleanControls() {
+  const host = $('#path-temp-progress');
+  if (!host) return null;
+  if (host.dataset.ready !== '1') {
+    host.innerHTML = opProgressHtml('temp-clean-flow', {
+        mode: 'flow', text: '正在核对临时目录…' }) +
+      opProgressHtml('temp-clean-count', {
+        mode: 'count', label: '清理临时目录', text: '已处理 0／0 项', hidden: true });
+    host.dataset.ready = '1';
+    opRevealProgressIn(host);
+  }
+  return host;
+}
+
+function showTempCleanFlow(text) {
+  const area = $('#path-temp-task');
+  if (area) area.classList.remove('hidden');
+  ensureTempCleanControls();
+  opProgressPaint('temp-clean-flow', {
+    mode: 'flow', hidden: false, stage: text, text,
+  });
+  opProgressPaint('temp-clean-count', { mode: 'count', hidden: true });
+}
+
+function tempCleanFreedText(bytes, mb) {
+  const n = Math.max(0, Number(bytes || 0));
+  if (n > 0 && n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+  const m = Math.max(0, Number(mb || 0));
+  return m.toFixed(2) + ' MB';
+}
+
+function tempCleanReasonList(items, label) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return '';
+  const rows = list.slice(0, 5).map(x => {
+    const name = (x && (x.name || x.path)) || '';
+    const reason = (x && x.reason) || '';
+    return `<li><code>${esc(name)}</code> ${esc(reason)}</li>`;
+  }).join('');
+  const more = list.length > 5 ? `<div class="hint">等 ${list.length} 项</div>` : '';
+  return `<div class="hint">${label}：</div><ul>${rows}</ul>${more}`;
+}
+
+function tempCleanResultText(t) {
+  const res = (t && t.result) || {};
+  if (res.empty) return '临时目录为空，没有需要清理的项';
+  const cleaned = Number(res.cleaned || 0);
+  const skipped = Number(res.skipped || 0);
+  const failed = Number(res.failed || 0);
+  let text = `清理 ${cleaned} 项 · 跳过 ${skipped} 项 · 失败 ${failed} 项`;
+  if (cleaned || Number(res.freed_bytes || 0)) {
+    text += ` · 释放 ${tempCleanFreedText(res.freed_bytes, res.freed_mb)}`;
+  }
+  return text;
+}
+
+function paintTempCleanTask(t) {
+  const area = $('#path-temp-task');
+  const note = $('#path-temp-note');
+  if (!area || !note) return;
+  if (!t || !t.status || t.status === 'idle') {
+    area.classList.add('hidden');
+    setTempCleanBusy(false);
+    return;
+  }
+  area.classList.remove('hidden');
+  ensureTempCleanControls();
+  const running = t.status === 'running';
+  const total = Number(t.total || 0);
+  const done = Math.min(Number(t.done || 0), total || Number(t.done || 0));
+  const stage = t.stage || 'scanning';
+  if (running) {
+    const flowText = stage === 'cleaning'
+      ? (t.current ? '当前：' + t.current : '正在清理临时目录…')
+      : '正在核对临时目录…';
+    opProgressPaint('temp-clean-flow', {
+      mode: 'flow', hidden: false, stage: flowText, text: flowText,
+    });
+    opProgressPaint('temp-clean-count', {
+      mode: 'count', hidden: !(total > 0), done, total,
+      label: '清理临时目录', stage: '清理临时目录',
+      text: `已处理 ${done}／${total} 项`,
+    });
+    note.textContent = (stage === 'cleaning' && total > 0)
+      ? `本次核对到 ${total} 项，逐个处理完再计数。`
+      : '正在核对临时目录，确认本次要清理的顶层条目…';
+    setTempCleanBusy(true);
+    return;
+  }
+  opProgressPaint('temp-clean-flow', { mode: 'flow', hidden: true });
+  opProgressPaint('temp-clean-count', { mode: 'count', hidden: true });
+  setTempCleanBusy(false);
+  if (t.status === 'error') {
+    note.innerHTML = `<span class="err-text">清理失败：${esc(t.error || '未知错误')}</span>`;
+    return;
+  }
+  const res = t.result || {};
+  let html = `<div>${esc(tempCleanResultText(t))}</div>`;
+  html += tempCleanReasonList(res.skipped_items, '已跳过');
+  html += tempCleanReasonList(res.failed_items, '未清理');
+  if (Number(res.failed || 0)) {
+    html += '<div class="hint">占用或权限不足的条目已保留；关闭对应程序后可再次清理。</div>';
+  }
+  note.innerHTML = html;
+}
+
+async function refreshTempCleanSizes() {
+  try {
+    const r = await api('/api/paths');
+    if (r && r.effective) { pathsState = r; paintPaths(); }
+  } catch (e) { /* 统计失败保留清理结果, 下次 loadPaths 再更新占用 */ }
+}
+
+function startTempCleanPolling() {
+  if (_tempCleanTimer || _tempCleanInFlight) return;
+  const gen = ++_tempCleanGen;
+  const tick = async () => {
+    _tempCleanTimer = null;
+    if (gen !== _tempCleanGen) return;
+    _tempCleanInFlight = true;
+    let d = null;
+    try {
+      d = await opFetchJson('/api/paths/temp/clean/task?id='
+                            + encodeURIComponent(_tempCleanId), 5000);
+    } catch (e) {
+      if (gen !== _tempCleanGen) return;
+      _tempCleanInFlight = false;
+      _tempCleanTimer = setTimeout(tick, 1000);   // 保留最后进度, 继续查
+      return;
+    }
+    if (gen !== _tempCleanGen) return;
+    _tempCleanInFlight = false;
+    if (!d || d.status !== 'ok' || !d.task) {
+      tempCleanSessionSet('');
+      _tempCleanId = '';
+      _tempCleanLast = { status: 'error', stage: '',
+                         error: '上次清理任务已失效，请重新点击清理' };
+      paintTempCleanTask(_tempCleanLast);
+      stopTempCleanPolling();
+      return;
+    }
+    _tempCleanLast = d.task;
+    paintTempCleanTask(d.task);
+    if (d.task.status === 'running') {
+      _tempCleanTimer = setTimeout(tick, 600);
+      return;
+    }
+    stopTempCleanPolling();
+    void refreshTempCleanSizes();
+  };
+  tick();
+}
+
+async function loadTempCleanTask() {
+  if (_tempCleanTimer || _tempCleanInFlight || _tempCleanStarting) return;
+  if (!_tempCleanId) return;
+  const gen = ++_tempCleanGen;
+  _tempCleanInFlight = true;
+  let d = null;
+  try {
+    d = await opFetchJson('/api/paths/temp/clean/task?id='
+                          + encodeURIComponent(_tempCleanId), 5000);
+  } catch (e) {
+    if (gen !== _tempCleanGen) return;
+    _tempCleanInFlight = false;
+    if (_tempCleanLast) paintTempCleanTask(_tempCleanLast);
+    _tempCleanTimer = setTimeout(() => {
+      _tempCleanTimer = null;
+      void loadTempCleanTask();
+    }, 1000);   // 保留最后进度, 稍后重试接回
+    return;
+  }
+  if (gen !== _tempCleanGen) return;
+  _tempCleanInFlight = false;
+  if (!d || d.status !== 'ok' || !d.task) {
+    tempCleanSessionSet('');
+    _tempCleanId = '';
+    _tempCleanLast = null;
+    const area = $('#path-temp-task');
+    if (area) area.classList.add('hidden');
+    setTempCleanBusy(false);
+    return;
+  }
+  _tempCleanLast = d.task;
+  paintTempCleanTask(d.task);
+  if (d.task.status === 'running') startTempCleanPolling();
+  else void refreshTempCleanSizes();
+}
+
+async function cleanTempDir() {
+  if (_tempCleanStarting || _tempCleanTimer || _tempCleanInFlight) {
+    // 重复点击/切页返回: 聚焦已有任务, 不重复提交
+    if (_tempCleanLast) paintTempCleanTask(_tempCleanLast);
+    else if (_tempCleanId) void loadTempCleanTask();
+    return;
+  }
+  _tempCleanStarting = true;
+  stopTempCleanPolling();
+  _tempCleanId = '';
+  tempCleanSessionSet('');
+  _tempCleanLast = null;
+  setTempCleanBusy(true);
+  showTempCleanFlow('正在核对临时目录…');
+  const note = $('#path-temp-note');
+  if (note) note.textContent = '正在提交清理任务…';
+  try {
+    const r = await api('/api/paths/temp/clean/task', { method: 'POST' });
+    const task = r && r.task;
+    if (r && (r.status === 'busy' || r.busy) && task && task.id) {
+      _tempCleanId = task.id;
+      tempCleanSessionSet(_tempCleanId);
+      _tempCleanLast = task;
+      paintTempCleanTask(task);
+      if (task.status === 'running') startTempCleanPolling();
+      else void refreshTempCleanSizes();
+      toast(r.error || '已有清理任务在执行，已接回当前任务', 'warn');
+      return;
+    }
+    if (!task) throw new Error((r && (r.error || r.message)) || '任务启动失败');
+    _tempCleanId = task.id || '';
+    tempCleanSessionSet(_tempCleanId);
+    _tempCleanLast = task;
+    paintTempCleanTask(task);
+    if (task.status === 'running') {
+      startTempCleanPolling();
+    } else {
+      void refreshTempCleanSizes();
+      if (task.status === 'done') toast('临时目录已清理', 'ok');
+    }
+  } catch (e) {
+    _tempCleanLast = { status: 'error', stage: '',
+                       error: (e.message || String(e)) };
+    paintTempCleanTask(_tempCleanLast);
+    toast('清理失败：' + (e.message || e), 'err');
+  } finally {
+    _tempCleanStarting = false;
+  }
+}
+window.cleanTempDir = cleanTempDir;
 
 async function clearPathDir(which) {
   const it = PATH_EDITABLE[which];

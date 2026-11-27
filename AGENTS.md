@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128c`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128d`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128c`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128d`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,36 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.89 设置页「清理临时目录」共用进度（2026-11-28，前端 `20261128d`，已发布到安装版）
+
+- **后端**：`utils/paths.py` 新增 `temp_entry_identity` / `list_temp_entries` /
+  `remove_temp_entry`：只枚举临时根顶层条目并按身份复核；文件/目录/链接分别处理，
+  符号链接与目录联接点只删链接本身；目录栈式删除累计实际字节，部分失败按 failed
+  结算，`freed` 不按整目录虚报。`web/server.py` 新增 `_TEMP_TASK` 任务（scanning →
+  cleaning，M=顶层文件+文件夹，文件夹计 1 项，逐项结算）与
+  `POST/GET /api/paths/temp/clean/task`；`downloads`（下载中）、`browser`（搜索/登录
+  浏览器或反搜任务在跑）、当前进程内存库临时目录记为跳过；空根 `empty=true`，不可读
+  根明确报错。旧 `POST /api/paths/temp/clean` 复用同一任务并保留同步等待与
+  `ok/removed/freed_mb/sizes` 字段。
+- **前端**：设置页临时目录行下方新增 `#path-temp-task`；`cleanTempDir` 点击即禁用并
+  显示「清理中…」，扫描流动「正在核对临时目录」，锁定顶层项后「已处理 N／M 项」+
+  当前条目；结果分清理/跳过/失败/释放空间并列出原因；`vixiq.tempclean.task` 会话
+  接回、串行轮询、超时重试、迟到回包保护、404 清会话恢复按钮；完成后刷新路径占用，
+  统计失败保留结果。
+- **回归**：T202 覆盖空根/不可读/被占用部分失败/downloads/browser 活跃跳过/扫描后
+  新增与同名替换/顶层与嵌套联接点/重复 POST/旧接口阻塞等待；Node 14 项；全量
+  **193/193**（166.55 s），日志
+  `_dev_runtime/diagnostics/trae-20261128d-temp-clean-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 03:25:08`，前端 `20261128d`）在 7813
+  隔离临时根通过 API/UI 检查，恢复配置后通过既有 **12 项**检查（日志
+  `trae-20261128d-candidate-checks.log`）。回滚清单
+  `_dev_runtime/backups/publish-20261128d-20261128-032852.json`（4 个旧文件、
+  8 个替换项、15,257,709 字节）。dist 与安装版 exe `fd1e6b76afc3…`、base_library
+  `222162c9fa8e…`、app.js `f1c4f23f37d2…`、index.html `2ffe955573b2…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261128d-1795807508-1795695345-1795519082`、健康正常，清理临时目录/清理缺失/
+  以图搜图/副本扫描/壁纸库/回收站 UI 检查通过。
 
 ### 4.88 清理缺失作品写库前最后复核（2026-11-28，前端 `20261128c`，已发布到安装版）
 
