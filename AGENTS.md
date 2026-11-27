@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127f`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-27（当前前端版本 `20261127g`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261127f`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261127g`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.75 缩略图缓存复验返修：壁纸离线保护 + 预热启动失败解锁 + 结果文案（2026-11-27，前端 `20261127g`，已发布到安装版）
+
+- **壁纸目录离线保护**：`_thumb_roots` 先读 `paths.wallpaper_dir` 配置原值；配置了但目录
+  不存在/不可读时明确把 wall 标为不完整，不再经过 `candidates_dir` 的「读不到配置就
+  回退当前壁纸目录」路径。按保守口径放弃本次失效缓存清理并提示，目录重新上线后仍能
+  保留有效缓存、清掉真正的失效项。配置读取失败本身也视为 wall 不可用。
+- **预热启动失败解锁**：`warm_thumbs_background` 把线程创建/启动包进 try；失败时清掉
+  `running`、`abort`、线程引用并把任务收束为 `error`，`/api/thumbs/task` 与旧的
+  `/api/thumbs/warm` 返回 500。下一次预热可正常启动。
+- **清理结果文案**：运行中计数统一为「已处理 n／N 张（个）」；只有 `total=0` 才说
+  「没有失效缩略图」。有候选时结束反馈按「已处理 N：清理成功 X，未清理 Y（原因）」
+  展示，清空缓存同口径；前端结果文案优先于服务端 message，不再掩盖失败原因。
+  失败任务/完成状态都会解锁三个按钮。
+- **回归**：T197 扩展真实配置壁纸目录离线/上线、unlink 失败与任务 message、预热线程
+  启动失败后再次成功；`test_thumbs_task_ui.cjs` 扩到 9 项（失败解锁、全部/部分失败
+  文案）。全量 **188/188**（148.27 s），日志
+  `_dev_runtime/diagnostics/trae-20261127g-thumbs-edge-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-27 15:28:24`，前端 `20261127g`）在 7813
+  通过三个接口检查与三个 UI 检查；回滚清单
+  `_dev_runtime/backups/publish-20261127g-20261127-153039.json`（4 个旧文件、8 个
+  替换项、15,176,871 字节）。dist 与安装版 exe `78d96fc4f3b8…`、base_library
+  `3b21425b61e9…`、app.js `cb70c1c92668…`、index.html `77108208400f…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261127g-1795764504-1795695345-1795519082`、健康正常。
 
 ### 4.74 缩略图缓存：失效范围修正 + 三操作共用进度（2026-11-27，前端 `20261127f`，已发布到安装版）
 

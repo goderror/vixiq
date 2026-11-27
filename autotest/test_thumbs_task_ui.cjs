@@ -122,6 +122,18 @@ function harnessBody() {
     assert.strictEqual(els['#thumbs-clear-btn'].disabled, true);
   });
 
+  // 1b. 任务失败终态: 显示原因并解锁按钮
+  test('任务失败显示原因并解锁按钮', () => {
+    reset();
+    paintThumbsTask({ id: 't1', kind: 'warm', state: 'error',
+                      stage: '核对缩略图', done: 0, total: 0,
+                      error: '无法启动后台任务：模拟失败', result: null });
+    assert.ok(els['#thumbs-task-note'].textContent.includes('无法启动后台任务'));
+    assert.strictEqual(els['#thumbs-warm-btn'].disabled, false);
+    assert.strictEqual(els['#thumbs-orphan-btn'].disabled, false);
+    assert.strictEqual(els['#thumbs-clear-btn'].disabled, false);
+  });
+
   // 2. 锁定范围后切换计数条
   test('锁定范围后显示计数条', () => {
     reset();
@@ -131,7 +143,7 @@ function harnessBody() {
     assert.ok(count && count.hidden === false);
     assert.strictEqual(count.done, 3);
     assert.strictEqual(count.total, 10);
-    assert.ok(count.text.includes('已清理 3／10 张'), count.text);
+    assert.ok(count.text.includes('已处理 3／10 张'), count.text);
   });
 
   // 3. 清空缓存停止预热阶段: flow, 结果文案含已停止预热
@@ -147,7 +159,7 @@ function harnessBody() {
     assert.strictEqual(els['#thumbs-warm-btn'].disabled, false);
   });
 
-  // 4. 失效缩略图结果/空结果/跳过根
+  // 4. 失效缩略图结果/空结果/全部失败/部分失败/跳过根
   test('清理失效缩略图结果文案', () => {
     reset();
     paintThumbsTask(doneTask('clear-orphans', {
@@ -158,12 +170,45 @@ function harnessBody() {
       deleted: 0, total: 0, failed: [], scan_complete: true,
     }));
     assert.strictEqual(els['#thumbs-task-note'].textContent, '没有失效缩略图');
+
+    paintThumbsTask(doneTask('clear-orphans', {
+      deleted: 0, total: 1, scan_complete: true,
+      failed: [{ name: 'x.jpg', error: '拒绝访问' }],
+    }));
+    let note = els['#thumbs-task-note'].textContent;
+    assert.ok(!note.includes('没有失效缩略图'), note);
+    assert.ok(note.includes('清理成功 0 张'), note);
+    assert.ok(note.includes('未清理 1 张'), note);
+    assert.ok(note.includes('拒绝访问'), note);
+
+    paintThumbsTask(doneTask('clear-orphans', {
+      deleted: 2, total: 3, scan_complete: true,
+      failed: [{ name: 'y.jpg', error: '拒绝访问' }],
+    }));
+    note = els['#thumbs-task-note'].textContent;
+    assert.ok(note.includes('清理成功 2 张') && note.includes('未清理 1 张'), note);
+    assert.strictEqual(els['#thumbs-orphan-btn'].disabled, false);
+
     paintThumbsTask(doneTask('clear-orphans', {
       deleted: 0, total: 0, failed: [], scan_complete: false,
       skipped_roots: ['wall'],
     }));
     assert.ok(els['#thumbs-task-note'].textContent.includes('部分缓存根暂时不可用'));
     assert.ok(els['#thumbs-task-note'].textContent.includes('wall'));
+  });
+
+  // 4b. 清空缓存部分失败也按「已处理 / 成功 / 未清空」显示
+  test('清空缓存部分失败文案', () => {
+    reset();
+    paintThumbsTask(doneTask('clear', {
+      deleted: 2, total: 3, was_warming: false,
+      failed: [{ name: 'z.jpg', error: '拒绝访问' }],
+    }));
+    const note = els['#thumbs-task-note'].textContent;
+    assert.ok(note.includes('已处理 3 个缓存文件'), note);
+    assert.ok(note.includes('清空成功 2 个'), note);
+    assert.ok(note.includes('未清空 1 个'), note);
+    assert.ok(note.includes('拒绝访问'), note);
   });
 
   // 5. 预热结果: 已检查/已生成/已存在/失败
@@ -221,6 +266,7 @@ function harnessBody() {
     assert.strictEqual(els['#thumbs-clear-btn'].disabled, true);
     const count = lastPaint('thumbs-task-count');
     assert.ok(count && count.done === 1 && count.total === 2);
+    assert.ok(count.text.includes('已处理 1／2 张'), count.text);
   });
 
   (async () => {

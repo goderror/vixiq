@@ -4468,9 +4468,17 @@ def warm_thumbs_background(force: bool = False, task_id: "str | None" = None):
             _thumb_warm_state["abort"] = False
             _thumb_warm_thread = None
 
-    t = threading.Thread(target=_task, daemon=True)
-    _thumb_warm_thread = t
-    t.start()
+    try:
+        t = threading.Thread(target=_task, daemon=True)
+        _thumb_warm_thread = t
+        t.start()
+    except Exception as e:
+        # 线程没起来: 必须解除 running / 线程引用, 否则三个缓存按钮会一直忙
+        _thumb_warm_thread = None
+        _thumb_warm_state.update(running=False, abort=False, done=False)
+        err = f"无法启动后台任务：{str(e).splitlines()[0]}"
+        _thumb_task_finish(task_id, error=err)
+        return _thumb_task_snapshot()
     return _thumb_task_snapshot()
 
 
@@ -4510,12 +4518,14 @@ def _thumbs_stats() -> dict:
 _valid_names_cache = {"ts": 0.0, "names": None, "skipped": []}
 
 
-def _thumb_roots() -> "list[tuple[str, Path, bool]]":
-    """当前实际启用的缩略图根: (root_key, root, 缺失时是否按空目录处理)。
+def _thumb_roots():
+    """当前实际启用的缩略图根 + 配置读取失败时需要跳过的根。
 
     与 /api/local-img 的 root 参数保持一致: img / input / trash / wall。
     图库/反搜/回收站挂在数据根下, 数据根在而子目录不存在时按空目录处理;
-    壁纸夹单独配置, 缺失视为暂时不可用 (可能是移动盘离线), 不当作空目录。"""
+    壁纸夹先读配置原值 —— 配置了但目录不可用必须标 wall 不完整, 不能走
+    candidates_dir 的「读不到配置就回退当前壁纸目录」路径, 否则会误删壁纸缓存。"""
+    skipped_extra = []
     try:
         droot_ok = Path(paths.data_root()).exists()
     except OSError:
@@ -4526,13 +4536,24 @@ def _thumb_roots() -> "list[tuple[str, Path, bool]]":
             _config["paths"].get("input_subdir", "input"))), droot_ok),
         ("trash", _trash_root(), droot_ok),
     ]
+    configured = ""
     try:
-        wd = candidates_dir(_wallpaper_file())
+        from utils.config import load_config
+        configured = str(
+            (load_config().get("paths") or {}).get("wallpaper_dir") or ""
+        ).strip()
     except Exception:
-        wd = None
-    if wd:
-        roots.append(("wall", Path(wd), False))
-    return roots
+        skipped_extra.append("wall")
+    if configured:
+        roots.append(("wall", Path(configured), False))
+    elif not skipped_extra:
+        try:
+            wd = candidates_dir(_wallpaper_file())
+        except Exception:
+            wd = None
+        if wd:
+            roots.append(("wall", Path(wd), False))
+    return roots, skipped_extra
 
 
 def _scan_thumb_root(root: Path, missing_ok: bool):
@@ -4573,8 +4594,9 @@ def _valid_thumb_names(fresh: bool = False):
             and now - _valid_names_cache["ts"] < 10):
         return _valid_names_cache["names"], list(_valid_names_cache["skipped"])
     valid: "set[str]" = set()
-    skipped: "list[str]" = []
-    for root_key, root, missing_ok in _thumb_roots():
+    root_list, skipped = _thumb_roots()
+    skipped = list(skipped)
+    for root_key, root, missing_ok in root_list:
         files, complete = _scan_thumb_root(root, missing_ok)
         if not complete:
             skipped.append(root_key)
@@ -6144,7 +6166,11 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             if not created:
                 return jsonify({"status": "error", "busy": True, "task": task,
                                 "message": "已有另一项缩略图任务正在执行"}), 409
-            warm_thumbs_background(force=True, task_id=task["id"])
+            snap = warm_thumbs_background(force=True, task_id=task["id"])
+            if snap and snap.get("state") == "error":
+                return jsonify({"status": "error",
+                                "error": snap.get("error") or "预热启动失败",
+                                "task": snap}), 500
             return jsonify({"status": "ok", "task": _thumb_task_snapshot(),
                             "reused": False})
         kind = "clear" if action == "clear" else "clear-orphans"
@@ -6161,25 +6187,39 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 cb = _thumb_progress_cb(task_id)
                 if action == "clear":
                     res = _clear_thumbs_cache(progress=cb)
-                    msg = f"已清空 {int(res.get('deleted') or 0)} 个缓存文件"
+                    total = int(res.get("total") or 0)
+                    deleted = int(res.get("deleted") or 0)
+                    failed = res.get("failed") or []
+                    if total <= 0:
+                        msg = "没有缓存文件可清理"
+                    elif not failed:
+                        msg = f"已清空 {deleted} 个缓存文件"
+                    else:
+                        msg = (f"已处理 {total} 个缓存文件：清空成功 {deleted} 个，"
+                               f"未清空 {len(failed)} 个"
+                               f"（{failed[0].get('error') or '原因未知'}）")
                     if res.get("was_warming"):
                         msg += ("（已停止预热）" if res.get("stopped_warm")
                                 else "（预热未能及时停止，清理可能不完整）")
-                    failed = res.get("failed") or []
-                    if failed:
-                        msg += f"；{len(failed)} 个未清空"
                     mark_dirty("thumbs")
                 else:
                     res = _clear_thumbs_orphans(progress=cb)
-                    if not res.get("scan_complete", True):
-                        msg = "部分缓存根暂时不可用，本次未清理"
-                    elif int(res.get("deleted") or 0):
-                        msg = f"已清理 {int(res.get('deleted') or 0)} 张失效缩略图"
-                    else:
-                        msg = "没有失效缩略图"
+                    total = int(res.get("total") or 0)
+                    deleted = int(res.get("deleted") or 0)
                     failed = res.get("failed") or []
-                    if failed:
-                        msg += f"；{len(failed)} 张未清理"
+                    if not res.get("scan_complete", True):
+                        roots = "、".join(res.get("skipped_roots") or [])
+                        msg = ("部分缓存根暂时不可用"
+                               + (f"（{roots}）" if roots else "")
+                               + "，本次未清理")
+                    elif total <= 0:
+                        msg = "没有失效缩略图"
+                    elif not failed:
+                        msg = f"已清理 {deleted} 张失效缩略图"
+                    else:
+                        msg = (f"已处理 {total} 张失效缩略图：清理成功 {deleted} 张，"
+                               f"未清理 {len(failed)} 张"
+                               f"（{failed[0].get('error') or '原因未知'}）")
                     mark_dirty("thumbs")
                 _thumb_task_finish(task_id, result=res, message=msg)
             except Exception as e:
@@ -6201,7 +6241,11 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         task, created = _thumb_task_begin("warm", "核对缩略图")
         if not created:
             return jsonify({"status": "already_running", "task": task})
-        warm_thumbs_background(force=True, task_id=task["id"])
+        snap = warm_thumbs_background(force=True, task_id=task["id"])
+        if snap and snap.get("state") == "error":
+            return jsonify({"status": "error",
+                            "error": snap.get("error") or "预热启动失败",
+                            "task": snap}), 500
         return jsonify({"status": "started", "task": _thumb_task_snapshot()})
 
     @app.route("/api/thumbs/clear", methods=["POST"])

@@ -11644,8 +11644,8 @@ let _thumbsLastStats = null;
 
 const THUMB_TASK_KINDS = {
   warm: { label: '预热缩略图', verb: '已检查', unit: '张' },
-  clear: { label: '清空缓存', verb: '已清理', unit: '个' },
-  'clear-orphans': { label: '清理失效缩略图', verb: '已清理', unit: '张' },
+  clear: { label: '清空缓存', verb: '已处理', unit: '个' },
+  'clear-orphans': { label: '清理失效缩略图', verb: '已处理', unit: '张' },
 };
 
 function setThumbsButtonsBusy(busy) {
@@ -11684,24 +11684,31 @@ function thumbsTaskResultText(t) {
       + `已存在 ${Number(r.existing || 0)} 张，失败 ${Number(r.failed || 0)} 张`;
   }
   if (t.kind === 'clear') {
-    let s = `已清空 ${Number(r.deleted || 0)} 个缓存文件`;
+    const total = Number(r.total || 0);
+    const deleted = Number(r.deleted || 0);
+    let s;
+    if (!total) s = '没有缓存文件可清理';
+    else if (!fail.length) s = `已清空 ${deleted} 个缓存文件`;
+    else s = `已处理 ${total} 个缓存文件：清空成功 ${deleted} 个，`
+      + `未清空 ${fail.length} 个（${fail[0].error || '原因未知'}）`;
     if (r.was_warming) {
       s += r.stopped_warm ? '（已停止预热）'
                           : '（预热未能及时停止，清理可能不完整）';
     }
-    if (fail.length) s += `；${fail.length} 个未清空（${fail[0].error || '原因未知'}）`;
     return s;
   }
+  if (t.kind !== 'clear-orphans') return '';
   if (!r.scan_complete) {
     const roots = (r.skipped_roots || []).join('、');
     return '部分缓存根暂时不可用'
       + (roots ? `（${roots}）` : '') + '，本次未清理';
   }
-  let s = Number(r.deleted || 0)
-    ? `已清理 ${Number(r.deleted || 0)} 张失效缩略图`
-    : '没有失效缩略图';
-  if (fail.length) s += `；${fail.length} 张未清理（${fail[0].error || '原因未知'}）`;
-  return s;
+  const total = Number(r.total || 0);
+  const deleted = Number(r.deleted || 0);
+  if (!total) return '没有失效缩略图';
+  if (!fail.length) return `已清理 ${deleted} 张失效缩略图`;
+  return `已处理 ${total} 张失效缩略图：清理成功 ${deleted} 张，`
+    + `未清理 ${fail.length} 张（${fail[0].error || '原因未知'}）`;
 }
 
 function paintThumbsTask(t) {
@@ -11733,7 +11740,7 @@ function paintThumbsTask(t) {
   if (note) {
     if (running) note.textContent = stage + '…';
     else if (t.state === 'error') note.textContent = '失败：' + (t.error || '未知错误');
-    else note.textContent = t.message || thumbsTaskResultText(t);
+    else note.textContent = thumbsTaskResultText(t) || t.message || '任务完成';
   }
   setThumbsButtonsBusy(running);
 }
