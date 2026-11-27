@@ -4095,9 +4095,12 @@ class PixivDatabase:
             tgt = root / rel
             if not tgt.is_file():
                 continue
-            # 原路径已有文件: 内容相同 → 同一张图, 不算冲突 (直接清标记);
-            # 内容不同(或都算不出指纹) → 才判"被占用", 绝不能覆盖。
-            h_src = r["md5"] or (troot and src_rel and md5_of(troot / src_rel)) or None
+            # 两边都在: 以两份**当前文件实际内容**比对 —— 登记指纹可能过时,
+            # 不能凭它把内容不同的两份当成同一份 (2026-11-27 复验踩到)。
+            if troot is not None:
+                h_src = md5_of(troot / src_rel)
+            else:
+                h_src = r["md5"] or None
             h_dst = md5_of(tgt)
             if h_src and h_dst and h_src == h_dst:
                 continue

@@ -4443,21 +4443,46 @@ def _trash_restore_finish(task_id: str, result=None, error: str = "",
 
 
 def _trash_restore_move_file(f: dict, trash_root: Path, img_root: Path) -> str:
-    """搬一张回收站文件到原位; 目标同内容视为已就位, 不同内容拒绝覆盖。"""
+    """搬一张回收站文件到原位; 目标同内容视为已就位, 不同内容拒绝覆盖。
+
+    两边都在时只认**两份当前文件实际内容**相同 —— 数据库里的 md5 可能已经过时,
+    不能凭旧指纹把内容不同的两份当成同一份。"""
     from utils.hashutil import md5_of
     src = Path(trash_root) / str(f["src"]).replace("\\", "/")
     dst = Path(img_root) / str(f["dst"]).replace("\\", "/")
     if not src.is_file():
         raise FileNotFoundError(f"源文件不存在: {f['src']}")
     if dst.exists():
-        if f.get("md5") and md5_of(dst) == f["md5"]:
-            return "already"
-        if md5_of(src) == md5_of(dst):
+        if not dst.is_file():
+            raise FileExistsError(f"目标位置已被目录占用, 未覆盖: {f['dst']}")
+        h_src, h_dst = md5_of(src), md5_of(dst)
+        if h_src and h_dst and h_src == h_dst:
+            f["same_md5"] = h_src   # 清理回收副本前再按它复核一次
             return "already"
         raise FileExistsError(f"目标已存在不同内容, 未覆盖: {f['dst']}")
     dst.parent.mkdir(parents=True, exist_ok=True)
     os.rename(str(src), str(dst))
     return "moved"
+
+
+def _trash_restore_drop_duplicate(f: dict, trash_root: Path,
+                                  img_root: Path) -> str:
+    """登记成功后清理回收站里的同内容副本; 内容在核验后变化则保留并回报。"""
+    from utils.hashutil import md5_of
+    src = Path(trash_root) / str(f["src"]).replace("\\", "/")
+    dst = Path(img_root) / str(f["dst"]).replace("\\", "/")
+    verified = str(f.get("same_md5") or "")
+    try:
+        if not (src.is_file() and dst.is_file()):
+            return f"文件已变化, 未删除回收副本: {f['src']}"
+        h_src, h_dst = md5_of(src), md5_of(dst)
+        if not (h_src and h_dst and h_src == h_dst
+                and (not verified or h_src == verified)):
+            return f"内容已变化, 未删除回收副本: {f['src']}"
+        src.unlink()
+    except OSError as e:
+        return f"删除回收副本失败: {f['src']}: {e}"
+    return ""
 
 
 def _trash_restore_rollback(moved: "list[dict]", trash_root: Path,
@@ -4524,15 +4549,47 @@ def _trash_restore_plan_one(db, kind: str, cand: dict, img_root: Path,
         return None, {"item": item, "type": conflicts[0]["type"],
                       "detail": detail}
     files = []
+    verify: "list[dict]" = []
+    problems: "list[str]" = []
+    problem_type = ""
+    from utils.hashutil import md5_of
     for r in rows:
         src, dst = db._trash_move_pair(aid, r)
         if not (src and dst):
+            continue   # 从未登记过本地文件的页: 只恢复记录
+        src_path = Path(trash_root) / src.replace("\\", "/")
+        dst_path = Path(img_root) / dst.replace("\\", "/")
+        if src_path.is_file():
+            if not dst_path.is_file():
+                files.append({"src": src, "dst": dst, "md5": r["md5"] or ""})
+                continue
+            h_src, h_dst = md5_of(src_path), md5_of(dst_path)
+            if h_src and h_dst and h_src == h_dst:
+                files.append({"src": src, "dst": dst, "md5": r["md5"] or ""})
+                continue
+            problems.append(f"原路径已被另一份不同内容的文件占用：{dst}")
+            problem_type = problem_type or "path_taken"
             continue
-        # 源文件缺失沿用现有「只清标记」语义: 不占本次文件清单, 由登记阶段处理
-        if not (Path(trash_root) / src.replace("\\", "/")).is_file():
+        # 回收站文件缺失: 原位文件只有与登记指纹核验一致才允许登记
+        if not dst_path.is_file():
+            problems.append(f"恢复文件缺失：{src}（回收站与图库原位均无文件）")
+            problem_type = problem_type or "file_missing"
             continue
-        files.append({"src": src, "dst": dst, "md5": r["md5"] or ""})
-    return {"item": item, "files": files}, None
+        registered = str(r["md5"] or "").strip().lower()
+        actual = md5_of(dst_path)
+        if registered and actual and actual == registered:
+            # 原位文件可核实: 登记前再复核一次, 不占本次搬移文件数
+            verify.append({"dst": dst, "md5": registered})
+            continue
+        problems.append(f"图库原位文件与登记内容不一致或无法核验：{dst}")
+        problem_type = problem_type or "file_mismatch"
+    if problems:
+        detail = "; ".join(problems[:3])
+        if len(problems) > 3:
+            detail += f" 等 {len(problems)} 处"
+        return None, {"item": item, "type": problem_type or "file_missing",
+                      "detail": detail}
+    return {"item": item, "files": files, "verify": verify}, None
 
 
 def _trash_restore_run(task_id: str, kind: str,
@@ -4558,6 +4615,7 @@ def _trash_restore_run(task_id: str, kind: str,
     plans: "list[dict]" = []
     total_files = 0
     done = 0
+    from utils.hashutil import md5_of
     try:
         with _db() as db:
             for cand in candidates:
@@ -4591,6 +4649,20 @@ def _trash_restore_run(task_id: str, kind: str,
                                         "errors": errors[:5],
                                         "rollback_errors": rb[:5]})
                     continue
+                # 原位已有可核实文件的页: 登记前再核一次, 期间变化则整项跳过并回退
+                verify_errors = []
+                for v in plan.get("verify") or []:
+                    vp = Path(img_root) / str(v["dst"]).replace("\\", "/")
+                    actual = md5_of(vp) if vp.is_file() else None
+                    if not (actual and v.get("md5") and actual == v["md5"]):
+                        verify_errors.append(
+                            f"登记前原位文件已变化或缺失：{v['dst']}")
+                if verify_errors:
+                    rb = _trash_restore_rollback(moved, trash_root, img_root)
+                    skipped.append({"item": plan["item"], "type": "file_mismatch",
+                                    "detail": "; ".join(verify_errors[:3]),
+                                    "rollback_errors": rb[:5]})
+                    continue
                 try:
                     if kind == "artwork":
                         res = db.restore_trashed(
@@ -4622,13 +4694,11 @@ def _trash_restore_run(task_id: str, kind: str,
                         "detail": "登记时已不在回收站（可能已被别处处理）",
                         "rollback_errors": rb[:5]})
                     continue
-                # 原位同内容副本: 登记成功后再清理回收站里的副本 (best effort)
+                # 原位同内容副本: 登记成功后再按实际内容复核并清理回收站副本
                 for f in already:
-                    try:
-                        (Path(trash_root)
-                         / f["src"].replace("\\", "/")).unlink()
-                    except OSError:
-                        pass
+                    why = _trash_restore_drop_duplicate(f, trash_root, img_root)
+                    if why:
+                        _reporter().log(f"♻️ 回收站恢复副本保留: {why}")
                 restored += 1
                 files_moved += len(moved) + len(already)
                 for a in res["restored_artworks"]:

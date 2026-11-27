@@ -10485,7 +10485,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261127i" and _mss.group(1) == "20261127i", \
+    assert _mjs and _mss and _mjs.group(1) == "20261127j" and _mss.group(1) == "20261127j", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10580,7 +10580,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261127i', html) and _re.search(r'app\.js\?v=20261127i', html), \
+    assert _re.search(r'style\.css\?v=20261127j', html) and _re.search(r'app\.js\?v=20261127j', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -10988,7 +10988,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261127i" in html and "app.js?v=20261127i" in html, \
+        assert "style.css?v=20261127j" in html and "app.js?v=20261127j" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13371,7 +13371,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261127i" in _h and "style.css?v=20261127i" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261127j" in _h and "style.css?v=20261127j" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14740,7 +14740,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261127i" in html and "app.js?v=20261127i" in html
+            assert "style.css?v=20261127j" in html and "app.js?v=20261127j" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -14849,7 +14849,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261127i" in html and "app.js?v=20261127i" in html
+            assert "style.css?v=20261127j" in html and "app.js?v=20261127j" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -14960,7 +14960,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261127i" in html and "app.js?v=20261127i" in html
+    assert "style.css?v=20261127j" in html and "app.js?v=20261127j" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -15000,7 +15000,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261127i" in html
+    assert "20261127j" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15711,7 +15711,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261127i" in html
+    assert "同步磁盘索引" in html and "20261127j" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16127,7 +16127,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127i" in html
+    assert "20261127j" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -16861,7 +16861,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127i" in html
+    assert "20261127j" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -19411,7 +19411,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261127i" in html and "app.js?v=20261127i" in html
+    assert "style.css?v=20261127j" in html and "app.js?v=20261127j" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -19617,7 +19617,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261127i" in html
+    assert "20261127j" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20079,7 +20079,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261127i" in html
+    assert "20261127j" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20187,7 +20187,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261127i" in html
+    assert "20261127j" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20299,7 +20299,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261127i" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261127j" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20444,7 +20444,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261127i" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261127j" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20815,7 +20815,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261127i" in html
+    assert "20261127j" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -20841,7 +20841,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127i" in html
+    assert "20261127j" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -20867,7 +20867,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261127i" in html
+    assert "20261127j" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -20893,7 +20893,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127i" in html
+    assert "20261127j" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -20918,7 +20918,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127i" in html
+    assert "20261127j" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -20936,7 +20936,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261127i" in html
+    assert "20261127j" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -22627,7 +22627,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261127i" in html
+        assert "20261127j" in html
     finally:
         for _d in dbs:
             try:
@@ -22929,7 +22929,7 @@ def t195_normalize_png_progress() -> None:
             (nr.returncode, nr.stdout, nr.stderr)
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
             encoding="utf-8")
-        assert "app.js?v=20261127i" in html and "style.css?v=20261127i" in html
+        assert "app.js?v=20261127j" in html and "style.css?v=20261127j" in html
     finally:
         cif.normalize_to_png = orig_norm
         ucfg.ingest_auto_png = patched
@@ -22956,7 +22956,7 @@ def t196_jpg_progress_ui() -> None:
         assert token in js, f"单张转 JPG 进度接线缺失: {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
-    assert "app.js?v=20261127i" in html and "style.css?v=20261127i" in html
+    assert "app.js?v=20261127j" in html and "style.css?v=20261127j" in html
 
     node_test = PROJECT_ROOT / "autotest" / "test_jpg_progress_ui.cjs"
     nr = _subprocess.run(
@@ -23318,7 +23318,9 @@ def t198_trash_restore_all_progress() -> None:
 
     覆盖作品/图片两视图的成功、冲突跳过、搬回失败; 失败项仍可查询/重试;
     多页部分失败回退、登记失败回退、中途目标冲突不覆盖、确认批次外新增不处理、
-    同一批重复提交不重复搬文件。
+    同一批重复提交不重复搬文件; 以及文件核验: 两处都缺失/原位不同内容/原位
+    与登记指纹一致/登记指纹过时但两份当前文件不同/同内容复用/多页一页缺失/
+    从未登记本地文件的记录/登记期间副本变化不误删。
     """
     import hashlib
     import shutil
@@ -23412,6 +23414,17 @@ def t198_trash_restore_all_progress() -> None:
             "SELECT trashed_at FROM pages WHERE artwork_id=? AND page_num=?",
             (aid, pn)).fetchone()
         return bool(row and row[0])
+
+    def _art_trashed(db, aid: str) -> bool:
+        row = db.conn.execute(
+            "SELECT trashed_at FROM artworks WHERE artwork_id=?", (aid,)).fetchone()
+        return bool(row and row[0])
+
+    def _page_fields(db, aid: str, pn: int) -> dict:
+        row = db.conn.execute(
+            "SELECT trashed_at, trash_rel_path, local_path, md5 FROM pages "
+            "WHERE artwork_id=? AND page_num=?", (aid, pn)).fetchone()
+        return dict(row) if row else {}
 
     def _trash_file(aid: str, pn: int, name: str) -> Path:
         return trash / aid / f"p{pn}__{name}"
@@ -23704,6 +23717,253 @@ def t198_trash_restore_all_progress() -> None:
         assert (task.get("result") or {}).get("restored") == 1, task
         assert moved_names == ["dup_1.png", "dup_2.png"], moved_names
 
+        # ---------- 文件核验: 回收站与图库原位都缺失 → 不登记, 保留可重试 ----------
+        # 同一批里另放一个正常项, 验证核验失败的候选不影响其他候选
+        _reset_task()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            _add_work(db, "988001", [(0, "miss_a.png", (101, 102, 103))])
+            _add_work(db, "988009", [(0, "with_a.png", (104, 105, 106))])
+            _trash_artworks(db, ["988001", "988009"])
+        miss_a = _trash_file("988001", 0, "miss_a.png")
+        miss_a_bytes = miss_a.read_bytes()
+        miss_a.unlink()
+        r = _post(client, "artwork", ids=["988001", "988009"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 1 and res.get("files_total") == 1, res
+        sk = res.get("skipped") or []
+        assert len(sk) == 1 and "恢复文件缺失" in sk[0]["detail"], res
+        assert "988001" in _list_ids(client, "artwork")
+        assert "988009" not in _list_ids(client, "artwork")
+        assert (img / "with_a.png").is_file()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert _art_trashed(db, "988001")
+            fields = _page_fields(db, "988001", 0)
+            assert fields.get("trashed_at") and fields.get("trash_rel_path"), fields
+        assert not (img / "miss_a.png").exists()
+
+        # 找回缺失文件后重试: 文件真实搬回 + 数据库登记共同完成
+        _reset_task()
+        miss_a.write_bytes(miss_a_bytes)
+        r = _post(client, "artwork", ids=["988001"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 1 and res.get("files_total") == 1, res
+        assert (img / "miss_a.png").read_bytes() == miss_a_bytes
+        assert not miss_a.exists()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert not _art_trashed(db, "988001")
+            assert not _page_fields(db, "988001", 0).get("trash_rel_path")
+        assert "988001" not in _list_ids(client, "artwork")
+
+        # ---------- 回收站缺失 + 原位是不同内容 → 冲突, 保留两份与回收状态 ----------
+        _reset_task()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            _add_work(db, "988002", [(0, "diff_b.png", (111, 112, 113))])
+            _trash_artworks(db, ["988002"])
+        diff_b = _trash_file("988002", 0, "diff_b.png")
+        diff_b_bytes = diff_b.read_bytes()
+        diff_b.unlink()
+        _mk_img(img / "diff_b.png", (201, 202, 203))
+        inplace_bytes = (img / "diff_b.png").read_bytes()
+        r = _post(client, "artwork", ids=["988002"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 0, res
+        sk = res.get("skipped") or []
+        assert len(sk) == 1 and "原位" in sk[0]["detail"], res
+        assert "988002" in _list_ids(client, "artwork")
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert _art_trashed(db, "988002")
+            assert _page_fields(db, "988002", 0).get("trashed_at")
+        assert (img / "diff_b.png").read_bytes() == inplace_bytes
+
+        # 找回回收站文件并移除原位冲突后重试成功
+        _reset_task()
+        diff_b.write_bytes(diff_b_bytes)
+        (img / "diff_b.png").unlink()
+        r = _post(client, "artwork", ids=["988002"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 1, res
+        assert (img / "diff_b.png").read_bytes() == diff_b_bytes
+        assert not diff_b.exists()
+
+        # ---------- 回收站缺失 + 原位与登记指纹一致 → 可核实, 允许登记 ----------
+        _reset_task()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            _add_work(db, "988003", [(0, "match_c.png", (121, 122, 123))])
+            _trash_artworks(db, ["988003"])
+        match_c = _trash_file("988003", 0, "match_c.png")
+        match_c_bytes = match_c.read_bytes()
+        match_c.unlink()
+        (img / "match_c.png").write_bytes(match_c_bytes)
+        r = _post(client, "artwork", ids=["988003"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 1 and res.get("files_total") == 0, res
+        assert (img / "match_c.png").read_bytes() == match_c_bytes
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert not _art_trashed(db, "988003")
+            assert not _page_fields(db, "988003", 0).get("trash_rel_path")
+        assert "988003" not in _list_ids(client, "artwork")
+
+        # ---------- 登记指纹过时: 两份当前文件不同 → 冲突, 不删任何一份 ----------
+        _reset_task()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            _add_work(db, "988004", [(0, "stale_d.png", (131, 132, 133))])
+            _trash_artworks(db, ["988004"])
+        stale_d = _trash_file("988004", 0, "stale_d.png")
+        stale_bytes = stale_d.read_bytes()
+        (img / "stale_d.png").write_bytes(stale_bytes)
+        _mk_img(stale_d, (222, 223, 224))
+        changed_bytes = stale_d.read_bytes()
+        assert changed_bytes != stale_bytes
+        r = _post(client, "artwork", ids=["988004"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 0, res
+        sk = res.get("skipped") or []
+        assert len(sk) == 1 and "不同内容" in sk[0]["detail"], res
+        assert (img / "stale_d.png").read_bytes() == stale_bytes
+        assert stale_d.read_bytes() == changed_bytes
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert _art_trashed(db, "988004")
+        assert "988004" in _list_ids(client, "artwork")
+
+        # 移除原位副本后重试: 搬回回收站里的实际文件
+        _reset_task()
+        (img / "stale_d.png").unlink()
+        r = _post(client, "artwork", ids=["988004"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 1, res
+        assert (img / "stale_d.png").read_bytes() == changed_bytes
+        assert not stale_d.exists()
+
+        # ---------- 正常同内容复用: 登记后清理回收副本, 原位文件不动 ----------
+        _reset_task()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            _add_work(db, "988005", [(0, "reuse_e.png", (141, 142, 143))])
+            _trash_artworks(db, ["988005"])
+        reuse_e = _trash_file("988005", 0, "reuse_e.png")
+        reuse_bytes = reuse_e.read_bytes()
+        (img / "reuse_e.png").write_bytes(reuse_bytes)
+        r = _post(client, "artwork", ids=["988005"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert (res.get("restored") == 1 and res.get("files_total") == 1
+                and res.get("files_moved") == 1), res
+        assert (img / "reuse_e.png").read_bytes() == reuse_bytes
+        assert not reuse_e.exists()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert not _art_trashed(db, "988005")
+        assert "988005" not in _list_ids(client, "artwork")
+
+        # ---------- 多页作品一页缺失: 整部保留, 补回文件后整体恢复 ----------
+        _reset_task()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            _add_work(db, "988006", [
+                (0, "mp_0.png", (151, 152, 153)),
+                (1, "mp_1.png", (154, 155, 156)),
+            ])
+            _trash_artworks(db, ["988006"])
+        mp1 = _trash_file("988006", 1, "mp_1.png")
+        mp1_bytes = mp1.read_bytes()
+        mp1.unlink()
+        r = _post(client, "artwork", ids=["988006"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 0 and res.get("files_total") == 0, res
+        sk = res.get("skipped") or []
+        assert len(sk) == 1 and "恢复文件缺失" in sk[0]["detail"], res
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert _art_trashed(db, "988006")
+            assert _page_trashed(db, "988006", 0)
+            assert _page_trashed(db, "988006", 1)
+            assert _page_fields(db, "988006", 0).get("trash_rel_path")
+        assert _trash_file("988006", 0, "mp_0.png").is_file()
+        assert not (img / "mp_0.png").exists()
+        assert not (img / "mp_1.png").exists()
+
+        _reset_task()
+        mp1.write_bytes(mp1_bytes)
+        r = _post(client, "artwork", ids=["988006"])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 1, res
+        assert (img / "mp_0.png").is_file() and (img / "mp_1.png").is_file()
+        assert not _trash_file("988006", 0, "mp_0.png").exists()
+        assert not _trash_file("988006", 1, "mp_1.png").exists()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert not _art_trashed(db, "988006")
+            assert not _page_trashed(db, "988006", 0)
+            assert not _page_trashed(db, "988006", 1)
+
+        # ---------- 从未登记本地文件的页: 沿用只恢复记录的行为 ----------
+        _reset_task()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            db.change_work_status("988007", WSt.DONE, title="作品988007",
+                                  total_pages=1)
+            db.mark_page_status("988007", 0, PSt.PLACEHOLDER)
+            sd = db.soft_delete_pages([{"artwork_id": "988007", "page_num": 0}])
+            assert not sd["rel_moves"], sd
+        listed = [(x["artwork_id"], x["page_num"]) for x in _list_ids(client, "page")]
+        assert ("988007", 0) in listed, listed
+        r = _post(client, "page", items=[{"artwork_id": "988007", "page_num": 0}])
+        assert r.status_code == 200, r.get_json()
+        task, _ = _wait(client)
+        res = task.get("result") or {}
+        assert res.get("restored") == 1 and res.get("files_total") == 0, res
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            assert not _page_trashed(db, "988007", 0)
+            assert not _page_fields(db, "988007", 0).get("trash_rel_path")
+        listed = [(x["artwork_id"], x["page_num"]) for x in _list_ids(client, "page")]
+        assert ("988007", 0) not in listed, listed
+
+        # ---------- 登记期间回收副本被改动: 不误删已变化的那份 ----------
+        _reset_task()
+        with PixivDatabase(str(tmp / "pixiv.db")) as db:
+            _add_work(db, "988008", [(0, "keep_h.png", (161, 162, 163))])
+            _trash_artworks(db, ["988008"])
+        keep_h = _trash_file("988008", 0, "keep_h.png")
+        keep_bytes = keep_h.read_bytes()
+        (img / "keep_h.png").write_bytes(keep_bytes)
+        mutated = []
+
+        def _mutate_after_restore(self, artwork_ids=None, items=None,
+                                  img_root=None, trash_root=None):
+            out = orig_restore(self, artwork_ids=artwork_ids, items=items,
+                               img_root=img_root, trash_root=trash_root)
+            if (artwork_ids and "988008" in [str(x) for x in artwork_ids]
+                    and out["restored_artworks"]):
+                _mk_img(keep_h, (244, 245, 246))
+                mutated.append(keep_h.read_bytes())
+            return out
+
+        PixivDatabase.restore_trashed = _mutate_after_restore
+        try:
+            r = _post(client, "artwork", ids=["988008"])
+            assert r.status_code == 200, r.get_json()
+            task, _ = _wait(client)
+        finally:
+            PixivDatabase.restore_trashed = orig_restore
+        res = task.get("result") or {}
+        assert res.get("restored") == 1, res
+        assert (img / "keep_h.png").read_bytes() == keep_bytes
+        assert mutated and mutated[-1] != keep_bytes
+        assert keep_h.is_file() and keep_h.read_bytes() == mutated[-1]
+
         # 静态接线 + 前端真实函数用例
         js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
         for token in ("trash-restore-task", "trash-restore-progress",
@@ -23720,7 +23980,8 @@ def t198_trash_restore_all_progress() -> None:
         srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
         for token in ("/api/library/trash/restore/task", "_trash_restore_run",
                       "_trash_restore_plan_one", "_trash_restore_rollback",
-                      "_trash_restore_batch_key", "register_failed"):
+                      "_trash_restore_batch_key", "_trash_restore_drop_duplicate",
+                      "恢复文件缺失", "register_failed"):
             assert token in srv, f"服务端全部恢复任务接线缺失: {token}"
         node_test = PROJECT_ROOT / "autotest" / "test_trash_restore_progress.cjs"
         nr = _subprocess.run(

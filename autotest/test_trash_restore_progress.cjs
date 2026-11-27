@@ -361,6 +361,23 @@ function harnessBody() {
     assert.ok(html.includes('实际位置'), html);
   });
 
+  // 12. 文件缺失按跳过展示原因, 不冒充冲突
+  test('恢复文件缺失显示原因', () => {
+    reset();
+    _trashListCount = 1;
+    paintTrashRestoreTask(doneTask('artwork', {
+      kind: 'artwork', total: 1, restored: 0,
+      skipped: [{ item: { artwork_id: '555' },
+                  detail: '恢复文件缺失：555/p0__a.png（回收站与图库原位均无文件）' }],
+      move_failed: [], files_moved: 0,
+    }));
+    const html = els['#trash-restore-note'].innerHTML;
+    assert.ok(html.includes('恢复文件缺失'), html);
+    assert.ok(html.includes('作品 555'), html);
+    assert.ok(!html.includes('冲突跳过'), html);
+    assert.strictEqual(els['#trash-restore-all'].disabled, false);
+  });
+
   (async () => {
     for (const [name, fn] of cases) {
       await fn();

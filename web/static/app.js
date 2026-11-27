@@ -8206,7 +8206,7 @@ function trashRestoreResultHtml(t) {
   if (skipped.length) {
     const lines = skipped.slice(0, 3).map(s =>
       `${_trashRestoreItemLabel(s.item, kind)}：${esc(s.detail || '冲突')}${_rb(s)}`);
-    html += `<div class="hint">冲突跳过：${lines.join('；')}`
+    html += `<div class="hint">跳过：${lines.join('；')}`
       + (skipped.length > 3 ? `；等 ${skipped.length} 项` : '') + '</div>';
   }
   if (moveFailed.length) {
