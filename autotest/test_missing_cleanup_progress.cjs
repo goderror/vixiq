@@ -167,7 +167,8 @@ function harnessBody() {
     return Object.assign({
       id: 't1', status: 'running', stage, done: 0, total: 0,
       cleaned: 0, skipped: 0, failed: 0, recycled: 0, cleaned_ids: [],
-      skipped_items: [], failed_items: [], recycle_failed: [], errors: [],
+      skipped_items: [], failed_items: [], recycle_failed: [],
+      recycle_skipped: [], errors: [],
       current: '', error: '', recycle_files: false, ids: [],
       scan_incomplete: false, result: null,
     }, opt || {});
@@ -178,7 +179,8 @@ function harnessBody() {
       result: {
         total: 2, cleaned: 2, skipped: 0, failed: 0, cleaned_ids: ['1', '2'],
         skipped_items: [], failed_items: [], recycled: 0,
-        recycle_failed: [], recycle_files: false, scan_incomplete: false,
+        recycle_failed: [], recycle_skipped: [],
+        recycle_files: false, scan_incomplete: false,
       },
     }, opt || {}));
   }
@@ -313,6 +315,13 @@ function harnessBody() {
 
     statusHandler = async () => ({
       status: 'ok',
+      task: missingTask('verifying', { id: 't1', total: 2, recycle_files: true }),
+    });
+    await runNextTimer(); await flush();
+    assert.ok(lastPaint('miss-flow').text.includes('正在最终复核所选作品'));
+
+    statusHandler = async () => ({
+      status: 'ok',
       task: missingTask('cleaning', {
         id: 't1', done: 1, total: 2, cleaned: 1, recycle_files: true,
       }),
@@ -366,6 +375,7 @@ function harnessBody() {
           skipped_items: [{ artwork_id: '2', reason: '文件已恢复或已不缺失' }],
           failed_items: [{ artwork_id: '3', reason: '清理记录失败：disk' }],
           recycled: 0, recycle_failed: ['C:/x.jpg'],
+          recycle_skipped: [{ path: 'C:/y.jpg', reason: '文件已被替换或修改' }],
           recycle_files: true, scan_incomplete: true,
         },
       }),
@@ -379,6 +389,28 @@ function harnessBody() {
     assert.ok(text.includes('清理记录失败：disk'), text);
     assert.ok(text.includes('本次扫描不完整'), text);
     assert.ok(text.includes('C:/x.jpg'), text);
+    assert.ok(text.includes('回收前跳过 1 个文件'), text);
+    assert.ok(text.includes('文件已被替换或修改'), text);
+  });
+
+  // 5b. 异批忙响应: 接回旧任务, 本批不得显示已受理
+  test('异批忙响应接回当前任务且不显示本批已受理', async () => {
+    reset();
+    checkboxes = [{ value: '2', checked: true }];
+    postHandler = async () => ({
+      status: 'busy', error: '已有清理任务在执行',
+      task: missingTask('checking', { id: 'busy1', total: 3 }),
+    });
+    statusHandler = async () => ({
+      status: 'ok', task: missingTask('checking', { id: 'busy1', total: 3 }),
+    });
+    await applyMissingCleanup(false);
+    await flush();
+    assert.strictEqual(_missTaskId, 'busy1');
+    assert.strictEqual(store['vixiq.miss.task'], 'busy1');
+    assert.ok(getCalls.some(u => String(u).includes('id=busy1')), getCalls);
+    assert.ok(toasts.some(t => String(t[0]).includes('本批未开始')), toasts);
+    assert.strictEqual(timerCount(), 1);
   });
 
   // 6. 很快完成直接显示结果

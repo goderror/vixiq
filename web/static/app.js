@@ -5860,6 +5860,7 @@ function missTaskShell(initialText) {
 function missRunningHint(task) {
   const stage = task && task.stage;
   if (stage === 'checking') return '正在重新核对磁盘与所选作品…';
+  if (stage === 'verifying') return '正在最终复核所选作品，确认仍然缺失…';
   if (stage === 'cleaning') {
     const parts = [];
     if (Number(task.cleaned || 0)) parts.push(`已清理 ${task.cleaned}`);
@@ -5890,7 +5891,8 @@ function missPaintTask(task) {
   const done = Math.min(Number(task.done || 0),
                         total || Number(task.done || 0));
   let text = '正在复核所选作品…';
-  if (stage === 'cleaning') text = '正在清理索引记录…';
+  if (stage === 'verifying') text = '正在最终复核所选作品…';
+  else if (stage === 'cleaning') text = '正在清理索引记录…';
   else if (stage === 'recycling') text = '正在回收残留文件…';
   opProgressPaint('miss-flow', {
     mode: 'flow', hidden: false, stage: text, text,
@@ -5913,9 +5915,11 @@ function missPaintResult(task) {
   const failed = res.failed_items || [];
   const recycled = Number(res.recycled || 0);
   const rfail = res.recycle_failed || [];
+  const rskip = res.recycle_skipped || [];
   let html = `<div class="hint"><b>已清理 ${cleaned} 条缺失记录</b>`
     + ` · 跳过 ${skipped.length} 个 · 失败 ${failed.length} 个`;
   if (res.recycle_files) html += ` · 已回收残留文件 ${recycled} 个`;
+  if (rskip.length) html += ` · 回收前跳过 ${rskip.length} 个文件`;
   html += '</div>';
   if (res.scan_incomplete) {
     html += '<div class="hint">⚠ 本次扫描不完整，部分范围未能核实；未纳入候选的缺失作品请下次预览处理。</div>';
@@ -5937,6 +5941,12 @@ function missPaintResult(task) {
   if (rfail.length) {
     html += '<div class="hint">未能回收的文件：</div><ul>'
       + rfail.slice(0, 20).map(p => `<li><code>${esc(p)}</code></li>`).join('')
+      + '</ul>';
+  }
+  if (rskip.length) {
+    html += '<div class="hint">复核后出现/被替换，未回收的文件：</div><ul>'
+      + rskip.slice(0, 20).map(x => `<li><code>${esc(x.path)}</code> `
+        + `${esc(x.reason || '')}</li>`).join('')
       + '</ul>';
   }
   html += '<div class="btn-row">'
@@ -6183,6 +6193,23 @@ window.applyMissingCleanup = async function (recycleFiles) {
       body: JSON.stringify({ ids, recycle_files: !!recycleFiles }),
     });
     if (startSeq !== _missStartSeq) return;
+    if (r && (r.status === 'busy' || r.busy)) {
+      const cur = r.task;
+      if (cur && cur.status === 'running') {
+        // 异批不能抢占: 接回正在执行的旧任务, 本批未受理
+        _missTaskId = cur.id;
+        missSessionSet(_missTaskId);
+        _missLast = cur;
+        renderMissTask(cur);
+        startMissPolling();
+        toast('已有清理任务在执行，已接回当前任务；本批未开始，可等它完成后再提交', 'err');
+      } else {
+        _missLast = { status: 'error', stage: '', result: null,
+                      error: r.error || r.message || '已有清理任务在执行，请稍后再试' };
+        renderMissTask(_missLast);
+      }
+      return;
+    }
     const err = apiErr(r);
     if (err || !r || r.status !== 'ok' || !r.task) {
       throw new Error(err || '任务启动失败');

@@ -3093,6 +3093,7 @@ def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
                     "skipped_items": [], "failed_items": [
                         {"artwork_id": a, "reason": reason} for a in ids],
                     "recycled": 0, "recycle_failed": [],
+                    "recycle_skipped": [],
                     "recycle_files": recycle_files,
                     "scan_incomplete": scan_incomplete})
         return
@@ -3114,56 +3115,223 @@ def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
 
     img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
     rel_map: "dict[str, list[str]]" = {}
+    active_map: "dict[str, list[str]]" = {}
+    residual_paths: "dict[str, set]" = {}
+    residual_map: "dict[str, dict]" = {}
     labels = ""
     cleaned_ids: "list[str]" = []
+    recycle_skipped: "list[dict]" = []
+
+    def file_md5(f: Path) -> str:
+        h = hashlib.md5()
+        with open(f, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
     if to_clean:
         if not is_current():
             return
-        upd(stage="cleaning", current="")
+        # 确认时的登记路径、活动页路径与残留文件身份 (供最终复核与回收)
         try:
             with _db() as db:
                 rel_map = db.get_local_paths_by_artwork(to_clean)
-            labels = _labels_inline(to_clean)   # 删库前取标题/作者
-            with _db() as db:
-                db.delete_artworks(to_clean)    # 批次事务: 保留原有语义
+                page_map = db.get_artwork_page_list(to_clean)
         except Exception as e:
-            reason = f"清理记录失败：{type(e).__name__}: {e}"
+            reason = f"读取作品路径失败，已保留记录：{type(e).__name__}: {e}"
             for aid in to_clean:
                 if not is_current():
                     return
-                settle(aid, "failed", reason)
+                settle(aid, "skipped", reason)
             to_clean = []
+            page_map = {}
         if to_clean:
-            with _db() as db:
+            for aid in to_clean:
+                active = sorted(str(p.get("local_path"))
+                                for p in (page_map.get(aid) or [])
+                                if p.get("local_path"))
+                active_map[aid] = active
+                residual_paths[aid] = (set(rel_map.get(aid, []) or [])
+                                       - set(active))
+                res = {}
+                for rel in residual_paths[aid]:
+                    try:
+                        f = Path(img_root) / rel
+                        if not f.is_file():
+                            continue
+                        st = f.stat()
+                        res[rel] = ((int(st.st_size), int(st.st_mtime_ns)),
+                                    file_md5(f))
+                    except OSError:
+                        continue
+                residual_map[aid] = res
+
+            # 最终复核: 真正写库前再对账一次, 文件补回/路径变化都保留记录
+            upd(stage="verifying", current="")
+            try:
+                rep2 = _cached_reconcile(force=True)
+            except Exception as e:
+                reason = f"最终复核失败，已保留记录：{type(e).__name__}: {e}"
                 for aid in to_clean:
                     if not is_current():
                         return
-                    if db.get_artwork_metadata(aid) is None:
-                        settle(aid, "cleaned")
-                        cleaned_ids.append(aid)
-                    else:
-                        settle(aid, "failed",
-                               "记录未删除（可能被其他操作占用）")
+                    settle(aid, "skipped", reason)
+                to_clean = []
+            else:
+                if not getattr(rep2, "root_available", True):
+                    reason = "图库不可访问，已保留记录"
+                    for aid in to_clean:
+                        if not is_current():
+                            return
+                        settle(aid, "skipped", reason)
+                    to_clean = []
+                else:
+                    scan_incomplete = scan_incomplete or bool(
+                        getattr(rep2, "scan_incomplete", False))
+                    final_missing = {str(x) for x in (rep2.missing_ids or [])}
+                    try:
+                        with _db() as db:
+                            pages2 = db.get_artwork_page_list(to_clean)
+                            rel_map2 = db.get_local_paths_by_artwork(to_clean)
+                    except Exception as e:
+                        reason = f"状态无法核实，已保留记录：{type(e).__name__}: {e}"
+                        for aid in to_clean:
+                            if not is_current():
+                                return
+                            settle(aid, "skipped", reason)
+                        to_clean = []
+                        pages2, rel_map2 = {}, {}
+                    kept = []
+                    for aid in to_clean:
+                        if not is_current():
+                            return
+                        if aid not in final_missing:
+                            if getattr(rep2, "scan_incomplete", False):
+                                reason = "扫描不完整，无法核实是否仍缺失"
+                            else:
+                                reason = "文件已恢复或已不缺失"
+                            settle(aid, "skipped", reason)
+                            continue
+                        active2 = sorted(str(p.get("local_path"))
+                                         for p in (pages2.get(aid) or [])
+                                         if p.get("local_path"))
+                        if (active2 != active_map.get(aid, [])
+                                or sorted(rel_map2.get(aid, []) or [])
+                                != sorted(rel_map.get(aid, []) or [])):
+                            settle(aid, "skipped", "登记路径已变化，请重新预览")
+                            continue
+                        kept.append(aid)
+                    to_clean = kept
+
+            # 写库前最后一刻: 活动页路径又出现文件 / 记录消失 / 路径变化
+            if to_clean:
+                try:
+                    with _db() as db:
+                        metas = {aid: db.get_artwork_metadata(aid) is not None
+                                 for aid in to_clean}
+                        pages3 = db.get_artwork_page_list(to_clean)
+                        rel_map3 = db.get_local_paths_by_artwork(to_clean)
+                except Exception as e:
+                    reason = f"状态无法核实，已保留记录：{type(e).__name__}: {e}"
+                    for aid in to_clean:
+                        if not is_current():
+                            return
+                        settle(aid, "skipped", reason)
+                    to_clean = []
+                    pages3, rel_map3, metas = {}, {}, {}
+                final_ids = []
+                for aid in to_clean:
+                    if not is_current():
+                        return
+                    if not metas.get(aid):
+                        settle(aid, "skipped",
+                               "记录已不存在（可能已由其他操作处理）")
+                        continue
+                    active3 = sorted(str(p.get("local_path"))
+                                     for p in (pages3.get(aid) or [])
+                                     if p.get("local_path"))
+                    if (active3 != active_map.get(aid, [])
+                            or sorted(rel_map3.get(aid, []) or [])
+                            != sorted(rel_map.get(aid, []) or [])):
+                        settle(aid, "skipped", "登记路径已变化，请重新预览")
+                        continue
+                    appeared = ""
+                    for rel in active3:
+                        try:
+                            if (Path(img_root) / rel).is_file():
+                                appeared = rel
+                                break
+                        except OSError:
+                            appeared = rel
+                            break
+                    if appeared:
+                        settle(aid, "skipped",
+                               f"文件已恢复或路径上出现新文件：{appeared}")
+                        continue
+                    final_ids.append(aid)
+                to_clean = final_ids
+
+        if to_clean:
+            upd(stage="cleaning", current="")
+            try:
+                labels = _labels_inline(to_clean)   # 删库前取标题/作者
+                with _db() as db:
+                    db.delete_artworks(to_clean)    # 批次事务: 保留原有语义
+            except Exception as e:
+                reason = f"清理记录失败：{type(e).__name__}: {e}"
+                for aid in to_clean:
+                    if not is_current():
+                        return
+                    settle(aid, "failed", reason)
+                to_clean = []
+            if to_clean:
+                with _db() as db:
+                    for aid in to_clean:
+                        if not is_current():
+                            return
+                        if db.get_artwork_metadata(aid) is None:
+                            settle(aid, "cleaned")
+                            cleaned_ids.append(aid)
+                        else:
+                            settle(aid, "failed",
+                                   "记录未删除（可能被其他操作占用）")
 
     recycled, recycle_failed = 0, []
     if recycle_files and cleaned_ids:
         upd(stage="recycling", current="")
-        existing: "list[str]" = []
+        to_recycle: "list[str]" = []
         for aid in cleaned_ids:
-            for rel in rel_map.get(aid, []) or []:
+            base = residual_map.get(aid) or {}
+            for rel in (residual_paths.get(aid) or set()):
                 try:
                     f = Path(img_root) / rel
-                    if f.is_file():
-                        existing.append(str(f))
-                except OSError:
-                    continue
-        if existing:
+                    if rel not in base:
+                        if f.is_file():
+                            recycle_skipped.append(
+                                {"path": str(f), "reason": "复核后出现，未回收"})
+                        continue
+                    if not f.is_file():
+                        recycle_skipped.append(
+                            {"path": str(f), "reason": "文件已不存在"})
+                        continue
+                    st = f.stat()
+                    ident = (int(st.st_size), int(st.st_mtime_ns))
+                    if ident != base[rel][0] or file_md5(f) != base[rel][1]:
+                        recycle_skipped.append(
+                            {"path": str(f), "reason": "文件已被替换或修改"})
+                        continue
+                    to_recycle.append(str(f))
+                except OSError as e:
+                    recycle_skipped.append(
+                        {"path": str(Path(img_root) / rel),
+                         "reason": f"无法核实：{e}"})
+        if to_recycle:
             try:
-                n, bad = _recycle_files(existing)
+                n, bad = _recycle_files(to_recycle)
                 recycled = int(n or 0)
                 recycle_failed = [str(x) for x in (bad or [])]
             except Exception as e:
-                recycle_failed = list(existing)
+                recycle_failed = list(to_recycle)
                 note_error(f"回收残留文件失败：{type(e).__name__}: {e}")
 
     if cleaned_ids:
@@ -3172,6 +3340,8 @@ def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
             extra = f"（残留文件回收 {recycled} 个"
             if recycle_failed:
                 extra += f"，{len(recycle_failed)} 个失败"
+            if recycle_skipped:
+                extra += f"，{len(recycle_skipped)} 个跳过"
             extra += "）"
         try:
             audit_log.record("delete", "清理缺失记录",
@@ -3200,6 +3370,7 @@ def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
             "failed_items": failed_items,
             "recycled": recycled,
             "recycle_failed": list(recycle_failed),
+            "recycle_skipped": list(recycle_skipped),
             "recycle_files": bool(recycle_files),
             "scan_incomplete": scan_incomplete,
         }
@@ -3209,6 +3380,7 @@ def _miss_run(task_id: str, ids: "list[str]", recycle_files: bool) -> None:
             "cleaned": len(cleaned_ids), "skipped": len(skipped_items),
             "failed": len(failed_items), "recycled": recycled,
             "recycle_failed": list(recycle_failed),
+            "recycle_skipped": list(recycle_skipped),
             "finished_at": time.time(), "result": result,
         })
 
@@ -4682,13 +4854,15 @@ _SIM_ERROR_LIMIT = 20
 # 🗑️ 清理缺失作品: 预览后确认的批次在后台执行 (复核 → 清理记录 → 回收残留文件)。
 # 同一时间只保留最新一条任务; 结果凭任务 id 读取, 关弹窗后线程继续。
 _MISS_TASK_LOCK = threading.Lock()
+_MISS_EXEC_LOCK = threading.Lock()   # 清理记录/回收同一时间只允许一个执行窗口
 _MISS_TASK = {
     "id": "", "status": "idle", "stage": "", "done": 0, "total": 0,
     "cleaned": 0, "skipped": 0, "failed": 0, "recycled": 0,
     "cleaned_ids": [], "skipped_items": [], "failed_items": [],
-    "recycle_failed": [], "errors": [], "current": "", "error": "",
-    "recycle_files": False, "ids": [], "scan_incomplete": False,
-    "batch_key": "", "created_at": 0.0, "finished_at": 0.0, "result": None,
+    "recycle_failed": [], "recycle_skipped": [], "errors": [],
+    "current": "", "error": "", "recycle_files": False, "ids": [],
+    "scan_incomplete": False, "batch_key": "", "created_at": 0.0,
+    "finished_at": 0.0, "result": None,
 }
 
 
@@ -11970,8 +12144,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
     def api_library_clean_missing_task_start():
         """启动一批缺失作品清理 (body: {ids, recycle_files})。
 
-        同一批仍在运行时重复提交接回同一任务; 新批次替换旧任务。预览只读,
-        真正的复核/删记录/回收都在后台线程完成, 结果凭任务 id 读取。
+        同一批仍在运行时重复提交接回同一任务; 异批在旧任务执行期间返回忙和当前
+        任务快照, 不产生任何副作用; 旧任务结算后才允许新一批。预览只读, 真正的
+        复核/删记录/回收都在后台线程完成, 结果凭任务 id 读取。
         """
         data = request.get_json(silent=True) or {}
         ids = list(dict.fromkeys(
@@ -11986,13 +12161,33 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     and _MISS_TASK["batch_key"] == batch_key):
                 return jsonify({"status": "ok", "already": True,
                                 "task": _miss_snapshot_locked()})
+            if _MISS_TASK["status"] == "running":
+                return jsonify({
+                    "status": "busy",
+                    "error": "已有清理任务在执行，请等它完成后再提交",
+                    "task": _miss_snapshot_locked(),
+                }), 409
+        if not _MISS_EXEC_LOCK.acquire(blocking=False):
+            with _MISS_TASK_LOCK:
+                snapshot = _miss_snapshot_locked()
+            return jsonify({
+                "status": "busy",
+                "error": "已有清理任务在执行，请等它完成后再提交",
+                "task": snapshot,
+            }), 409
+        with _MISS_TASK_LOCK:
+            if (_MISS_TASK["status"] == "running"
+                    and _MISS_TASK["batch_key"] == batch_key):
+                _MISS_EXEC_LOCK.release()
+                return jsonify({"status": "ok", "already": True,
+                                "task": _miss_snapshot_locked()})
             tid = uuid.uuid4().hex
             _MISS_TASK.update({
                 "id": tid, "status": "running", "stage": "checking",
                 "done": 0, "total": len(ids), "cleaned": 0, "skipped": 0,
                 "failed": 0, "recycled": 0, "cleaned_ids": [],
                 "skipped_items": [], "failed_items": [], "recycle_failed": [],
-                "errors": [], "current": "", "error": "",
+                "recycle_skipped": [], "errors": [], "current": "", "error": "",
                 "recycle_files": recycle_files, "ids": list(ids),
                 "scan_incomplete": False, "batch_key": batch_key,
                 "created_at": time.time(), "finished_at": 0.0, "result": None,
@@ -12009,11 +12204,14 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                             "status": "error", "stage": "",
                             "finished_at": time.time(),
                             "error": f"清理任务异常：{type(e).__name__}: {e}"})
+            finally:
+                _MISS_EXEC_LOCK.release()
 
         try:
             threading.Thread(target=_task, daemon=True,
                              name="clean-missing").start()
         except Exception as e:
+            _MISS_EXEC_LOCK.release()
             msg = f"无法启动清理线程：{type(e).__name__}: {e}"
             with _MISS_TASK_LOCK:
                 if _MISS_TASK["id"] == tid:
@@ -12041,52 +12239,63 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         - recycle_files=False 只删数据库索引; True 才把残留文件送 Windows 回收站
           (绝不直接 unlink, 保持可还原)。
         """
-        data = request.get_json(silent=True) or {}
-        ids = [str(x) for x in (data.get("ids") or []) if str(x).strip()]
-        if not ids:
-            return jsonify({"status": "error", "error": "未选择要清理的作品"}), 400
-        recycle_files = bool(data.get("recycle_files"))
-        rep = _cached_reconcile(force=True)
-        if not getattr(rep, "root_available", True):
+        if not _MISS_EXEC_LOCK.acquire(blocking=False):
+            with _MISS_TASK_LOCK:
+                snapshot = _miss_snapshot_locked()
             return jsonify({
-                "status": "error",
-                "error": "图库不可用：磁盘未连接或图库目录无法访问",
-                "root_available": False,
-            }), 503
-        verified = set(str(x) for x in (rep.missing_ids or []))
-        skipped = [x for x in ids if x not in verified]
-        ids = [x for x in ids if x in verified]
-        if not ids:
-            return jsonify({"status": "ok", "cleaned": 0, "files_recycled": 0,
-                            "recycle_failed": [], "skipped": skipped,
+                "status": "busy",
+                "error": "已有清理任务在执行，请稍后再试",
+                "task": snapshot,
+            }), 409
+        try:
+            data = request.get_json(silent=True) or {}
+            ids = [str(x) for x in (data.get("ids") or []) if str(x).strip()]
+            if not ids:
+                return jsonify({"status": "error", "error": "未选择要清理的作品"}), 400
+            recycle_files = bool(data.get("recycle_files"))
+            rep = _cached_reconcile(force=True)
+            if not getattr(rep, "root_available", True):
+                return jsonify({
+                    "status": "error",
+                    "error": "图库不可用：磁盘未连接或图库目录无法访问",
+                    "root_available": False,
+                }), 503
+            verified = set(str(x) for x in (rep.missing_ids or []))
+            skipped = [x for x in ids if x not in verified]
+            ids = [x for x in ids if x in verified]
+            if not ids:
+                return jsonify({"status": "ok", "cleaned": 0, "files_recycled": 0,
+                                "recycle_failed": [], "skipped": skipped,
+                                "scan_incomplete": bool(getattr(rep, "scan_incomplete", False))})
+            img_root = paths.user_data(_config["paths"]["img_subdir"])
+            label_txt = _labels_inline(ids)   # 必须在删库前取: 删完就查不到标题/作者了
+            with _db() as db:
+                rel_paths = db.get_artwork_local_paths(ids)
+                cleaned = db.delete_artworks(ids)
+            files_recycled, recycle_failed = 0, []
+            if recycle_files:
+                existing = []
+                for rel in rel_paths:
+                    try:
+                        f = Path(img_root) / rel
+                        if f.is_file():
+                            existing.append(str(f))
+                    except OSError:
+                        continue
+                if existing:
+                    files_recycled, recycle_failed = _recycle_files(existing)
+            if cleaned:
+                audit_log.record("delete", "清理缺失记录",
+                                 f"清理 {cleaned} 个「磁盘文件已丢失」的作品记录：{label_txt}"
+                                 + (f"（残留文件回收 {files_recycled} 个）" if files_recycled else ""),
+                                 cleaned, ids=ids)
+            return jsonify({"status": "ok", "cleaned": cleaned,
+                            "files_recycled": files_recycled,
+                            "recycle_failed": recycle_failed,
+                            "skipped": skipped,
                             "scan_incomplete": bool(getattr(rep, "scan_incomplete", False))})
-        img_root = paths.user_data(_config["paths"]["img_subdir"])
-        label_txt = _labels_inline(ids)   # 必须在删库前取: 删完就查不到标题/作者了
-        with _db() as db:
-            rel_paths = db.get_artwork_local_paths(ids)
-            cleaned = db.delete_artworks(ids)
-        files_recycled, recycle_failed = 0, []
-        if recycle_files:
-            existing = []
-            for rel in rel_paths:
-                try:
-                    f = Path(img_root) / rel
-                    if f.is_file():
-                        existing.append(str(f))
-                except OSError:
-                    continue
-            if existing:
-                files_recycled, recycle_failed = _recycle_files(existing)
-        if cleaned:
-            audit_log.record("delete", "清理缺失记录",
-                             f"清理 {cleaned} 个「磁盘文件已丢失」的作品记录：{label_txt}"
-                             + (f"（残留文件回收 {files_recycled} 个）" if files_recycled else ""),
-                             cleaned, ids=ids)
-        return jsonify({"status": "ok", "cleaned": cleaned,
-                        "files_recycled": files_recycled,
-                        "recycle_failed": recycle_failed,
-                        "skipped": skipped,
-                        "scan_incomplete": bool(getattr(rep, "scan_incomplete", False))})
+        finally:
+            _MISS_EXEC_LOCK.release()
 
     @app.route("/api/library/facets")
     def api_library_facets():
