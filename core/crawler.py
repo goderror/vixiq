@@ -985,7 +985,16 @@ class PixivDownloader:
                                reason="target_conflict", note=note,
                                current_path=str(old_file or dest_path))
 
-        # ⑦ 只做一次原子替换发布候选; 失败时当前图仍在原路径
+        # ⑦ 发布前先绑定本次候选文件对象与内容签名; 发布后只认这份凭据。
+        # 绝不能在发布后把正式路径上的任意对象当成本次产物。
+        fmd5, fsize = _file_sig(cur_path)
+        fident = file_identity(cur_path)
+        if fmd5 is None or fident is None:
+            self._cleanup_staging(staging, cur_path)
+            note = "候选文件身份或指纹不可用，未替换正式文件"
+            self.reporter.warn(f"⚠ {note}: {dest_path.name}")
+            return False, dict(conv, ok=False, reason="replace_failed",
+                               note=note, current_path=str(old_file or dest_path))
         try:
             self._replace_file(cur_path, dest_path)
         except Exception as e:
@@ -996,6 +1005,31 @@ class PixivDownloader:
                                note=note, current_path=str(old_file or dest_path))
         self._cleanup_staging(staging)
 
+        def _is_ours(path) -> bool:
+            """正式路径是否仍是发布前绑定的那个候选对象 (身份 + 内容)。"""
+            return (same_identity(file_identity(path), fident)
+                    and _same_sig(path, fmd5, fsize))
+
+        # 发布后正式路径对象已变: 不登记、不回滚覆盖对方, 保留备份并报冲突。
+        if not _is_ours(dest_path):
+            backup_path = str(bak) if bak and Path(bak).is_file() else ""
+            backup_verified = bool(
+                backup_path and bak_md5 is not None
+                and _same_sig(backup_path, bak_md5, bak_size)
+                and is_readable(backup_path))
+            note = ("登记失败，发布后正式路径已被其他操作更新；未登记本次下载；"
+                    "已保留后来文件与旧图备份，请人工处理")
+            if backup_path:
+                note += f"（可恢复副本：{backup_path}）"
+            self.reporter.warn(f"⚠ {note}: {dest_path.name}")
+            return False, dict(
+                conv, ok=False, reason="register_failed", note=note,
+                current_path=str(dest_path), conflict=True, keep_existing=True,
+                old_restored=False, restore_failed=False, target_changed=True,
+                new_removed=False, remove_failed=False, quarantine_path="",
+                backup_reused=backup_reused,
+                backup_path=backup_path, backup_verified=backup_verified)
+
         # ⑧ 文件切换 + 页登记/来源记录必须在一个事务里一起成功
         try:
             rel_path = dest_path.relative_to(self.save_folder).as_posix()
@@ -1004,15 +1038,6 @@ class PixivDownloader:
                 f"⚠ 入库路径无效，未登记: {str(e).splitlines()[0]}")
             return False, dict(conv, ok=False, reason="register_failed",
                                note="入库路径无效", current_path=str(dest_path))
-        fmd5 = fsize = None
-        fident = file_identity(dest_path)
-        try:
-            from utils.hashutil import md5_of
-            fmd5 = md5_of(str(dest_path))
-            fsize = os.path.getsize(str(dest_path))
-        except Exception as e:
-            self.reporter.warn(
-                f"⚠ 读取新文件大小/指纹失败: {str(e).splitlines()[0]}")
         try:
             # 关闭自动转 PNG 时只更新「当前格式」, 不留下任何转换来源字段
             conv_db = conv if conv.get("enabled") else {
@@ -1033,7 +1058,7 @@ class PixivDownloader:
                 and _same_sig(backup_path, bak_md5, bak_size)
                 and is_readable(backup_path))
             if same_path:
-                if not _same_sig(dest_path, fmd5, fsize):
+                if not _is_ours(dest_path):
                     target_changed = True
                     note = ("登记失败，回滚前目标已被其他操作更新；"
                             "已保留后来文件与旧图备份，请人工处理")
@@ -1098,7 +1123,7 @@ class PixivDownloader:
                     backup_reused=backup_reused,
                     backup_path=backup_path, backup_verified=backup_verified)
             # 新旧路径不同: 只撤销本次创建的目标; 目标已被别人更新则保留
-            if _same_sig(dest_path, fmd5, fsize):
+            if _is_ours(dest_path):
                 # 按文件对象身份删除: 路径在最后一步被换掉时, 不误删后来文件。
                 result, reason = unlink_if_identity(dest_path, fident)
                 if result == "removed":

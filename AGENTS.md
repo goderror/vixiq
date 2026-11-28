@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128p`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128q`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128p`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128q`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,30 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.102 「重下修复」产物身份锚点与备份拒绝（2026-11-28，前端 `20261128q`，已发布到安装版）
+
+- **身份从暂存候选绑定**：`_finalize_downloaded_page` 在 `_replace_file` 发布前记录
+  候选的 `file_identity` + MD5/大小；发布后 `_is_ours`（对象身份 + 内容）不一致时
+  不登记、不回滚覆盖对方，保留后来文件与已核验 `.bak`，回执 `target_changed/conflict`。
+  取不到候选身份/指纹时直接不发布。登记失败后的同格式恢复、跨格式撤销都只用这份凭据。
+- **备份拒绝**：`ensure_overwrite_backup` 先看可信登记指纹。在位不匹配时只允许沿用
+  与登记一致的 `.bak`；缺备份、不可读或备份也不匹配 → `refuse`。下载器
+  `backup_failed` 保留现图；`/api/cart/repair` 跳过并给恢复路径，不入队。
+  在位匹配登记或无历史指纹时仍按旧流程建立/复用备份。
+- 回归：T171 新增 ③i（同格式发布后立即换图）、③j（跨格式发布后立即换图）、
+  ③k/③l（缺备份/相同错误备份拒绝）；T91 新增 ②d/②e。T171 原有用例改用真实
+  登记 MD5，避免用假指纹绕过保护。
+- 定向 T91 1 次、T170 1 次、T171 5 次、T207 3 次通过；全量 **198/198**
+  （214.68 s），日志 `_dev_runtime/diagnostics/trae-20261128q-identity-anchor-smoke.log`。
+- **候选/发布**：候选（`built_at 2026-11-28 23:35:53`，前端 `20261128q`）在 7813
+  通过版本、`/api/cart/repair` 与队列界面 3 连跑。回滚清单
+  `_dev_runtime/backups/publish-20261128q-20261128-233701.json`（3 个旧文件、
+  6 个替换项、14,528,394 字节）。候选/dist/安装版 exe `741fdd322002…`、
+  base_library `dae68e4dbbe0…`、app.js `b4ced0b979a7…`、index.html
+  `b0cf1316d34b…`、style.css `6e7bd9d62e49…`；两处配置哈希未变。
+  安装版 7810 前端 `20261128q-1795876549-1795876550-1795859951`、健康正常。
+  交接见 `trae-20261128q-download-repair-identity-anchor-handoff-20261128.md`。
 
 ### 4.101 「重下修复」回滚提交、重试备份与多页详情（2026-11-28，前端 `20261128p`，已发布到安装版）
 

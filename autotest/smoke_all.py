@@ -6359,6 +6359,7 @@ def t91_cart_repair_force_and_intent() -> None:
          只跑刚入队的这几条 (only_ids), 不把队列里其他任务也变成覆盖;
       ③ 只有 pixiv 作品 (纯数字 ID) 有官方源可重下, 其他来源如实跳过并给原因;
       ④ 已有下载任务在跑时拒绝 (避免两套策略混在一轮里)。"""
+    import hashlib
     import tempfile
     import utils.paths as upaths
     from db.store import PixivDatabase, WSt, PSt
@@ -6441,6 +6442,45 @@ def t91_cart_repair_force_and_intent() -> None:
             with PixivDatabase(str(tmp / "pixiv.db")) as db:
                 assert not any(str(it.get("artwork_id")) == "707"
                                for it in db.queue_list()), "不可核验时不得入队覆盖"
+
+            # ②d 有可信登记、在位不符且没有 .bak: 不得用错误在位图新建备份
+            wrong708 = b"wrong-current-708"
+            reg708 = b"registered-original-708"
+            (img / "708_p0.png").write_bytes(wrong708)
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                db.change_work_status("708", WSt.DONE, title="缺备份", total_pages=1)
+                db.mark_page_status(
+                    "708", 0, PSt.DONE, local_path="708_p0.png",
+                    md5=hashlib.md5(reg708).hexdigest(), file_size_bytes=len(reg708))
+            r = client.post("/api/cart/repair", json={"ids": ["708"]})
+            j = r.get_json()
+            assert j["added"] == 0, j
+            skipped = {s["artwork_id"]: s["reason"] for s in j["skipped"]}
+            assert "无法核验" in skipped.get("708", ""), skipped
+            assert not (img / "708_p0.png.bak").exists(), "不得新建错误备份"
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert not any(str(it.get("artwork_id")) == "708"
+                               for it in db.queue_list()), "缺备份不得入队覆盖"
+
+            # ②e .bak 与错误在位字节相同: 不得记作已复用原图
+            (img / "709_p0.png").write_bytes(wrong708)
+            (img / "709_p0.png.bak").write_bytes(wrong708)
+            reg709 = b"registered-original-709"
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                db.change_work_status("709", WSt.DONE, title="相同错误备份", total_pages=1)
+                db.mark_page_status(
+                    "709", 0, PSt.DONE, local_path="709_p0.png",
+                    md5=hashlib.md5(reg709).hexdigest(), file_size_bytes=len(reg709))
+            r = client.post("/api/cart/repair", json={"ids": ["709"]})
+            j = r.get_json()
+            assert j["added"] == 0, j
+            assert j.get("backup_reused") == 0, j
+            skipped = {s["artwork_id"]: s["reason"] for s in j["skipped"]}
+            assert "无法核验" in skipped.get("709", ""), skipped
+            assert (img / "709_p0.png.bak").read_bytes() == wrong708
+            with PixivDatabase(str(tmp / "pixiv.db")) as db:
+                assert not any(str(it.get("artwork_id")) == "709"
+                               for it in db.queue_list()), "错误备份不得入队覆盖"
 
             # ③ 只跑刚入队的这几条 + overwrite 策略 (不影响队列里其他任务)
             assert launched, "入队后应自动开始这一轮下载"
@@ -10533,7 +10573,7 @@ def t123_author_detail_from_keyword_and_srcauthor() -> None:
     # 前端资源版本必须跟着改 (改了 app.js/style.css 却不换 v=, 用户浏览器会用旧缓存)
     _mjs = _re.search(r'app\.js\?v=([\w.\-]+)', html)
     _mss = _re.search(r'style\.css\?v=([\w.\-]+)', html)
-    assert _mjs and _mss and _mjs.group(1) == "20261128p" and _mss.group(1) == "20261128p", \
+    assert _mjs and _mss and _mjs.group(1) == "20261128q" and _mss.group(1) == "20261128q", \
         (f"改了前端资源却没升 v= 版本号 (实读 app={_mjs and _mjs.group(1)} "
          f"css={_mss and _mss.group(1)} len={len(html)} 根={PROJECT_ROOT})")
 
@@ -10628,7 +10668,7 @@ def t124_artwork_big_tag_style() -> None:
             f"{scope} .tag 缺胶囊圆角"
 
     # ③ 版本号
-    assert _re.search(r'style\.css\?v=20261128p', html) and _re.search(r'app\.js\?v=20261128p', html), \
+    assert _re.search(r'style\.css\?v=20261128q', html) and _re.search(r'app\.js\?v=20261128q', html), \
         "改了前端资源却没升 v= 版本号"
     # ④ 设置页「版本与构建」只写版本事实, 不再挂解释性说明段落
     #    
@@ -11039,7 +11079,7 @@ def t127_wallpaper_current_trace() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         assert 'id="wall-card"' in html and 'onclick="wallRefresh()"' in html, "壁纸面板没接上"
         assert 'onclick="wallFold()"' in html, "壁纸面板缺收起按钮"
-        assert "style.css?v=20261128p" in html and "app.js?v=20261128p" in html, \
+        assert "style.css?v=20261128q" in html and "app.js?v=20261128q" in html, \
             "改了前端(壁纸面板)必须升 ?v= 防旧缓存"
         assert "window.wallRefresh = wallRefresh;" in js
         # 壁纸卡标题: 程序拼出来的标题(「来源夹 / 文件名」)不算真标题 —— 否则 AI 那句永远轮不到
@@ -13612,7 +13652,7 @@ def t136_page_download_engine_and_frontend() -> None:
     assert "folded ? 0.72 : 0.56" in js, "折叠后要把省下的高度还给大图"
     # 前端资源版本号 (改了 app.js/style.css 必须同步升, 否则浏览器吃旧缓存)
     _h = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "app.js?v=20261128p" in _h and "style.css?v=20261128p" in _h, "升一版防旧缓存"
+    assert "app.js?v=20261128q" in _h and "style.css?v=20261128q" in _h, "升一版防旧缓存"
 
     # ---------- ⑤ 遮挡修复 ----------
     assert "is-reordering" in js, "页序调整没有收起右下角两颗按钮的类"
@@ -14981,7 +15021,7 @@ def t158_tag_workspace() -> None:
                          "/edit"):
                 assert path in js, f"前端缺接口 {path}"
             assert ".tagws[hidden]" in css, "工作台 hidden 必须显式隐藏"
-            assert "style.css?v=20261128p" in html and "app.js?v=20261128p" in html
+            assert "style.css?v=20261128q" in html and "app.js?v=20261128q" in html
         finally:
             foldlg.pick_folder = orig_pick
             wsrv._paths_snapshot = orig_snap
@@ -15090,7 +15130,7 @@ def t159_library_tag_category_filter() -> None:
             for token in ("tagCategory", "tag_category", "renderTagCatSelect",
                           "#lib-f-tagcat"):
                 assert token in js, f"前端缺 {token}"
-            assert "style.css?v=20261128p" in html and "app.js?v=20261128p" in html
+            assert "style.css?v=20261128q" in html and "app.js?v=20261128q" in html
         finally:
             upaths.user_data = orig_ud
             if orig_img is not None:
@@ -15201,7 +15241,7 @@ def t161_gallery_filter_layout() -> None:
         assert token in js, f"前端缺 {token}"
     assert "libFilters.order = libFilters.order === 'desc' ? 'asc' : 'desc'" in js
     assert "r18: '0'" in js, "重置默认值应回到非 R18"
-    assert "style.css?v=20261128p" in html and "app.js?v=20261128p" in html
+    assert "style.css?v=20261128q" in html and "app.js?v=20261128q" in html
 
 
 def t162_health_detail_and_tray_folder() -> None:
@@ -15241,7 +15281,7 @@ def t162_health_detail_and_tray_folder() -> None:
     assert "CMD_OPEN_LIBRARY" in tray_src
     assert "def _open_library_folder" in tray_src
     assert "img_subdir" in tray_src, "打开图库文件夹必须定位到图库根"
-    assert "20261128p" in html
+    assert "20261128q" in html
 
 
 def t154_tidy_rmdir_safety() -> None:
@@ -15952,7 +15992,7 @@ def t168_sync_disk_root_scan_pending_clean() -> None:
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert "同步磁盘索引" in html and "20261128p" in html
+    assert "同步磁盘索引" in html and "20261128q" in html
     for token in ("manualSyncDisk", "showSyncResult", "openMissingCleanup",
                   "applyMissingCleanup", "/api/library/missing-items",
                   "recycle_files", "root_available", "scan_incomplete",
@@ -16368,7 +16408,7 @@ def t169_png_ingest_normalization() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128p" in html
+    assert "20261128q" in html
     for token in ("转为 PNG", "已复用 <b>${nReused}</b> 张", "待确认 <b>${nPending}</b> 张",
                   "未能转为 PNG", "源文件保持原位", "源文件全程保持原位",
                   "reused", "pending", "convert_failed"):
@@ -16566,10 +16606,11 @@ def t171_png_ingest_commit_atomicity() -> None:
             old = dl / "990801_p0.png"
             Image.new("RGB", (8, 8), (200, 0, 0)).save(old, "PNG")
             old_bytes = old.read_bytes()
+            old_md5 = hashlib.md5(old_bytes).hexdigest()
             db.change_work_status("990801", WSt.DONE, title="t", total_pages=1)
             db.mark_page_status("990801", 0, PSt.DONE,
                                 local_path="990801_p0.png",
-                                md5="oldmd5", file_size_bytes=len(old_bytes))
+                                md5=old_md5, file_size_bytes=len(old_bytes))
             db.set_page_conversion("990801", 0, source_format="jpg",
                                    source_file_size=123, source_md5="oldsrc",
                                    converted_at="2026-01-01 00:00:00",
@@ -16599,7 +16640,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert not ok1 and conv1.get("reason") == "replace_failed", conv1
             assert old.read_bytes() == old_bytes, "替换失败必须保住旧图"
             info1 = db.get_page_info("990801", 0)
-            assert info1.local_path == "990801_p0.png" and info1.md5 == "oldmd5", info1
+            assert info1.local_path == "990801_p0.png" and info1.md5 == old_md5, info1
             rec1 = db.get_page_conversion("990801", 0)
             assert rec1["source_md5"] == "oldsrc", rec1
             assert rec1["converted_at"] == "2026-01-01 00:00:00", rec1
@@ -16645,7 +16686,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert "已恢复旧图" in str(conv2.get("note") or ""), conv2
             assert old.read_bytes() == old_bytes, "登记事务失败要恢复旧图"
             info2 = db.get_page_info("990801", 0)
-            assert info2.local_path == "990801_p0.png" and info2.md5 == "oldmd5", info2
+            assert info2.local_path == "990801_p0.png" and info2.md5 == old_md5, info2
             rec2 = db.get_page_conversion("990801", 0)
             assert rec2["source_md5"] == "oldsrc", rec2
             assert not stage2.exists()
@@ -16663,7 +16704,7 @@ def t171_png_ingest_commit_atomicity() -> None:
                 "正常重下后旧版本仍应可从 .bak 找回"
             info3 = db.get_page_info("990801", 0)
             assert int(info3.status or 0) == PSt.DONE and info3.md5 \
-                and info3.md5 != "oldmd5", info3
+                and info3.md5 != old_md5, info3
             rec3 = db.get_page_conversion("990801", 0)
             assert rec3["current_format"] == "png", rec3
             assert rec3["source_md5"] is None and rec3["converted_at"] is None, rec3
@@ -16673,7 +16714,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             old_bytes = old.read_bytes()
             db.mark_page_status("990801", 0, PSt.DONE,
                                 local_path="990801_p0.png",
-                                md5="oldmd5", file_size_bytes=len(old_bytes))
+                                md5=old_md5, file_size_bytes=len(old_bytes))
             db.set_page_conversion("990801", 0, source_format="jpg",
                                    source_file_size=123, source_md5="oldsrc",
                                    converted_at="2026-01-01 00:00:00",
@@ -16694,7 +16735,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert "已恢复旧图" in str(conv4.get("note") or ""), conv4
             assert old.read_bytes() == old_bytes, "来源写入失败也不得留下新图"
             info4 = db.get_page_info("990801", 0)
-            assert info4.md5 == "oldmd5", info4
+            assert info4.md5 == old_md5, info4
             rec4 = db.get_page_conversion("990801", 0)
             assert rec4["source_md5"] == "oldsrc" \
                 and rec4["converted_at"] == "2026-01-01 00:00:00", rec4
@@ -16705,7 +16746,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             old_bytes = old.read_bytes()
             db.mark_page_status("990801", 0, PSt.DONE,
                                 local_path="990801_p0.png",
-                                md5="oldmd5", file_size_bytes=len(old_bytes))
+                                md5=old_md5, file_size_bytes=len(old_bytes))
             db.set_page_conversion("990801", 0, source_format="jpg",
                                    source_file_size=123, source_md5="oldsrc",
                                    converted_at="2026-01-01 00:00:00",
@@ -16744,7 +16785,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert any("旧图尚未恢复" in w and ".bak" in w for w in c.reporter.warns), \
                 c.reporter.warns
             info4b = db.get_page_info("990801", 0)
-            assert info4b.md5 == "oldmd5", "事务应回滚到旧登记"
+            assert info4b.md5 == old_md5, "事务应回滚到旧登记"
             assert not stage4b.exists()
 
             # ③c 登记期间目标被另一操作替换: 保留后来文件与旧图备份, 不覆盖回去
@@ -16752,7 +16793,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             old_bytes = old.read_bytes()
             db.mark_page_status("990801", 0, PSt.DONE,
                                 local_path="990801_p0.png",
-                                md5="oldmd5", file_size_bytes=len(old_bytes))
+                                md5=old_md5, file_size_bytes=len(old_bytes))
             db.set_page_conversion("990801", 0, source_format="jpg",
                                    source_file_size=123, source_md5="oldsrc",
                                    converted_at="2026-01-01 00:00:00",
@@ -16785,7 +16826,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert old.read_bytes() == later_bytes, "后来文件必须保留"
             assert bak.read_bytes() == old_bytes, "旧图备份必须保留且字节一致"
             info4c = db.get_page_info("990801", 0)
-            assert info4c.md5 == "oldmd5", "事务失败应保留旧登记"
+            assert info4c.md5 == old_md5, "事务失败应保留旧登记"
             assert not stage4c.exists()
 
             # ③d 复制恢复候选期间目标被换: 替换前必须重新核验, 不得覆盖后来文件
@@ -16793,7 +16834,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             old_bytes = old.read_bytes()
             db.mark_page_status("990801", 0, PSt.DONE,
                                 local_path="990801_p0.png",
-                                md5="oldmd5", file_size_bytes=len(old_bytes))
+                                md5=old_md5, file_size_bytes=len(old_bytes))
             db.set_page_conversion("990801", 0, source_format="jpg",
                                    source_file_size=123, source_md5="oldsrc",
                                    converted_at="2026-01-01 00:00:00",
@@ -16835,7 +16876,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert "其他操作更新" in str(conv4d.get("note") or ""), conv4d
             assert old.read_bytes() == later2_bytes, "复制期间换入的后来文件必须保留"
             assert bak4d.read_bytes() == old_bytes, "旧图备份必须保留且字节一致"
-            assert db.get_page_info("990801", 0).md5 == "oldmd5", "事务失败应保留旧登记"
+            assert db.get_page_info("990801", 0).md5 == old_md5, "事务失败应保留旧登记"
             assert not stage4d.exists()
 
             # ④ 复用现图时补齐缺失登记
@@ -16869,9 +16910,10 @@ def t171_png_ingest_commit_atomicity() -> None:
             Image.new("RGB", (7, 7), (0, 220, 0)).save(green_png, "PNG")
             red_bytes = red_jpg.read_bytes()
             green_bytes = green_png.read_bytes()
+            jpg_md5 = hashlib.md5(red_bytes).hexdigest()
             db.mark_page_status("990803", 0, PSt.DONE,
                                 local_path="990803_p0.jpg",
-                                md5="jpgmd5", file_size_bytes=len(red_bytes))
+                                md5=jpg_md5, file_size_bytes=len(red_bytes))
             db.set_page_conversion("990803", 0, source_format="jpg",
                                    source_file_size=len(red_bytes),
                                    source_md5="oldjpgmd5",
@@ -16888,7 +16930,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert red_jpg.read_bytes() == red_bytes, "旧 JPG 不得改变"
             assert green_png.read_bytes() == green_bytes, "既有 PNG 不得被覆盖"
             info6 = db.get_page_info("990803", 0)
-            assert info6.local_path == "990803_p0.jpg" and info6.md5 == "jpgmd5", info6
+            assert info6.local_path == "990803_p0.jpg" and info6.md5 == jpg_md5, info6
             rec6 = db.get_page_conversion("990803", 0)
             assert rec6["source_md5"] == "oldjpgmd5", rec6
             assert not blue_stage.exists()
@@ -16926,7 +16968,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             (dl / "990803_p0.png").unlink()
             db.mark_page_status("990803", 0, PSt.DONE,
                                 local_path="990803_p0.jpg",
-                                md5="jpgmd5", file_size_bytes=len(red_bytes))
+                                md5=jpg_md5, file_size_bytes=len(red_bytes))
             db.set_page_conversion("990803", 0, source_format="jpg",
                                    source_file_size=len(red_bytes),
                                    source_md5="oldjpgmd5",
@@ -16950,13 +16992,13 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert conv9.get("old_restored") is True, conv9
             assert red_jpg.read_bytes() == red_bytes, "旧 JPG 必须保留"
             info9 = db.get_page_info("990803", 0)
-            assert info9.local_path == "990803_p0.jpg" and info9.md5 == "jpgmd5", info9
+            assert info9.local_path == "990803_p0.jpg" and info9.md5 == jpg_md5, info9
             assert not blue4.exists()
 
             # ③e 跨格式清理时本次新 PNG 被占用: 如实报告保留位置, 不得写成已撤销
             db.mark_page_status("990803", 0, PSt.DONE,
                                 local_path="990803_p0.jpg",
-                                md5="jpgmd5", file_size_bytes=len(red_bytes))
+                                md5=jpg_md5, file_size_bytes=len(red_bytes))
             db.set_page_conversion("990803", 0, source_format="jpg",
                                    source_file_size=len(red_bytes),
                                    source_md5="oldjpgmd5",
@@ -16996,14 +17038,14 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert conv10.get("backup_verified") is True, conv10
             assert red_jpg.read_bytes() == red_bytes, "旧 JPG 必须保留"
             info10 = db.get_page_info("990803", 0)
-            assert info10.local_path == "990803_p0.jpg" and info10.md5 == "jpgmd5", info10
+            assert info10.local_path == "990803_p0.jpg" and info10.md5 == jpg_md5, info10
             assert not blue5.exists()
 
             # ③f 跨格式最后一步前换入另一张 PNG: 按对象身份识别, 不得删除后来图
             new_png5.unlink(missing_ok=True)
             db.mark_page_status("990803", 0, PSt.DONE,
                                 local_path="990803_p0.jpg",
-                                md5="jpgmd5", file_size_bytes=len(red_bytes))
+                                md5=jpg_md5, file_size_bytes=len(red_bytes))
             db.set_page_conversion("990803", 0, source_format="jpg",
                                    source_file_size=len(red_bytes),
                                    source_md5="oldjpgmd5",
@@ -17044,7 +17086,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert "其他操作更新" in str(conv11.get("note") or ""), conv11
             assert red_jpg.read_bytes() == red_bytes, "旧 JPG 必须保留"
             assert (dl / "990803_p0.jpg.bak").read_bytes() == red_bytes
-            assert db.get_page_info("990803", 0).md5 == "jpgmd5", "登记不得被回滚改写"
+            assert db.get_page_info("990803", 0).md5 == jpg_md5, "登记不得被回滚改写"
             assert not blue6.exists()
 
             # ③g 同格式恢复进入最后替换时换入第三张图: 不得覆盖后来图
@@ -17052,7 +17094,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             old_bytes = old.read_bytes()
             db.mark_page_status("990801", 0, PSt.DONE,
                                 local_path="990801_p0.png",
-                                md5="oldmd5", file_size_bytes=len(old_bytes))
+                                md5=old_md5, file_size_bytes=len(old_bytes))
             db.set_page_conversion("990801", 0, source_format="jpg",
                                    source_file_size=123, source_md5="oldsrc",
                                    converted_at="2026-01-01 00:00:00",
@@ -17090,7 +17132,7 @@ def t171_png_ingest_commit_atomicity() -> None:
             assert conv12.get("old_restored") is False, conv12
             assert old.read_bytes() == later3_bytes, "最后一步换入的后来图必须保留"
             assert bak.read_bytes() == old_bytes, "旧图备份必须保留且字节一致"
-            assert db.get_page_info("990801", 0).md5 == "oldmd5", "登记不得被回滚改写"
+            assert db.get_page_info("990801", 0).md5 == old_md5, "登记不得被回滚改写"
             assert "其他操作更新" in str(conv12.get("note") or ""), conv12
             assert not stage4g.exists()
 
@@ -17146,6 +17188,134 @@ def t171_png_ingest_commit_atomicity() -> None:
                 hashlib.md5(retry_bytes.read_bytes()).hexdigest()
             assert not stage_r2.exists()
 
+            # ③i 发布候选后立即换图: 不得把第三张当成本次产物
+            Image.new("RGB", (8, 8), (200, 0, 0)).save(old, "PNG")
+            old_bytes = old.read_bytes()
+            db.mark_page_status("990801", 0, PSt.DONE,
+                                local_path="990801_p0.png",
+                                md5=old_md5, file_size_bytes=len(old_bytes))
+            db.set_page_conversion("990801", 0, source_format="jpg",
+                                   source_file_size=123, source_md5="oldsrc",
+                                   converted_at="2026-01-01 00:00:00",
+                                   current_format="png", replace=True)
+            stage4i = dl / ".stage-801i.png"
+            stage4i.write_bytes(new_bytes)
+            later4 = dl / "later4.png"
+            Image.new("RGB", (8, 8), (5, 55, 5)).save(later4, "PNG")
+            later4_bytes = later4.read_bytes()
+            orig_rf2 = c._replace_file
+            swap_after_publish = {"n": 0}
+
+            def _publish_then_swap(src, dst):
+                r = orig_rf2(src, dst)
+                if (Path(dst) == old and ".vixiq-new-" in Path(src).name
+                        and swap_after_publish["n"] == 0):
+                    swap_after_publish["n"] += 1
+                    os.replace(str(later4), str(old))
+                return r
+
+            c._replace_file = _publish_then_swap
+            try:
+                ok15, conv15 = c._finalize_downloaded_page(
+                    "990801", 0, str(stage4i), str(old),
+                    old_rel="990801_p0.png", force_overwrite=True)
+            finally:
+                c._replace_file = orig_rf2
+            assert not ok15 and conv15.get("reason") == "register_failed", conv15
+            assert swap_after_publish["n"] == 1, "回归未命中发布后立即换图窗口"
+            assert conv15.get("target_changed") is True, conv15
+            assert conv15.get("conflict") is True, conv15
+            assert conv15.get("old_restored") is False, conv15
+            assert "发布后" in str(conv15.get("note") or ""), conv15
+            assert old.read_bytes() == later4_bytes, "发布后换入的第三张图必须保留"
+            assert bak.read_bytes() == old_bytes, "原图备份必须保留"
+            assert db.get_page_info("990801", 0).md5 == old_md5, \
+                "不得把第三张图登记成本次下载"
+            assert not stage4i.exists()
+
+            # ③j 跨格式发布后立即换图: 不得删除第三张, 也不得登记
+            new_png5.unlink(missing_ok=True)
+            db.mark_page_status("990803", 0, PSt.DONE,
+                                local_path="990803_p0.jpg",
+                                md5=jpg_md5, file_size_bytes=len(red_bytes))
+            db.set_page_conversion("990803", 0, source_format="jpg",
+                                   source_file_size=len(red_bytes),
+                                   source_md5="oldjpgmd5",
+                                   converted_at="2026-01-01 00:00:00",
+                                   current_format="jpg", replace=True)
+            blue7 = dl / ".stage-803g.jpg"
+            Image.new("RGB", (7, 7), (0, 0, 220)).save(blue7, "JPEG")
+            later_cross = dl / "later_cross.png"
+            Image.new("RGB", (7, 7), (6, 66, 6)).save(later_cross, "PNG")
+            later_cross_bytes = later_cross.read_bytes()
+            orig_rf3 = c._replace_file
+            swap_cross = {"n": 0}
+
+            def _cross_publish_then_swap(src, dst):
+                r = orig_rf3(src, dst)
+                if (Path(dst) == new_png5 and ".vixiq-new-" in Path(src).name
+                        and swap_cross["n"] == 0):
+                    swap_cross["n"] += 1
+                    os.replace(str(later_cross), str(new_png5))
+                return r
+
+            c._replace_file = _cross_publish_then_swap
+            try:
+                ok16, conv16 = c._finalize_downloaded_page(
+                    "990803", 0, str(blue7), str(dl / "990803_p0.jpg"),
+                    old_rel="990803_p0.jpg", force_overwrite=True)
+            finally:
+                c._replace_file = orig_rf3
+            assert not ok16 and conv16.get("reason") == "register_failed", conv16
+            assert swap_cross["n"] == 1, "回归未命中跨格式发布后立即换图窗口"
+            assert new_png5.read_bytes() == later_cross_bytes, \
+                "跨格式发布后换入的第三张图必须保留"
+            assert conv16.get("target_changed") is True, conv16
+            assert conv16.get("new_removed") is False, conv16
+            assert conv16.get("remove_failed") is False, conv16
+            assert "发布后" in str(conv16.get("note") or ""), conv16
+            assert red_jpg.read_bytes() == red_bytes and \
+                (dl / "990803_p0.jpg.bak").read_bytes() == red_bytes
+            assert db.get_page_info("990803", 0).md5 == jpg_md5, \
+                "不得把第三张图登记成本次下载"
+            assert not blue7.exists()
+
+            # ③k 信任登记但缺 .bak 且在位不符: 不得新建错误备份
+            wrong801 = tmp / "wrong801.png"
+            Image.new("RGB", (8, 8), (1, 2, 3)).save(wrong801, "PNG")
+            wrong801_bytes = wrong801.read_bytes()
+            old.write_bytes(wrong801_bytes)
+            db.mark_page_status("990801", 0, PSt.DONE,
+                                local_path="990801_p0.png",
+                                md5=old_md5, file_size_bytes=len(old_bytes))
+            bak.unlink(missing_ok=True)
+            stage4k = dl / ".stage-801k.png"
+            stage4k.write_bytes(new_bytes)
+            ok17, conv17 = c._finalize_downloaded_page(
+                "990801", 0, str(stage4k), str(old),
+                old_rel="990801_p0.png", force_overwrite=True)
+            assert not ok17 and conv17.get("reason") == "backup_failed", conv17
+            assert old.read_bytes() == wrong801_bytes, "在位错误图不得被替换"
+            assert not bak.exists(), "不得用错误在位图新建可恢复备份"
+            assert db.get_page_info("990801", 0).md5 == old_md5
+            assert not stage4k.exists()
+
+            # ③l .bak 与错误在位图相同: 不得记作已复用原图
+            bak.write_bytes(wrong801_bytes)
+            db.mark_page_status("990801", 0, PSt.DONE,
+                                local_path="990801_p0.png",
+                                md5=old_md5, file_size_bytes=len(old_bytes))
+            stage4l = dl / ".stage-801l.png"
+            stage4l.write_bytes(new_bytes)
+            ok18, conv18 = c._finalize_downloaded_page(
+                "990801", 0, str(stage4l), str(old),
+                old_rel="990801_p0.png", force_overwrite=True)
+            assert not ok18 and conv18.get("reason") == "backup_failed", conv18
+            assert old.read_bytes() == wrong801_bytes
+            assert bak.read_bytes() == wrong801_bytes, "错误备份不得被当成原图复用"
+            assert db.get_page_info("990801", 0).md5 == old_md5
+            assert not stage4l.exists()
+
             # 静态: 正式路径禁止直接覆写回退
             craw = (PROJECT_ROOT / "core" / "crawler.py").read_text(encoding="utf-8")
             assert "shutil.copy2(str(cur_path), str(dest_path))" not in craw, \
@@ -17157,6 +17327,9 @@ def t171_png_ingest_commit_atomicity() -> None:
                           "unlink_if_identity", "ensure_overwrite_backup",
                           "quarantine_path", "backup_reused"):
                 assert token in craw, f"对象绑定回滚接线缺失: {token}"
+            assert "fmd5, fsize = _file_sig(cur_path)" in craw \
+                and "def _is_ours" in craw, "发布前必须先绑定候选身份/指纹"
+            assert "发布后正式路径已被其他操作更新" in craw
             store = (PROJECT_ROOT / "db" / "store.py").read_text(encoding="utf-8")
             assert "def store_page_result" in store
         finally:
@@ -17407,7 +17580,7 @@ def t172_page_jpg_convert_preview_and_switch() -> None:
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128p" in html
+    assert "20261128q" in html
     for token in ("openJpgConvert", "applyJpgConvert", "retryJpgRecycle",
                   "fmtConversion", "convert-to-jpg/preview", "转为 JPG",
                   "白色背景", "来源未记录"):
@@ -19957,7 +20130,7 @@ def t179_backup_progress_jobs() -> None:
                   "op-charge", "op-flow", "prefers-reduced-motion"):
         assert token in css, f"缺少备份进度样式 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "style.css?v=20261128p" in html and "app.js?v=20261128p" in html
+    assert "style.css?v=20261128q" in html and "app.js?v=20261128q" in html
 
 
 def t180_r18_tag_field_sync() -> None:
@@ -20163,7 +20336,7 @@ def t181_wallpaper_library_originals() -> None:
 
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'data-wf-scope="library"' in html and '>壁纸库</button>' in html
-    assert "20261128p" in html
+    assert "20261128q" in html
     # 排序按钮在第一行; 隐藏的 #wf-sort 状态载体仍在筛选行内, 供旧逻辑/断言使用
     filters_i, sort_i, extra_i = html.index('id="wf-filters"'), html.index('id="wf-sort"'), \
         html.index('id="wf-extra-tools"')
@@ -20625,7 +20798,7 @@ def t184_wallpaper_toolbar_layout() -> None:
         'id="wf-more-batch"', 'class="wf-info-row"',
     ):
         assert token in html, f"缺少壁纸工具栏结构 {token}"
-    assert "20261128p" in html
+    assert "20261128q" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "wallpaper-admin.js").read_text(encoding="utf-8")
     for token in ("WF_SCOPE", "initWallpaperToolbarLayout", "wallSyncSortUI",
@@ -20733,7 +20906,7 @@ def t185_author_toolbar_layout() -> None:
         'class="field-row lib-filters au-row-filters"',
     ):
         assert token in html, f"缺少作者工具栏结构 {token}"
-    assert "20261128p" in html
+    assert "20261128q" in html
 
     js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("authorsNextSort", "authorsFilterCount", "authorsSyncSortUI",
@@ -20845,7 +21018,7 @@ def t186_tidy_progress() -> None:
                   "api_library_tidy_apply_job_status", 'stage"] = "清理空目录"',
                   "rmdir_done"):
         assert token in srv, f"缺少整理进度服务端 {token}"
-    assert "20261128p" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128q" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -20990,7 +21163,7 @@ def t187_tidy_concurrency_and_results() -> None:
     for token in ("_tidy_run_guard", '"reused": True', '"planned": False',
                   "整理正在执行中", "if rmdir_total:"):
         assert token in srv, f"缺少整理返修服务端 {token}"
-    assert "20261128p" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
+    assert "20261128q" in (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
 
 
@@ -21361,7 +21534,7 @@ def t188_import_progress_jobs() -> None:
                   "source_changed", "_src_state", "expected=snapshot",
                   '"源文件已变化"', '"源文件已消失"'):
         assert token in srv, f"缺少导入进度服务端 {token}"
-    assert "20261128p" in html
+    assert "20261128q" in html
 
 
 def t189_shared_progress_controls() -> None:
@@ -21387,7 +21560,7 @@ def t189_shared_progress_controls() -> None:
     assert "_tidyRunPromise" not in js and "_importRunPromise" not in js, \
         "旧轮询 Promise 应并入 _opTracks"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128p" in html
+    assert "20261128q" in html
 
 
 def t190_shared_progress_owner_timeout_a11y() -> None:
@@ -21413,7 +21586,7 @@ def t190_shared_progress_owner_timeout_a11y() -> None:
         assert token in js, f"缺少共用进度返修接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'aria-live="polite"' in html and 'aria-atomic="true"' in html
-    assert "20261128p" in html
+    assert "20261128q" in html
     css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
     for token in (".sr-only", ".op-progress.op-fade-in",
                   ".op-progress.op-fade-in.op-shown",
@@ -21439,7 +21612,7 @@ def t191_late_response_and_scan_announce() -> None:
                   "aborted|terminated", "任务查询超时"):
         assert token in js, f"缺少迟到回包/扫描播报接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128p" in html
+    assert "20261128q" in html
 
 
 def t192_starting_resume_busy_retry_scan_text() -> None:
@@ -21464,7 +21637,7 @@ def t192_starting_resume_busy_retry_scan_text() -> None:
                   "任务查询超时"):
         assert token in js, f"缺少启动重开/忙响应/扫描文案接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128p" in html
+    assert "20261128q" in html
 
 
 def t193_import_start_failure_resume() -> None:
@@ -21482,7 +21655,7 @@ def t193_import_start_failure_resume() -> None:
                   "重新选择"):
         assert token in js, f"缺少导入启动失败收尾接线 {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "20261128p" in html
+    assert "20261128q" in html
 
 
 def t194_ingest_auto_png_setting() -> None:
@@ -23173,7 +23346,7 @@ def t194_ingest_auto_png_setting() -> None:
         css = (PROJECT_ROOT / "web" / "static" / "style.css").read_text(encoding="utf-8")
         _close_css = css.split(".lightbox-close {", 1)[1].split("}", 1)[0]
         assert "z-index: 20" in _close_css, "放大态 ✕ 必须压在图片容器之上才能一点就关"
-        assert "20261128p" in html
+        assert "20261128q" in html
     finally:
         for _d in dbs:
             try:
@@ -23475,7 +23648,7 @@ def t195_normalize_png_progress() -> None:
             (nr.returncode, nr.stdout, nr.stderr)
         html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
             encoding="utf-8")
-        assert "app.js?v=20261128p" in html and "style.css?v=20261128p" in html
+        assert "app.js?v=20261128q" in html and "style.css?v=20261128q" in html
     finally:
         cif.normalize_to_png = orig_norm
         ucfg.ingest_auto_png = patched
@@ -23502,7 +23675,7 @@ def t196_jpg_progress_ui() -> None:
         assert token in js, f"单张转 JPG 进度接线缺失: {token}"
     html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(
         encoding="utf-8")
-    assert "app.js?v=20261128p" in html and "style.css?v=20261128p" in html
+    assert "app.js?v=20261128q" in html and "style.css?v=20261128q" in html
 
     node_test = PROJECT_ROOT / "autotest" / "test_jpg_progress_ui.cjs"
     nr = _subprocess.run(

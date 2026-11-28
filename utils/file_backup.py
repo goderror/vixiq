@@ -48,19 +48,21 @@ def ensure_overwrite_backup(src_path: "str | Path", bak_path: "str | Path",
     if src_md5 is None:
         return {"action": "refuse", "reason": "无法读取当前文件指纹，已停止覆盖",
                 "bak_md5": bak_md5, "bak_size": bak_size, "created": False}
-    if bak_md5 is not None:
-        if bak_md5 == src_md5 and bak_size == src_size:
-            return {"action": "reuse", "reason": "现有备份与当前文件字节一致",
+    # 有可信登记指纹时, 在位图必须先与登记一致; 不符时只认与登记一致的旧备份。
+    # 不能把错误在位图 (或与它相同的错误 .bak) 当成可恢复原图。
+    if has_reg and not src_is_reg:
+        if bak_md5 is not None and bak_is_reg:
+            return {"action": "reuse",
+                    "reason": "沿用上一轮已报告的原图备份",
                     "bak_md5": bak_md5, "bak_size": bak_size, "created": False}
-        if has_reg and not src_is_reg:
-            if bak_is_reg:
-                return {"action": "reuse",
-                        "reason": "沿用上一轮已报告的原图备份",
-                        "bak_md5": bak_md5, "bak_size": bak_size, "created": False}
-            return {"action": "refuse",
-                    "reason": "当前文件与登记不一致，且现有备份无法核验为原图，"
-                              "已停止覆盖",
-                    "bak_md5": bak_md5, "bak_size": bak_size, "created": False}
+        return {"action": "refuse",
+                "reason": "当前文件与登记不一致，且现有备份无法核验为原图，"
+                          "已停止覆盖",
+                "bak_md5": bak_md5, "bak_size": bak_size, "created": False}
+    # 在位图匹配登记 (或无历史指纹): 允许复用同字节备份, 否则刷新 .bak
+    if bak_md5 is not None and bak_md5 == src_md5 and bak_size == src_size:
+        return {"action": "reuse", "reason": "现有备份与当前文件字节一致",
+                "bak_md5": bak_md5, "bak_size": bak_size, "created": False}
 
     # 普通覆盖 / 没有可用旧备份: 用当前在位文件刷新 .bak
     tmp = bak.with_name(bak.name + f".{uuid.uuid4().hex}.tmp")
