@@ -27,6 +27,10 @@ from utils.author_naming import (
     pick_default_section, pick_section_parent,
 )
 from utils.config import load_config
+from utils.file_backup import ensure_overwrite_backup
+from utils.file_identity import (
+    file_identity, rename_no_overwrite, same_identity, unlink_if_identity,
+)
 from utils.reporter import Reporter, PrintReporter
 from utils.browser import make_browser, login_with_cookies
 from db.store import PixivDatabase, PSt, WSt
@@ -636,6 +640,131 @@ class PixivDownloader:
                 f"⚠ 转换记录写入失败（文件已保留，可重试）: {str(e).splitlines()[0]}")
             return False
 
+    def _restore_old_image(self, bak, dest_path, *, new_ident, new_md5,
+                           new_size, bak_md5, bak_size) -> dict:
+        """登记失败后把 `.bak` 恢复回正式路径, 但绝不覆盖别人的同名文件。
+
+        流程: 备好并核验恢复候选 → 把**当前目标整个转移**到独占暂存 →
+        核验被转移的对象确实是本次新图 → 用不覆盖方式提交旧图。
+        若转移出来的是后来文件, 原样不覆盖放回; 若原路径又出现新文件,
+        两份都保留并各自给出路径。
+        """
+        import uuid
+
+        def _sig(path):
+            try:
+                from utils.hashutil import md5_of
+                return md5_of(str(path)), os.path.getsize(str(path))
+            except Exception:
+                return None, None
+
+        def _same(path, md5, size):
+            if md5 is None or not os.path.isfile(str(path)):
+                return False
+            cur_md5, cur_size = _sig(path)
+            return cur_md5 == md5 and cur_size == size
+
+        candidate = dest_path.parent / f".vixiq-restore-{uuid.uuid4().hex}.tmp"
+        last_err = None
+        target_changed = False
+        old_restored = False
+        quarantine_path = ""
+        detail = ""
+        try:
+            for _attempt in range(3):
+                try:
+                    shutil.copy2(bak, candidate)
+                    if not _same(candidate, bak_md5, bak_size):
+                        raise OSError("恢复候选校验失败")
+                except Exception as e2:
+                    last_err = e2
+                    time.sleep(0.05)
+                    continue
+                quarantine = dest_path.parent / \
+                    f".vixiq-current-{uuid.uuid4().hex}.tmp"
+                try:
+                    self._replace_file(dest_path, quarantine)
+                except FileNotFoundError:
+                    # 正式路径已消失: 直接不覆盖提交恢复候选
+                    try:
+                        rename_no_overwrite(candidate, dest_path)
+                    except FileExistsError:
+                        target_changed = True
+                        break
+                    except Exception as e2:
+                        last_err = e2
+                        time.sleep(0.05)
+                        continue
+                    if _same(dest_path, bak_md5, bak_size):
+                        old_restored = True
+                    else:
+                        target_changed = True
+                        last_err = OSError("恢复后字节校验失败")
+                    break
+                except Exception as e2:
+                    last_err = e2
+                    time.sleep(0.05)
+                    continue
+                qident = file_identity(quarantine)
+                moved_is_ours = _same(quarantine, new_md5, new_size) and (
+                    new_ident is None or same_identity(qident, new_ident))
+                if not moved_is_ours:
+                    # 转移出来的是后来文件: 不覆盖放回; 原路径再出现则两份都留
+                    target_changed = True
+                    try:
+                        rename_no_overwrite(quarantine, dest_path)
+                        detail = "已把后来文件放回正式路径"
+                    except FileExistsError:
+                        quarantine_path = str(quarantine)
+                        detail = ("原路径又出现新文件；两份均保留："
+                                  f"{dest_path}、{quarantine}")
+                    except Exception as e2:
+                        last_err = e2
+                        quarantine_path = str(quarantine)
+                        detail = f"后来文件暂存于 {quarantine}（未能放回）"
+                    break
+                # 转移出来的确实是本次新图: 不覆盖提交旧图
+                try:
+                    rename_no_overwrite(candidate, dest_path)
+                except FileExistsError:
+                    target_changed = True
+                    quarantine_path = str(quarantine)
+                    detail = ("提交恢复前原路径又出现新文件；两份均保留："
+                              f"{dest_path}、{quarantine}")
+                    break
+                except Exception as e2:
+                    last_err = e2
+                    try:
+                        rename_no_overwrite(quarantine, dest_path)
+                    except Exception:
+                        quarantine_path = str(quarantine)
+                        detail = f"本次新图暂存于 {quarantine}（正式路径待恢复）"
+                    time.sleep(0.05)
+                    continue
+                if _same(dest_path, bak_md5, bak_size):
+                    old_restored = True
+                    try:
+                        self._cleanup_staging(quarantine)
+                    except Exception:
+                        pass
+                    break
+                target_changed = True
+                last_err = OSError("恢复后字节校验失败")
+                quarantine_path = (str(quarantine)
+                                   if Path(quarantine).is_file() else "")
+                break
+        finally:
+            try:
+                self._cleanup_staging(candidate)
+            except Exception:
+                pass
+        return {"old_restored": old_restored,
+                "restore_failed": (not old_restored and not target_changed),
+                "target_changed": target_changed,
+                "last_err": last_err,
+                "quarantine_path": quarantine_path,
+                "detail": detail}
+
     def _finalize_downloaded_page(self, aid: str, pn: int, staging_path: str,
                                   final_path: str, *,
                                   old_rel: "str | None" = None,
@@ -814,18 +943,32 @@ class PixivDownloader:
         same_path = bool(old_file and Path(old_file) == dest_path)
         bak = None
         bak_md5 = bak_size = None
+        backup_reused = False
         if old_file and force_overwrite:
             bak = old_file + ".bak"
             try:
-                if os.path.exists(bak):
-                    os.remove(bak)
-                shutil.copy2(old_file, bak)
-                if not is_readable(bak):
-                    raise OSError("备份文件不可读")
-                bak_md5, bak_size = _file_sig(bak)
+                reg = None
+                try:
+                    reg = self.db.get_page_info(aid, pn)
+                except Exception:
+                    reg = None
+                plan = ensure_overwrite_backup(
+                    old_file, bak,
+                    registered_md5=getattr(reg, "md5", None) if reg else None,
+                    registered_size=(getattr(reg, "file_size_bytes", None)
+                                     if reg else None))
+                if plan.get("action") == "refuse":
+                    raise OSError(plan.get("reason") or "备份不可核验")
+                bak_md5, bak_size = plan.get("bak_md5"), plan.get("bak_size")
                 if bak_md5 is None:
                     raise OSError("备份文件指纹不可用")
-                self.reporter.log(f"💾 旧版已备份 → {os.path.basename(bak)}")
+                backup_reused = bool(plan.get("action") == "reuse")
+                if backup_reused:
+                    self.reporter.log(
+                        f"💾 沿用可恢复备份（{plan.get('reason')}）→ "
+                        f"{os.path.basename(bak)}")
+                else:
+                    self.reporter.log(f"💾 旧版已备份 → {os.path.basename(bak)}")
             except Exception as e:
                 self._cleanup_staging(staging, cur_path)
                 note = "覆盖前备份失败，保留现有文件"
@@ -862,6 +1005,7 @@ class PixivDownloader:
             return False, dict(conv, ok=False, reason="register_failed",
                                note="入库路径无效", current_path=str(dest_path))
         fmd5 = fsize = None
+        fident = file_identity(dest_path)
         try:
             from utils.hashutil import md5_of
             fmd5 = md5_of(str(dest_path))
@@ -902,6 +1046,7 @@ class PixivDownloader:
                         keep_existing=True, old_restored=False,
                         restore_failed=False, target_changed=True,
                         new_removed=False, remove_failed=False,
+                        quarantine_path="", backup_reused=backup_reused,
                         backup_path=backup_path, backup_verified=backup_verified)
                 if not backup_verified:
                     restore_failed = True
@@ -912,51 +1057,34 @@ class PixivDownloader:
                         current_path=str(dest_path), old_restored=False,
                         restore_failed=True, target_changed=False,
                         new_removed=False, remove_failed=False,
+                        quarantine_path="", backup_reused=backup_reused,
                         backup_path=backup_path, backup_verified=False)
-                restore_candidate = dest_path.parent / \
-                    f".vixiq-restore-{uuid.uuid4().hex}.tmp"
-                last_err = None
-                try:
-                    for _attempt in range(3):
-                        # 先备好并核验恢复候选, 再重新核验目标身份 —— 复制可能耗时,
-                        # 期间目标可能被应用内其它操作换成另一张图, 不能拿旧判断覆盖。
-                        try:
-                            shutil.copy2(bak, restore_candidate)
-                            if not _same_sig(restore_candidate, bak_md5, bak_size):
-                                raise OSError("恢复候选校验失败")
-                        except Exception as e2:
-                            last_err = e2
-                            time.sleep(0.05)
-                            continue
-                        if not _same_sig(dest_path, fmd5, fsize):
-                            target_changed = True
-                            break
-                        try:
-                            self._replace_file(restore_candidate, dest_path)
-                            if _same_sig(dest_path, bak_md5, bak_size):
-                                old_restored = True
-                                break
-                            last_err = OSError("恢复后字节校验失败")
-                        except Exception as e2:
-                            last_err = e2
-                        time.sleep(0.05)
-                finally:
-                    self._cleanup_staging(restore_candidate)
+                res = self._restore_old_image(
+                    bak, dest_path, new_ident=fident,
+                    new_md5=fmd5, new_size=fsize,
+                    bak_md5=bak_md5, bak_size=bak_size)
+                old_restored = res["old_restored"]
+                restore_failed = res["restore_failed"]
+                target_changed = res["target_changed"]
+                quarantine_path = res.get("quarantine_path") or ""
+                last_err = res.get("last_err")
+                detail = res.get("detail") or ""
                 if old_restored:
                     self.reporter.log("↩ 登记失败，已从备份恢复旧图")
                     note = "登记失败，已恢复旧图"
                     self.reporter.warn(f"⚠ {note}: {dest_path.name}")
                 elif target_changed:
-                    note = ("登记失败，回滚前目标已被其他操作更新；"
-                            "已保留后来文件与旧图备份，请人工处理")
+                    note = "登记失败，回滚前目标已被其他操作更新；"
+                    note += detail or "已保留后来文件与旧图备份，请人工处理"
                     if backup_path:
                         note += f"（可恢复副本：{backup_path}）"
                     self.reporter.warn(f"⚠ {note}: {dest_path.name}")
                 else:
-                    restore_failed = True
                     note = "登记失败，旧图尚未恢复"
                     note += (f"；可恢复副本：{backup_path}" if backup_path
                              else "；可恢复副本不可用")
+                    if detail:
+                        note += f"；{detail}"
                     self.reporter.warn(
                         f"⚠ {note}: {dest_path.name}；"
                         f"{str(last_err).splitlines()[0] if last_err else '恢复失败'}")
@@ -966,30 +1094,36 @@ class PixivDownloader:
                     keep_existing=target_changed, old_restored=old_restored,
                     restore_failed=restore_failed, target_changed=target_changed,
                     new_removed=False, remove_failed=False,
+                    quarantine_path=quarantine_path,
+                    backup_reused=backup_reused,
                     backup_path=backup_path, backup_verified=backup_verified)
             # 新旧路径不同: 只撤销本次创建的目标; 目标已被别人更新则保留
             if _same_sig(dest_path, fmd5, fsize):
-                remove_err = None
-                try:
-                    os.remove(str(dest_path))
-                except Exception as e2:
-                    remove_err = e2
-                if remove_err is None:
+                # 按文件对象身份删除: 路径在最后一步被换掉时, 不误删后来文件。
+                result, reason = unlink_if_identity(dest_path, fident)
+                if result == "removed":
                     new_removed = True
                     note = ("登记失败，已撤销本次新文件，旧图与登记保持原样"
                             if old_file else "登记失败，已撤销本次新文件")
                     current = str(old_file or dest_path)
                     old_restored = True
+                elif result == "replaced":
+                    target_changed = True
+                    note = ("登记失败，目标已被其他操作更新；"
+                            "已保留后来文件与旧图备份")
+                    if backup_path:
+                        note += f"（可恢复副本：{backup_path}）"
+                    self.reporter.warn(f"⚠ {note}: {reason}")
+                    current = str(dest_path)
                 else:
-                    # 新图仍被占用: 如实报告保留位置, 不能写成恢复完成。
+                    # 新图仍被占用/无法核验: 如实报告保留位置, 不能写成恢复完成。
                     remove_failed = True
                     note = f"登记失败，本次新文件仍被占用未能移除；已保留：{dest_path}"
                     if old_file:
                         note += "；旧图与登记保持原样"
                     if backup_path:
                         note += f"；可恢复副本：{backup_path}"
-                    self.reporter.warn(
-                        f"⚠ {note}: {str(remove_err).splitlines()[0]}")
+                    self.reporter.warn(f"⚠ {note}: {reason}")
                     current = str(dest_path)
             else:
                 target_changed = True
@@ -997,7 +1131,7 @@ class PixivDownloader:
                 if backup_path:
                     note += f"（可恢复副本：{backup_path}）"
                 current = str(dest_path)
-            if not remove_failed:
+            if not remove_failed and not target_changed:
                 self.reporter.warn(f"⚠ {note}: {dest_path.name}")
             return False, dict(
                 conv, ok=False, reason="register_failed", note=note,
@@ -1005,6 +1139,7 @@ class PixivDownloader:
                 keep_existing=target_changed, old_restored=old_restored,
                 restore_failed=False, target_changed=target_changed,
                 new_removed=new_removed, remove_failed=remove_failed,
+                quarantine_path="", backup_reused=backup_reused,
                 backup_path=backup_path, backup_verified=backup_verified)
         conv["current_path"] = str(dest_path)
         if not conv.get("ok"):

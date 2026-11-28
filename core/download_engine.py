@@ -45,14 +45,24 @@ def _page_failure_notes(d, itype: str) -> list[str]:
     return out
 
 
-def _queue_detail(base: str, notes: list[str], limit: int = 500) -> str:
-    """把页级失败详情并进队列行最终结果; 过多时只展开前 3 条并标注总数。"""
-    if not notes:
-        return base
-    text = f"{base}；" + "；".join(notes[:3])
-    if len(notes) > 3:
-        text += f"；…共 {len(notes)} 页失败"
-    return text[:limit]
+def _queue_detail(base: str, notes: list[str]) -> "tuple[str, str]":
+    """把页级失败详情并进队列行。
+
+    返回 (summary, full):
+      - summary: 单行摘要, 优先放「尚未恢复」的页, 最多 3 条并标注剩余页数;
+      - full:   摘要 + 逐行完整详情 (含每条备份路径), 持久化与展开都使用它。
+    不在这里截断字节长度, 否则长备份路径与「共 N 页失败」会被切掉。
+    """
+    ordered = sorted(notes, key=lambda n: 0 if "尚未恢复" in n else 1)
+    summary = base
+    if ordered:
+        summary += "；" + "；".join(ordered[:3])
+        if len(ordered) > 3:
+            summary += f"；…共 {len(ordered)} 页失败"
+    full = summary
+    if ordered:
+        full += "\n" + "\n".join(f"- {n}" for n in ordered)
+    return summary, full
 
 
 def run_cart(
@@ -166,10 +176,10 @@ def run_cart(
                     d.set_progress_callback(None)
                     continue
                 except Exception as e:
-                    detail = str(e).splitlines()[0].strip() or type(e).__name__
-                    detail = _queue_detail(
-                        detail, _page_failure_notes(d, it.get('item_type') or ''))
-                    reporter.error(f"任务失败 #{it.get('id')}: {detail}")
+                    base = str(e).splitlines()[0].strip() or type(e).__name__
+                    summary, detail = _queue_detail(
+                        base, _page_failure_notes(d, it.get('item_type') or ''))
+                    reporter.error(f"任务失败 #{it.get('id')}: {summary}")
                     with PixivDatabase(None) as db2:
                         try: db2.queue_finish_item(item_id, 'failed',
                                                    error_note=detail)
@@ -180,7 +190,9 @@ def run_cart(
                     d.set_progress_callback(None)
                     continue
                 notes = _page_failure_notes(d, it.get('item_type') or '')
-                partial = _queue_detail("部分页失败", notes) if notes else None
+                partial = None
+                if notes:
+                    _, partial = _queue_detail("部分页失败", notes)
                 with PixivDatabase(None) as db2:
                     try: db2.queue_finish_item(item_id, 'done',
                                                error_note=partial)

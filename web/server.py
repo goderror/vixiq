@@ -94,6 +94,9 @@ from utils.author_naming import (
     strip_promo as _strip_promo,
 )
 from utils.config import load_config
+from utils.file_backup import ensure_overwrite_backup
+from utils.file_identity import win_api as _adopt_win_api
+from utils.file_identity import unlink_if_identity as _unlink_by_identity
 from utils.logger import build_reporter
 
 from web.event_bus import EventHub, WebReporter
@@ -337,64 +340,7 @@ _ADOPT_TASK_EVENTS: "dict[str, threading.Event]" = {}
 _ADOPT_TASK_HOOK = None
 
 # Windows 句柄身份删除: 只删扫描时锁定的那个文件对象, 同路径被换成新文件时保留新文件。
-_ADOPT_WIN_API = None
-
-
-def _adopt_win_api():
-    """惰性准备 CreateFileW / GetFileInformationByHandle / SetFileInformationByHandle。"""
-    global _ADOPT_WIN_API
-    if _ADOPT_WIN_API is not None:
-        return _ADOPT_WIN_API
-    import ctypes
-    from ctypes import wintypes
-
-    class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
-        _fields_ = [
-            ("dwFileAttributes", wintypes.DWORD),
-            ("ftCreationTime", wintypes.FILETIME),
-            ("ftLastAccessTime", wintypes.FILETIME),
-            ("ftLastWriteTime", wintypes.FILETIME),
-            ("dwVolumeSerialNumber", wintypes.DWORD),
-            ("nFileSizeHigh", wintypes.DWORD),
-            ("nFileSizeLow", wintypes.DWORD),
-            ("nNumberOfLinks", wintypes.DWORD),
-            ("nFileIndexHigh", wintypes.DWORD),
-            ("nFileIndexLow", wintypes.DWORD),
-        ]
-
-    class _FILE_DISPOSITION_INFO(ctypes.Structure):
-        _fields_ = [("DeleteFile", wintypes.BOOL)]
-
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    create = k32.CreateFileW
-    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
-                       wintypes.HANDLE]
-    create.restype = wintypes.HANDLE
-    info = k32.GetFileInformationByHandle
-    info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION)]
-    info.restype = wintypes.BOOL
-    dispose = k32.SetFileInformationByHandle
-    dispose.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
-                        wintypes.DWORD]
-    dispose.restype = wintypes.BOOL
-    close = k32.CloseHandle
-    close.argtypes = [wintypes.HANDLE]
-    close.restype = wintypes.BOOL
-    _ADOPT_WIN_API = {
-        "ctypes": ctypes, "wintypes": wintypes,
-        "BY_HANDLE_FILE_INFORMATION": _BY_HANDLE_FILE_INFORMATION,
-        "FILE_DISPOSITION_INFO_STRUCT": _FILE_DISPOSITION_INFO,
-        "CreateFileW": create, "GetFileInformationByHandle": info,
-        "SetFileInformationByHandle": dispose, "CloseHandle": close,
-        "GENERIC_READ": 0x80000000, "GENERIC_WRITE": 0x40000000,
-        "DELETE": 0x00010000,
-        "FILE_SHARE_READ": 0x1, "FILE_SHARE_WRITE": 0x2,
-        "FILE_SHARE_DELETE": 0x4, "OPEN_EXISTING": 3,
-        "FILE_ATTRIBUTE_NORMAL": 0x80, "FileDispositionInfo": 4,
-        "INVALID_HANDLE_VALUE": ctypes.c_void_p(-1).value,
-    }
-    return _ADOPT_WIN_API
+# 实现统一放在 utils.file_identity (下载器回滚也复用同一套对象绑定操作)。
 
 
 def _adopt_unlink_identity(path: str, expected: dict) -> "tuple[str, str]":
@@ -408,84 +354,7 @@ def _adopt_unlink_identity(path: str, expected: dict) -> "tuple[str, str]":
     SetFileInformationByHandle(DeleteFile) 删除**该句柄指向的对象**; 即使路径在
     打开后被 os.replace 换掉, 也不会误删新文件。
     """
-    if not expected:
-        return ("kept", "无法核验源文件身份，已保留")
-    exp_size = int(expected.get("size", -1))
-    exp_mtime = int(expected.get("mtime_ns", -1))
-    exp_ino = int(expected.get("ino", -1))
-    exp_dev = int(expected.get("dev", -1)) & 0xFFFFFFFF
-    if os.name == "nt":
-        api = _adopt_win_api()
-        ct = api["ctypes"]
-        handle = api["CreateFileW"](
-            str(path), api["GENERIC_READ"] | api["DELETE"],
-            # 收尾核验与删除期间拒绝写共享: 已有写入句柄 → CreateFileW 直接失败,
-            # 进入原件保留分支; 我们持有句柄期间外部也无法再打开写句柄。
-            api["FILE_SHARE_READ"] | api["FILE_SHARE_DELETE"],
-            None, api["OPEN_EXISTING"], api["FILE_ATTRIBUTE_NORMAL"], None)
-        if not handle or handle == api["INVALID_HANDLE_VALUE"]:
-            err = ct.get_last_error()
-            if err in (2, 3):          # ERROR_FILE_NOT_FOUND / PATH_NOT_FOUND
-                return ("removed", "")
-            if err == 32:
-                return ("kept", "收件箱原件被占用，已保留")
-            return ("kept", f"无法打开源文件（WinError {err}），已保留")
-        deleted = False
-        try:
-            info = api["BY_HANDLE_FILE_INFORMATION"]()
-            if not api["GetFileInformationByHandle"](handle, ct.byref(info)):
-                err = ct.get_last_error()
-                return ("kept", f"无法核验源文件身份（WinError {err}），已保留")
-            fsize = (int(info.nFileSizeHigh) << 32) | int(info.nFileSizeLow)
-            findex = (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow)
-            ft = (int(info.ftLastWriteTime.dwHighDateTime) << 32) \
-                | int(info.ftLastWriteTime.dwLowDateTime)
-            fmtime = (ft - 116444736000000000) * 100
-            same = (int(info.dwVolumeSerialNumber) == exp_dev
-                    and findex == exp_ino and fsize == exp_size
-                    and fmtime == exp_mtime)
-            if not same:
-                return ("replaced", "收件箱同名文件已被替换，已保留（未移走）")
-            disp = api["FILE_DISPOSITION_INFO_STRUCT"]()
-            disp.DeleteFile = True
-            if not api["SetFileInformationByHandle"](
-                    handle, api["FileDispositionInfo"], ct.byref(disp),
-                    ct.sizeof(disp)):
-                err = ct.get_last_error()
-                return ("kept", f"源文件无法删除（WinError {err}），已保留")
-            deleted = True
-        finally:
-            api["CloseHandle"](handle)
-        if deleted and os.path.exists(str(path)):
-            # 句柄已标记删除但仍有别的打开者: 路径暂在, 如实保留并可重试
-            return ("kept", "收件箱原件删除挂起（仍有句柄占用），已保留")
-        return ("removed", "")
-    # 非 Windows 退路: 打开后 fstat 比对再 unlink (POSIX 下路径仍可能被换, 但项目主用 Windows)
-    try:
-        fd = os.open(str(path), os.O_RDONLY)
-    except FileNotFoundError:
-        return ("removed", "")
-    except OSError as e:
-        return ("kept", f"无法打开源文件：{e}")
-    try:
-        st = os.fstat(fd)
-        if (int(st.st_size) != exp_size
-                or int(getattr(st, "st_mtime_ns", 0)) != exp_mtime
-                or int(getattr(st, "st_ino", 0)) != exp_ino
-                or (int(getattr(st, "st_dev", 0)) & 0xFFFFFFFF) != exp_dev):
-            return ("replaced", "收件箱同名文件已被替换，已保留（未移走）")
-        try:
-            os.unlink(str(path))
-            return ("removed", "")
-        except FileNotFoundError:
-            return ("removed", "")
-        except OSError as e:
-            return ("kept", f"源文件无法删除：{e}")
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+    return _unlink_by_identity(path, expected)
 # 临时目录手动清理与下载启动的同步边界: 下载一旦被选中(忙标记置上), 清理就不再删
 # downloads; 反过来清理正删 downloads 时, 下载启动会等它删完再重建。
 _TEMP_USE_LOCK = threading.Lock()
@@ -7968,22 +7837,25 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         _launch_run_cart(strategy=strategy)
         return jsonify({"status": "started"})
 
-    def _backup_work_files(db, img_root: Path, aid: str) -> int:
+    def _backup_work_files(db, img_root: Path, aid: str) -> dict:
         """重下修复前, 把该作品当前已落盘的每张图复制一份 `.bak` 再开下载。
 
         为什么要在这里做 (2026-09-16 实测发现): 下载器只在「它自己的落盘路径已存在文件」
         时才备份 .bak; 而用户的图库大多被手工分类进 `X图/作者_ID/` 这类子目录, 下载器的
         落盘目录未必等于当前文件所在目录 → 覆盖发生了却没有 .bak, 「备份管理」形同虚设。
         这里按数据库里**真实的 local_path** 逐张备份, 与下载器落盘位置无关, 保证"覆盖前
-        一定留过一份旧文件"。.bak 不参与对账(后缀不匹配图片), 不会产生幽灵记录。"""
-        import shutil as _sh
-        n = 0
+        一定留过一份旧文件"。.bak 不参与对账(后缀不匹配图片), 不会产生幽灵记录。
+
+        与下载器共用 ensure_overwrite_backup: 上一轮旧图尚未恢复时沿用原 `.bak`，
+        绝不用失败新图覆盖用户回执里给过的可恢复副本。"""
+        out = {"count": 0, "created": 0, "reused": 0, "refused": []}
         try:
             rows = db.conn.execute(
-                "SELECT local_path FROM pages WHERE artwork_id=? "
-                "AND local_path IS NOT NULL AND local_path <> ''", (str(aid),)).fetchall()
+                "SELECT local_path, md5, file_size_bytes FROM pages "
+                "WHERE artwork_id=? AND local_path IS NOT NULL AND local_path <> ''",
+                (str(aid),)).fetchall()
         except Exception:
-            return 0
+            return out
         for r in rows:
             rel = str(r[0]).replace("\\", "/")
             try:
@@ -7991,13 +7863,19 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 if not src.is_file():
                     continue
                 bak = src.with_name(src.name + ".bak")
-                if bak.exists():
-                    bak.unlink()          # 只留最新一份, 不无限堆叠
-                _sh.copy2(str(src), str(bak))
-                n += 1
-            except Exception:
-                continue
-        return n
+                plan = ensure_overwrite_backup(src, bak, r[1], r[2])
+                if plan.get("action") == "refuse":
+                    out["refused"].append({
+                        "path": str(src), "reason": plan.get("reason") or "无法核验"})
+                    continue
+                out["count"] += 1
+                if plan.get("action") == "reuse":
+                    out["reused"] += 1
+                else:
+                    out["created"] += 1
+            except Exception as e:
+                out["refused"].append({"path": str(src), "reason": str(e)})
+        return out
 
     @app.route("/api/cart/repair", methods=["POST"])
     def api_cart_repair():
@@ -8020,7 +7898,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                                      "（避免两套下载策略混在一轮里）"}), 409
         ids = list(dict.fromkeys(raw_ids))
         img_root = Path(paths.user_data(_config["paths"]["img_subdir"]))
-        out = {"added": 0, "in_queue": 0, "skipped": [], "item_ids": [], "backed_up": 0}
+        out = {"added": 0, "in_queue": 0, "skipped": [], "item_ids": [],
+               "backed_up": 0, "backup_reused": 0}
         with _db() as db:
             for aid in ids:
                 if not aid.isdigit():
@@ -8030,6 +7909,16 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 meta = db.get_artwork_metadata(aid)
                 if meta is None:
                     out["skipped"].append({"artwork_id": aid, "reason": "不在库中"})
+                    continue
+                # 先确认旧图备份; 无法核验时不得入队覆盖 (避免把原图唯一副本冲掉)
+                backup = _backup_work_files(db, img_root, aid)
+                if backup["refused"]:
+                    first = backup["refused"][0]
+                    out["skipped"].append({
+                        "artwork_id": aid,
+                        "reason": ("上一轮原图备份无法核验，已停止覆盖；"
+                                   f"请先按备份路径恢复（{first['path']}："
+                                   f"{first['reason']}）")})
                     continue
                 res = _cart_add_item(db, {
                     "item_type": "artwork", "artwork_id": aid,
@@ -8042,8 +7931,9 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     "source_note": "重下修复（覆盖本地）",
                 })
                 if res.get("reason") == "added":
-                    # 入队成功 = 这一轮马上会覆盖本地 → 立刻按 DB 里的真实路径逐张留 .bak
-                    out["backed_up"] += _backup_work_files(db, img_root, aid)
+                    # 入队成功 = 这一轮马上会覆盖本地 → 按 DB 里的真实路径逐张留 .bak
+                    out["backed_up"] += backup["count"]
+                    out["backup_reused"] += backup["reused"]
                     out["added"] += 1
                     out["item_ids"].append(res["item_id"])
                 elif res.get("reason") == "in_queue":
