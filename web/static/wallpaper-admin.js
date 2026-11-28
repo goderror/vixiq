@@ -762,9 +762,28 @@ async function wallAction(action, explicit) {
     wallBindSave(async () => {
       const disk = $('input[name="wf-delete-mode"]:checked').value === 'disk';
       if (disk && !confirm(`将所选 ${files.length} 张壁纸文件送入 Windows 回收站？`)) return false;
-      const r = await wallPost(disk ? '/api/wallpaper/files/recycle' : '/api/wallpaper/files/trash', { names });
-      if (r.failed?.length || r.refused?.length) { await wallFilesLoad(); throw new Error([...(r.failed || []), ...(r.refused || [])].join('；')); }
-      toast(disk ? `已送入 Windows 回收站 ${r.recycled} 张` : `已移入应用回收站 ${r.moved} 张`, 'ok');
+      const ctl = await window.runWithProgress({
+        key: 'wall-files-delete', host: '#op-progress-host',
+        label: disk ? '删除壁纸' : '移出壁纸库', unit: '张',
+        scanText: disk ? '正在送入 Windows 回收站…' : '正在移入应用回收站…',
+        request: {
+          run: () => wallPost(disk ? '/api/wallpaper/files/recycle'
+                                   : '/api/wallpaper/files/trash', { names }),
+          timeout: 180000,
+        },
+        onDone: (r) => {
+          toast(disk ? `已送入 Windows 回收站 ${r.recycled} 张`
+                     : `已移入应用回收站 ${r.moved} 张`, 'ok');
+        },
+        onError: () => {},
+      });
+      const r = ctl && ctl.result;
+      if (!r) throw new Error((ctl && ctl.error) || '操作失败');
+      if (r.failed?.length || r.refused?.length) {
+        await wallFilesLoad();
+        throw new Error([...(r.failed || []), ...(r.refused || [])].join('；'));
+      }
+      return r;
     });
   }
 }
@@ -812,10 +831,25 @@ async function wallTrashAct(action, ids) {
   if (!confirm(action === 'restore' ? `恢复所选 ${ids.length} 张壁纸？同名冲突会跳过。` : `将所选 ${ids.length} 张壁纸送入 Windows 回收站？应用内记录会移除。`)) return;
   WFA.busy = true;
   try {
-    const r = await wallPost('/api/wallpaper/trash/' + action, { ids });
-    await wallTrashLoad(); await wallFilesLoad();
-    if (r.failed?.length) { openLibModal('部分壁纸未处理', `<p>完成 ${r.done} 张，以下项目保留：</p><p>${r.failed.map(esc).join('<br>')}</p>`); }
-    else toast(`已${action === 'restore' ? '恢复' : '回收'} ${r.done} 张`, 'ok');
-  } catch (e) { toast(e.message, 'err'); } finally { WFA.busy = false; }
+    await window.runWithProgress({
+      key: 'wall-trash-act', host: '#op-progress-host',
+      label: action === 'restore' ? '恢复壁纸' : '回收壁纸', unit: '张',
+      scanText: action === 'restore' ? '正在恢复壁纸…' : '正在送入 Windows 回收站…',
+      request: {
+        run: () => wallPost('/api/wallpaper/trash/' + action, { ids }),
+        timeout: 180000,
+      },
+      onDone: async (r) => {
+        await wallTrashLoad(); await wallFilesLoad();
+        if (r.failed?.length) {
+          openLibModal('部分壁纸未处理',
+            `<p>完成 ${r.done} 张，以下项目保留：</p><p>${r.failed.map(esc).join('<br>')}</p>`);
+        } else {
+          toast(`已${action === 'restore' ? '恢复' : '回收'} ${r.done} 张`, 'ok');
+        }
+      },
+      onError: (e) => toast(e.message, 'err'),
+    });
+  } finally { WFA.busy = false; }
 }
 function wallTrashAll(action) { if (wallTrashItems.length) return wallTrashAct(action, wallTrashItems.map(x => x.id)); }

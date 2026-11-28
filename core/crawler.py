@@ -1081,6 +1081,8 @@ class PixivDownloader:
         if self._should_abort():
             self._abort_now(artwork_id, 0, 1, 0)
 
+        # 合成阶段: 只上报阶段文字 (不估算帧编码百分比), 合成失败仍走原下载失败路径
+        self._fire_progress("artwork_page", 0, 1, "正在合成动图")
         wh = compose_ugoira_gif(zip_bytes, frames, out_path)
         if not wh:
             self.db.mark_page_status(artwork_id, 0, PSt.FAILED)

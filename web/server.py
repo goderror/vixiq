@@ -335,6 +335,154 @@ _ADOPT_TASK = {
 _ADOPT_TASK_EVENTS: "dict[str, threading.Event]" = {}
 # 测试钩子 (生产为 None): 在扫描锁定后、逐项处理前插入动作。
 _ADOPT_TASK_HOOK = None
+
+# Windows 句柄身份删除: 只删扫描时锁定的那个文件对象, 同路径被换成新文件时保留新文件。
+_ADOPT_WIN_API = None
+
+
+def _adopt_win_api():
+    """惰性准备 CreateFileW / GetFileInformationByHandle / SetFileInformationByHandle。"""
+    global _ADOPT_WIN_API
+    if _ADOPT_WIN_API is not None:
+        return _ADOPT_WIN_API
+    import ctypes
+    from ctypes import wintypes
+
+    class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    class _FILE_DISPOSITION_INFO(ctypes.Structure):
+        _fields_ = [("DeleteFile", wintypes.BOOL)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = k32.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+                       wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    info = k32.GetFileInformationByHandle
+    info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION)]
+    info.restype = wintypes.BOOL
+    dispose = k32.SetFileInformationByHandle
+    dispose.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                        wintypes.DWORD]
+    dispose.restype = wintypes.BOOL
+    close = k32.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    _ADOPT_WIN_API = {
+        "ctypes": ctypes, "wintypes": wintypes,
+        "BY_HANDLE_FILE_INFORMATION": _BY_HANDLE_FILE_INFORMATION,
+        "FILE_DISPOSITION_INFO_STRUCT": _FILE_DISPOSITION_INFO,
+        "CreateFileW": create, "GetFileInformationByHandle": info,
+        "SetFileInformationByHandle": dispose, "CloseHandle": close,
+        "GENERIC_READ": 0x80000000, "DELETE": 0x00010000,
+        "FILE_SHARE_READ": 0x1, "FILE_SHARE_WRITE": 0x2,
+        "FILE_SHARE_DELETE": 0x4, "OPEN_EXISTING": 3,
+        "FILE_ATTRIBUTE_NORMAL": 0x80, "FileDispositionInfo": 4,
+        "INVALID_HANDLE_VALUE": ctypes.c_void_p(-1).value,
+    }
+    return _ADOPT_WIN_API
+
+
+def _adopt_unlink_identity(path: str, expected: dict) -> "tuple[str, str]":
+    """按文件对象身份移除源文件。
+
+    返回 (removed|kept|replaced, reason)：
+      - removed: 已删除, 或路径已不存在 (被移走/改名);
+      - kept: 被占用/权限不足/无法核验, 可稍后重试;
+      - replaced: 同路径已换成别的文件, 新文件保留, 不进入 removed_rels。
+    Windows 用句柄身份 (卷序列号+文件索引+大小+mtime) 比对后
+    SetFileInformationByHandle(DeleteFile) 删除**该句柄指向的对象**; 即使路径在
+    打开后被 os.replace 换掉, 也不会误删新文件。
+    """
+    if not expected:
+        return ("kept", "无法核验源文件身份，已保留")
+    exp_size = int(expected.get("size", -1))
+    exp_mtime = int(expected.get("mtime_ns", -1))
+    exp_ino = int(expected.get("ino", -1))
+    exp_dev = int(expected.get("dev", -1)) & 0xFFFFFFFF
+    if os.name == "nt":
+        api = _adopt_win_api()
+        ct = api["ctypes"]
+        handle = api["CreateFileW"](
+            str(path), api["GENERIC_READ"] | api["DELETE"],
+            api["FILE_SHARE_READ"] | api["FILE_SHARE_WRITE"] | api["FILE_SHARE_DELETE"],
+            None, api["OPEN_EXISTING"], api["FILE_ATTRIBUTE_NORMAL"], None)
+        if not handle or handle == api["INVALID_HANDLE_VALUE"]:
+            err = ct.get_last_error()
+            if err in (2, 3):          # ERROR_FILE_NOT_FOUND / PATH_NOT_FOUND
+                return ("removed", "")
+            if err == 32:
+                return ("kept", "收件箱原件被占用，已保留")
+            return ("kept", f"无法打开源文件（WinError {err}），已保留")
+        deleted = False
+        try:
+            info = api["BY_HANDLE_FILE_INFORMATION"]()
+            if not api["GetFileInformationByHandle"](handle, ct.byref(info)):
+                err = ct.get_last_error()
+                return ("kept", f"无法核验源文件身份（WinError {err}），已保留")
+            fsize = (int(info.nFileSizeHigh) << 32) | int(info.nFileSizeLow)
+            findex = (int(info.nFileIndexHigh) << 32) | int(info.nFileIndexLow)
+            ft = (int(info.ftLastWriteTime.dwHighDateTime) << 32) \
+                | int(info.ftLastWriteTime.dwLowDateTime)
+            fmtime = (ft - 116444736000000000) * 100
+            same = (int(info.dwVolumeSerialNumber) == exp_dev
+                    and findex == exp_ino and fsize == exp_size
+                    and fmtime == exp_mtime)
+            if not same:
+                return ("replaced", "收件箱同名文件已被替换，已保留（未移走）")
+            disp = api["FILE_DISPOSITION_INFO_STRUCT"]()
+            disp.DeleteFile = True
+            if not api["SetFileInformationByHandle"](
+                    handle, api["FileDispositionInfo"], ct.byref(disp),
+                    ct.sizeof(disp)):
+                err = ct.get_last_error()
+                return ("kept", f"源文件无法删除（WinError {err}），已保留")
+            deleted = True
+        finally:
+            api["CloseHandle"](handle)
+        if deleted and os.path.exists(str(path)):
+            # 句柄已标记删除但仍有别的打开者: 路径暂在, 如实保留并可重试
+            return ("kept", "收件箱原件删除挂起（仍有句柄占用），已保留")
+        return ("removed", "")
+    # 非 Windows 退路: 打开后 fstat 比对再 unlink (POSIX 下路径仍可能被换, 但项目主用 Windows)
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except FileNotFoundError:
+        return ("removed", "")
+    except OSError as e:
+        return ("kept", f"无法打开源文件：{e}")
+    try:
+        st = os.fstat(fd)
+        if (int(st.st_size) != exp_size
+                or int(getattr(st, "st_mtime_ns", 0)) != exp_mtime
+                or int(getattr(st, "st_ino", 0)) != exp_ino
+                or (int(getattr(st, "st_dev", 0)) & 0xFFFFFFFF) != exp_dev):
+            return ("replaced", "收件箱同名文件已被替换，已保留（未移走）")
+        try:
+            os.unlink(str(path))
+            return ("removed", "")
+        except FileNotFoundError:
+            return ("removed", "")
+        except OSError as e:
+            return ("kept", f"源文件无法删除：{e}")
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 # 临时目录手动清理与下载启动的同步边界: 下载一旦被选中(忙标记置上), 清理就不再删
 # downloads; 反过来清理正删 downloads 时, 下载启动会等它删完再重建。
 _TEMP_USE_LOCK = threading.Lock()
@@ -15255,15 +15403,11 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 and a.get("ino") == b.get("ino")
                 and a.get("dev") == b.get("dev"))
 
-    def _adopt_remove_source(src: Path) -> bool:
-        """实际移走返回 True; 已不存在也视为移走; 被占用/权限不足返回 False。"""
-        try:
-            src.unlink()
-            return True
-        except FileNotFoundError:
-            return True
-        except OSError:
-            return False
+    def _adopt_remove_source(src: Path, expected) -> "tuple[str, str]":
+        """按扫描身份移除源文件; 返回 (removed|kept|replaced, reason)。"""
+        if not expected:
+            return ("kept", "无法核验源文件身份，已保留")
+        return _adopt_unlink_identity(str(src), expected)
 
     def _adopt_registered_identity_ok(rel_img: str, src: Path, img_root: Path):
         """目标同名文件已登记时, 核验它是不是收件箱这张图的副本。
@@ -15314,7 +15458,7 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             return None
 
     def _adopt_one(rel: str, src: Path, img_root: Path, dest_dir: Path,
-                   auto_png: bool, img_ext: set) -> dict:
+                   auto_png: bool, img_ext: set, expected=None) -> dict:
         """处理一张: 沿用原入库逻辑, 返回统一结果 (不在这里结算计数)。"""
         import shutil as _sh
         from core.image_format import (
@@ -15347,11 +15491,18 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                     verdict = None
                     break
             if verdict is True:
-                removed = _adopt_remove_source(src)
+                rm, rm_reason = _adopt_remove_source(src, expected)
+                if rm == "removed":
+                    return {"outcome": "skipped", "rel": rel, "file": name,
+                            "reason": "已入库（此前已处理）",
+                            "removed": True, "kept": False}
+                if rm == "replaced":
+                    return {"outcome": "skipped", "rel": rel, "file": name,
+                            "reason": "已入库，收件箱同名文件已被替换，已保留",
+                            "removed": False, "kept": True}
                 return {"outcome": "skipped", "rel": rel, "file": name,
-                        "reason": ("已入库（此前已处理）" if removed
-                                   else "已入库，收件箱原件仍在"),
-                        "removed": removed, "kept": not removed}
+                        "reason": "已入库，收件箱原件仍在（" + (rm_reason or "被占用") + "）",
+                        "removed": False, "kept": True}
             if verdict is None:
                 return {"outcome": "skipped", "rel": rel, "file": name,
                         "reason": "图库里已有同名文件，但无法核验内容，已保留"}
@@ -15425,7 +15576,16 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 db.cleanup_orphans()
         except Exception:
             pass
-        removed = _adopt_remove_source(src)
+        rm, rm_reason = _adopt_remove_source(src, expected)
+        removed = rm == "removed"
+        kept = not removed
+        if removed:
+            keep_reason = ""
+        elif rm == "replaced":
+            keep_reason = "已入库，收件箱同名文件已被替换，已保留（未移走）"
+        else:
+            keep_reason = "已入库，收件箱原件仍在" + (
+                f"（{rm_reason}）" if rm_reason else "")
         record = {
             "kind": "imported", "target": str(final_target), "ok": True,
             "converted": bool(conv.get("converted")),
@@ -15437,8 +15597,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             "converted_at": conv.get("converted_at"),
         }
         return {"outcome": "imported", "rel": rel, "file": name,
-                "target": rel_img, "removed": removed, "kept": not removed,
-                "reason": "" if removed else "已入库，收件箱原件仍在",
+                "target": rel_img, "removed": removed, "kept": kept,
+                "reason": keep_reason,
                 "convert_failed": convert_failed, "ingest_record": record}
 
     def _adopt_run(task_id: str, rels: list, input_root: Path, img_root: Path,
@@ -15555,7 +15715,8 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                             "reason": "文件已被替换，已保留（未入库）"})
                     continue
                 try:
-                    res = _adopt_one(rel, src, img_root, dest_dir, auto_png, img_ext)
+                    res = _adopt_one(rel, src, img_root, dest_dir, auto_png,
+                                     img_ext, entry.get("identity"))
                 except Exception as e:
                     res = {"outcome": "failed", "rel": rel,
                            "reason": f"处理失败: {type(e).__name__}: {e}"}

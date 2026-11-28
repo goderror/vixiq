@@ -4805,8 +4805,13 @@ function updateItemProgress(itemId, cur, total, status) {
   if (status === '完成' || status === 'ok' || status === 'done') cell.textContent = '✓ 完成';
   else if (status === '失败' || status === 'failed') cell.textContent = '✖ 失败';
   else {
-    const pct = total ? Math.round(cur / total * 100) : 0;
-    cell.textContent = `${pct}% (${cur}/${total}) ${status || ''}`;
+    // 纯阶段信号 (如「正在合成动图」) 不伪造百分比, 直接显示阶段文字
+    if (/^正在/.test(String(status || ''))) {
+      cell.textContent = String(status);
+    } else {
+      const pct = total ? Math.round(cur / total * 100) : 0;
+      cell.textContent = `${pct}% (${cur}/${total}) ${status || ''}`;
+    }
   }
   // 同步更新状态列
   const row = $('#cart-row-' + itemId);
@@ -9478,16 +9483,26 @@ window.trashRestorePage = (aid, pn) => _trashRestore(
   { items: [{ artwork_id: String(aid), page_num: Number(pn) }] });
 
 async function _trashPurge(body) {
-  try {
-    const r = await api('/api/library/trash/purge', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const bad = (r && r.recycle_failed) || [];
-    toast(`已彻底删除 ${r.deleted} 项 · 文件送电脑回收站 ${r.recycled} 个`
-          + (bad.length ? `（${bad.length} 个没能送进回收站）` : ''), 'ok');
-    loadTrash(); loadLibrary(); loadStats();
-  } catch (e) { toast('彻底删除失败: ' + e.message, 'err'); }
+  await runWithProgress({
+    key: 'trash-purge', host: '#op-progress-host',
+    label: '彻底删除', unit: '项', scanText: '正在彻底删除…',
+    request: {
+      run: () => api('/api/library/trash/purge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      timeout: 180000,
+      validate: r => (!r || r.status === 'error')
+        ? ((r && (r.error || r.message)) || '彻底删除失败') : '',
+    },
+    onDone: (r) => {
+      const bad = (r && r.recycle_failed) || [];
+      toast(`已彻底删除 ${r.deleted} 项 · 文件送电脑回收站 ${r.recycled} 个`
+            + (bad.length ? `（${bad.length} 个没能送进回收站）` : ''), 'ok');
+      loadTrash(); loadLibrary(); loadStats();
+    },
+    onError: (e) => toast('彻底删除失败: ' + e.message, 'err'),
+  });
 }
 
 window.trashPurgeArtwork = async function (id) {
@@ -9923,9 +9938,15 @@ window.batchSourceSearch = async function () {
     scanText: '正在搜索来源…',
     task: {
       fixedId: 'batch-source',
-      start: () => api('/api/library/batch-source-search', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ artwork_ids: aids }) }),
+      start: async () => {
+        const r = await api('/api/library/batch-source-search', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ artwork_ids: aids }) });
+        if (!r || String(r.status) !== 'ok') {
+          throw new Error((r && (r.error || r.message)) || '搜索来源启动失败');
+        }
+        return r;
+      },
       read: () => api('/api/reverse/status'),
       idOf: () => 'batch-source',
       snapshotOf: () => ({ status: 'ok',
@@ -10107,35 +10128,52 @@ async function runSourceSearch(aid, forceSauce) {
   switchTab('reverse');
   $('#rev-gallery-result').innerHTML = '';
   galleryAid = String(aid);
-  let r;
-  try {
-    r = await api('/api/library/source-search', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ artwork_id: aid, saucenao: forceSauce ? 'force' : '' }) });
-  } catch (e) {
-    $('#rev-gallery-result').innerHTML = `<div class="hint err-text">反搜请求失败: ${esc(e.message)}</div>` + urlFormHtml(aid, '');
-    galleryAid = null;
-    return;
-  }
-  // 轮询进度 (1s), 进度并入任务表; 完成后渲染结果
-  clearInterval(galleryPollTimer);
-  let ticks = 0;
-  galleryPollTimer = setInterval(async () => {
-    ticks++;
-    let st = {};
-    try { st = (await api('/api/reverse/status')).src_search || {}; } catch (e) { /* 忽略 */ }
-    renderReverseTasks(await loadReverseStatus());   // 图库任务行随轮询刷新
-    const mine = st.artwork_id === String(aid);
-    const finished = mine && !st.running && (st.phase === 'done' || st.phase === 'error');
-    if (finished || ticks > 240) {
-      clearInterval(galleryPollTimer);
+  const mineSs = s => String(((s || {}).src_search || {}).artwork_id || '') === String(aid);
+  await runWithProgress({
+    key: 'source-search-single', mode: 'task', host: '#op-progress-host',
+    note: '#rev-gallery-result', label: '搜索来源', unit: '张',
+    scanText: '正在搜索来源…', noteCurrent: true,
+    task: {
+      fixedId: 'source-search-single',
+      start: async () => {
+        const r = await api('/api/library/source-search', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ artwork_id: aid,
+                                 saucenao: forceSauce ? 'force' : '' }) });
+        if (!r || !['started', 'ok'].includes(String(r.status))) {
+          throw new Error((r && (r.error || r.message)) || '反搜启动失败');
+        }
+        return r;
+      },
+      read: () => api('/api/reverse/status'),
+      idOf: () => 'source-search-single',
+      snapshotOf: () => ({ status: 'started',
+        src_search: { running: true, artwork_id: String(aid), done: 0,
+                      total: 1, phase: 'running', current: '' } }),
+      intervalMs: 1000,
+      map: {
+        running: s => mineSs(s) && !!s.src_search.running,
+        error: s => (mineSs(s) && s.src_search.phase === 'error')
+          ? (s.src_search.error || '反搜失败') : '',
+        result: s => mineSs(s) ? s.src_search.result : null,
+        stage: () => '搜索来源',
+        done: s => mineSs(s) ? (s.src_search.done || 0) : 0,
+        total: s => mineSs(s) ? (s.src_search.total || 0) : 0,
+        current: s => mineSs(s) ? (s.src_search.current || '') : '',
+      },
+      onState: (s) => { renderReverseTasks(s); },
+    },
+    onDone: async (hits) => {
       galleryAid = null;
       await loadReverseStatus();
-      if (finished && st.phase === 'done') renderGallerySearchResult(aid, st.result || []);
-      else if (st.phase === 'error') $('#rev-gallery-result').innerHTML = `<div class="hint err-text">反搜失败: ${esc(st.error || '未知')}</div>` + urlFormHtml(aid, '');
-      else $('#rev-gallery-result').innerHTML = `<div class="hint err-text">反搜超时，请重试</div>` + urlFormHtml(aid, '');
-    }
-  }, 1000);
+      renderGallerySearchResult(aid, hits || []);
+    },
+    onError: (e) => {
+      galleryAid = null;
+      $('#rev-gallery-result').innerHTML =
+        `<div class="hint err-text">反搜失败: ${esc(e.message)}</div>` + urlFormHtml(aid, '');
+    },
+  });
 }
 
 function renderGallerySearchResult(aid, hits) {
@@ -12507,7 +12545,7 @@ function opRunCreate(options) {
     countId: o.countId || (key + '-count'),
     gen: ++_opRunSeq, state: 'running', settled: false,
     last: null, snapshot: null, taskId: opSessionGet(key),
-    polling: false, detached: false, xhr: null,
+    looping: false, detached: false, xhr: null,
     btnSaved: false, result: null, error: '',
   };
   run.ctl = {
@@ -12591,24 +12629,44 @@ function opTaskApply(run, snap) {
   return { terminal: false };
 }
 
-async function opTaskPoll(run) {
-  if (!run || run.polling || run.settled) return;
+function opTaskSleep(ms) {
+  // 仅用于「关窗暂停」: 浏览器里正常计时; Node 测试里 unref, 不让暂停中的任务
+  // 单独把进程挂住 (真正的在途查询仍由测试自己的计时器保活)。
+  return new Promise(resolve => {
+    const t = setTimeout(resolve, ms);
+    if (t && typeof t.unref === 'function') t.unref();
+  });
+}
+
+async function opTaskLoop(run, immediate) {
+  // 同一任务只允许一条串行查询链: 连续 resume / 重复接回都不会再发第二个 GET。
+  // detach 只暂停新查询; 在途的旧查询返回后仍可接管结果。重开后立即补一次查询。
+  if (!run || run.looping || run.settled) return;
   const a = run.o.task || {};
   if (typeof a.read !== 'function' || !run.taskId) return;
   const gen = run.gen;
   const deadline = Date.now() + (a.timeoutMs || 30 * 60 * 1000);
   let errors = 0;
-  run.polling = true;
+  let delay = !immediate;
+  run.looping = true;
   try {
-    while (run.gen === gen && !run.detached && !run.settled) {
-      await new Promise(r => setTimeout(r, a.intervalMs || 600));
-      if (run.gen !== gen || run.detached || run.settled) return;
+    while (run.gen === gen && !run.settled) {
+      if (run.detached) {
+        // 关闭反馈区: 不再发起新查询; 已发出的旧查询仍会走完并缓存结果
+        await opTaskSleep(100);
+        delay = false;
+        continue;
+      }
+      if (delay) await new Promise(r => setTimeout(r, a.intervalMs || 600));
+      delay = true;
+      if (run.gen !== gen || run.settled) return;
+      if (run.detached) continue;
       let snap = null;
       try {
         snap = await a.read(run.taskId);
         errors = 0;
       } catch (e) {
-        if (run.gen !== gen || run.detached) return;
+        if (run.gen !== gen) return;
         errors += 1;
         if (errors >= (a.retries || 5) || Date.now() > deadline) {
           opRunFinish(run, 'error', {
@@ -12618,7 +12676,7 @@ async function opTaskPoll(run) {
         }
         continue;
       }
-      if (run.gen !== gen || run.detached || run.settled) return;
+      if (run.gen !== gen || run.settled) return;
       if (!snap) {
         errors += 1;
         if (errors >= (a.retries || 5)) {
@@ -12627,6 +12685,7 @@ async function opTaskPoll(run) {
         }
         continue;
       }
+      // 关窗期间返回的旧查询也接管: 只缓存/结算, 不强行画到已关闭的反馈区
       run.snapshot = snap;
       const r = opTaskApply(run, snap);
       if (r.terminal) {
@@ -12640,7 +12699,7 @@ async function opTaskPoll(run) {
       }
     }
   } finally {
-    run.polling = false;
+    run.looping = false;
   }
 }
 
@@ -12676,7 +12735,7 @@ async function opTaskStart(run) {
     opRunFinish(run, 'error', { error: '任务未返回可查询的任务号' });
     return;
   }
-  await opTaskPoll(run);
+  await opTaskLoop(run, false);
 }
 
 function opUploadStart(run) {
@@ -12803,7 +12862,7 @@ function resumeOp(key, options) {
     if (!options) return null;
     run = opRunCreate(options);
   }
-  if (run.polling || run.settled) return run.ctl;
+  if (run.settled) return run.ctl;
   const a = run.o.task || {};
   if (!run.taskId) run.taskId = a.fixedId || opSessionGet(key);
   if (!run.taskId) return run.ctl;
@@ -12811,26 +12870,8 @@ function resumeOp(key, options) {
   run.detached = false;
   opRunBusy(run, true);
   opRunPaint(run, run.last || { stage: run.o.scanText || '正在处理…' });
-  (async () => {
-    let snap = null;
-    try {
-      snap = await a.read(run.taskId);
-    } catch (e) {
-      opRunFinish(run, 'error', {
-        error: '任务查询中断：' + (e.message || e) + '。可稍后返回重试接回',
-      });
-      return;
-    }
-    if (run.settled || run.detached) return;
-    run.snapshot = snap;
-    const r = opTaskApply(run, snap || {});
-    if (r.terminal) {
-      if (r.error) opRunFinish(run, 'error', { error: r.error });
-      else opRunFinish(run, 'done', { result: r.result });
-      return;
-    }
-    void opTaskPoll(run);
-  })();
+  // 已有查询链时只恢复订阅, 不另起一条; 没有则在后台起唯一一条并立即补一次查询。
+  if (!run.looping) void opTaskLoop(run, true);
   return run.ctl;
 }
 
@@ -13343,7 +13384,6 @@ let revHiddenStamp = null;     // 摘行时对应的 last_result.time
 let revLastTasks = [];         // 最近一次渲染用的任务列表 (供「只清空失败」判断哪些是失败行)
 let revLastStamp = null;       // 最近一次渲染时的 last_result.time (摘行时记下来当"代次")
 let galleryAid = null;         // 图库「进反搜」的作品 ID (进度并入同一张任务表)
-let galleryPollTimer = null;
 
 const REV_STATUS_LBL = {
   wait: ['💤', '等待'], running: ['⏳', '识别中'], done: ['✓', '已处理'],

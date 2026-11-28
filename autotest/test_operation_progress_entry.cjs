@@ -418,6 +418,68 @@ function harnessBody() {
     assert.strictEqual(done, 1);
   });
 
+  test('连续两次 resume 只启动一条查询链', async () => {
+    reset();
+    let reads = 0, done = 0;
+    let resolveRead;
+    const opts = {
+      key: 'task5', host: '#h2', unit: '张', mode: 'task',
+      task: {
+        start: async () => ({ status: 'ok', task: { id: 't5', status: 'running', done: 0, total: 2 } }),
+        read: async () => {
+          reads += 1;
+          return new Promise(r => { resolveRead = r; });
+        },
+        idOf: r => r.task.id, snapshotOf: r => r.task, intervalMs: 10,
+      },
+      onDone: () => { done += 1; },
+    };
+    await runWithProgress(opts);
+    await sleep(30);
+    assert.strictEqual(reads, 1, '第一查询应在途');
+    const ctl1 = resumeOp('task5', opts);
+    const ctl2 = resumeOp('task5', opts);
+    assert.ok(ctl1 && ctl2);
+    await sleep(30);
+    assert.strictEqual(reads, 1, '重复接回不得再发第二个 GET');
+    resolveRead({ status: 'done', done: 2, total: 2, result: { n: 2 } });
+    await sleep(40);
+    assert.strictEqual(done, 1);
+    assert.strictEqual(reads, 1);
+  });
+
+  test('GET 在途时关窗再开, 放行旧 GET 后继续推进', async () => {
+    reset();
+    let reads = 0, done = 0;
+    let resolveOld;
+    const opts = {
+      key: 'task6', host: '#h2', unit: '张', mode: 'task',
+      task: {
+        start: async () => ({ status: 'ok', task: { id: 't6', status: 'running', done: 0, total: 2 } }),
+        read: async () => {
+          reads += 1;
+          if (reads === 1) return new Promise(r => { resolveOld = r; });
+          if (reads === 2) return { status: 'running', done: 1, total: 2 };
+          return { status: 'done', done: 2, total: 2, result: { n: 2 } };
+        },
+        idOf: r => r.task.id, snapshotOf: r => r.task, intervalMs: 10,
+      },
+      onDone: () => { done += 1; },
+    };
+    runWithProgress(opts);
+    await sleep(30);
+    assert.strictEqual(reads, 1, '旧查询应在途');
+    detachOp('task6');
+    resumeOp('task6', opts);
+    assert.strictEqual(reads, 1, '旧 GET 在途时重开不应再发第二个');
+    resolveOld({ status: 'running', done: 1, total: 2 });
+    await sleep(80);
+    assert.ok(reads >= 2, '放行旧 GET 后应继续下一次查询');
+    await sleep(80);
+    assert.strictEqual(done, 1, '完成回调只结算一次');
+    assert.strictEqual(reads, 3);
+  });
+
   (async () => {
     let failed = 0;
     for (const [name, fn] of cases) {
