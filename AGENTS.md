@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128h`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128i`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128h`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128i`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,39 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.94 共用进度入口与三批接入（2026-11-28，前端 `20261128i`，已发布到安装版）
+
+- **共用入口**：`web/static/app.js` 新增 `runWithProgress`，统一普通请求 / 浏览器上传 /
+  后台任务三种接法；共用 300ms 阈值、流动/计数切换、按钮复位、5s 单次查询超时、
+  短暂失败重试、迟到回包隔离、`detachOp/resumeOp` 切页接回与全局
+  `#op-progress-host`。被取代的入口自建 timer/按钮状态/接回逻辑已删除。
+- **三批接入**：
+  - 一：AI 测试连接、反搜添加图片、壁纸副本扫描（三个代表）；
+  - 二：批量搜索来源/一键应用、AI 生成、重复作者查找/合并、合并/拆分图片、批量编辑；
+  - 三：反搜「选中入库」后台任务、丢弃/清空、图库批量回收、壁纸副本移出、
+    补完作品入队、重下修复。
+- **入库任务**：`POST/GET /api/reverse/adopt/task`，扫描锁定前 500 张及文件身份，
+  逐张重新核验后结算；源文件实际移走才进 `removed_rels`，移不走→
+  `source_kept/kept_rels` 并显示「已入库，收件箱原件仍在」；已登记同图先用
+  `find_page_by_local_path` + `get_page_conversion` 核验身份；旧
+  `/api/reverse/adopt` 复用同一任务并保留旧字段。前端批量按钮确认写明 500 上限、
+  本次范围与超出数量，只按 `removed_rels` 隐藏任务行；行内单张仍走旧同步接口。
+- **回归**：新增 `test_operation_progress_entry.cjs`、`test_reverse_adopt_progress.cjs`，
+  改写上传/壁纸副本 Node 用例；新增 T205（隔离收件箱/图库/SQLite：普通成功、
+  已登记重试、同路径替换、转换失败保原格式、登记失败、源文件占用、500 上限、
+  同批 already/不同批 409、旧接口字段）。全量 **196/196**（185.37 s），日志
+  `_dev_runtime/diagnostics/trae-20261128i-operation-progress-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 16:55:19`，前端 `20261128i`）在 7813
+  通过入库任务 API、旧接口、500 上限与页面入口检查。回滚清单
+  `_dev_runtime/backups/publish-20261128i-20261128-165701.json`（5 个旧文件、
+  10 个替换项、15,424,872 字节）。候选/dist/安装版 exe `b231e85b55cc…`、
+  base_library `3c2727a7730f…`、app.js `ef24cd6deb4b…`、index.html
+  `6d6df6d8b107…`；两处 `config/user.json` 哈希未变。安装版 7810 前端
+  `20261128i-1795856119-1795856119-1795519082`、健康正常，反搜页「📥 入库选中」与
+  设置页「🔌 测试连接」共用进度入口 UI 检查通过。入口矩阵见
+  `_dev_runtime/diagnostics/trae-operation-progress-entry-matrix-20261128.md`，
+  交接见 `trae-20261128i-operation-progress-handoff-20261128.md`。
 
 ### 4.93 反搜添加图片落盘返修：半文件清理 + 同名并发防覆盖（2026-11-28，前端 `20261128h`，已发布到安装版）
 
