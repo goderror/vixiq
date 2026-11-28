@@ -10,7 +10,7 @@ const path = require('path');
 
 const APP_JS = path.resolve(__dirname, '../web/static/app.js');
 const src = fs.readFileSync(APP_JS, 'utf8');
-const START = 'function updateItemProgress(';
+const START = 'function itemNoteHtml(';
 const END = 'window.removeCartItem';
 const a = src.indexOf(START);
 const b = src.indexOf(END, a);
@@ -23,6 +23,7 @@ function harnessBody() {
     let html = '', text = '';
     const obj = {
       id, className: '', dataset: {},
+      classList: { add() {}, remove() {} },
       querySelector: sel => (sel === '.tag-state' ? (obj._tag || null) : null),
     };
     Object.defineProperty(obj, 'innerHTML', {
@@ -89,6 +90,26 @@ function harnessBody() {
     const cell = els['#cart-prog-1'];
     assert.strictEqual(cell.textContent, '40% (2/5) 下载中');
     assert.ok(!cell.innerHTML.includes('cart-flow'));
+  });
+
+  test('最终失败详情可展开并保留备份路径', () => {
+    reset();
+    updateItemProgress(1, 1, 1,
+      '失败：旧图尚未恢复；可恢复副本：D:\\iso\\x.png.bak');
+    const cell = els['#cart-prog-1'];
+    assert.ok(cell.innerHTML.includes('cart-note'), cell.innerHTML);
+    assert.ok(cell.textContent.includes('旧图尚未恢复'), cell.textContent);
+    assert.ok(cell.textContent.includes('.bak'), cell.textContent);
+    assert.strictEqual(els['#cart-row-1']._tag.className, 'tag-state failed');
+  });
+
+  test('部分页失败仍显示完成并带详情', () => {
+    reset();
+    updateItemProgress(1, 1, 1, '完成：部分页失败；p1: 旧图尚未恢复');
+    const cell = els['#cart-prog-1'];
+    assert.ok(cell.innerHTML.includes('cart-note'), cell.innerHTML);
+    assert.ok(cell.textContent.includes('部分页失败'), cell.textContent);
+    assert.strictEqual(els['#cart-row-1']._tag.className, 'tag-state done');
   });
 
   (async () => {

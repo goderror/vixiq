@@ -206,6 +206,8 @@ class PixivDownloader:
         self._section_dirs = None   # 图库顶层的分类目录 (X图/涩图…), 首次落盘时懒加载
         self.download_from_list = do_list
         self.not_found = []
+        # 本次作品各页的失败详情 (含回滚状态与备份路径), 供下载队列行最终结果使用。
+        self.last_failure_notes: list[str] = []
         # P4b · 购物车 Item 级进度: 外层可注册回调 —— PixivDownloader 内部每一次
         # reporter.progress 调用会额外转成 (scope, cur, total, status) 回调出去。
         # download_engine 绑回调时把 item_id 封装进闭包 → reporter.item_progress 上报。
@@ -470,6 +472,7 @@ class PixivDownloader:
         彻底绕开这个坑; 浏览器兜底也会在导航前先注入 cookies。"""
         artwork_id = str(artwork_id)
         only = {int(x) for x in pages} if pages else None
+        self.last_failure_notes = []
         self.reporter.log(
             f"正在下载 → https://www.pixiv.net/artworks/{artwork_id}")
         ctx = self._http_ctx()
@@ -878,6 +881,8 @@ class PixivDownloader:
             old_restored = False
             restore_failed = False
             target_changed = False
+            new_removed = False
+            remove_failed = False
             backup_path = str(bak) if bak and Path(bak).is_file() else ""
             backup_verified = bool(
                 backup_path and bak_md5 is not None
@@ -896,6 +901,7 @@ class PixivDownloader:
                         current_path=str(dest_path), conflict=True,
                         keep_existing=True, old_restored=False,
                         restore_failed=False, target_changed=True,
+                        new_removed=False, remove_failed=False,
                         backup_path=backup_path, backup_verified=backup_verified)
                 if not backup_verified:
                     restore_failed = True
@@ -905,18 +911,27 @@ class PixivDownloader:
                         conv, ok=False, reason="register_failed", note=note,
                         current_path=str(dest_path), old_restored=False,
                         restore_failed=True, target_changed=False,
+                        new_removed=False, remove_failed=False,
                         backup_path=backup_path, backup_verified=False)
                 restore_candidate = dest_path.parent / \
                     f".vixiq-restore-{uuid.uuid4().hex}.tmp"
                 last_err = None
                 try:
                     for _attempt in range(3):
-                        # 每一轮替换前都重新核验, 只恢复仍属于本次任务的目标
+                        # 先备好并核验恢复候选, 再重新核验目标身份 —— 复制可能耗时,
+                        # 期间目标可能被应用内其它操作换成另一张图, 不能拿旧判断覆盖。
+                        try:
+                            shutil.copy2(bak, restore_candidate)
+                            if not _same_sig(restore_candidate, bak_md5, bak_size):
+                                raise OSError("恢复候选校验失败")
+                        except Exception as e2:
+                            last_err = e2
+                            time.sleep(0.05)
+                            continue
                         if not _same_sig(dest_path, fmd5, fsize):
                             target_changed = True
                             break
                         try:
-                            shutil.copy2(bak, restore_candidate)
                             self._replace_file(restore_candidate, dest_path)
                             if _same_sig(dest_path, bak_md5, bak_size):
                                 old_restored = True
@@ -950,29 +965,46 @@ class PixivDownloader:
                     current_path=str(dest_path), conflict=target_changed,
                     keep_existing=target_changed, old_restored=old_restored,
                     restore_failed=restore_failed, target_changed=target_changed,
+                    new_removed=False, remove_failed=False,
                     backup_path=backup_path, backup_verified=backup_verified)
             # 新旧路径不同: 只撤销本次创建的目标; 目标已被别人更新则保留
             if _same_sig(dest_path, fmd5, fsize):
+                remove_err = None
                 try:
                     os.remove(str(dest_path))
-                except Exception:
-                    pass
-                note = ("登记失败，已撤销本次新文件，旧图与登记保持原样"
-                        if old_file else "登记失败，已撤销本次新文件")
-                current = str(old_file or dest_path)
-                old_restored = True
+                except Exception as e2:
+                    remove_err = e2
+                if remove_err is None:
+                    new_removed = True
+                    note = ("登记失败，已撤销本次新文件，旧图与登记保持原样"
+                            if old_file else "登记失败，已撤销本次新文件")
+                    current = str(old_file or dest_path)
+                    old_restored = True
+                else:
+                    # 新图仍被占用: 如实报告保留位置, 不能写成恢复完成。
+                    remove_failed = True
+                    note = f"登记失败，本次新文件仍被占用未能移除；已保留：{dest_path}"
+                    if old_file:
+                        note += "；旧图与登记保持原样"
+                    if backup_path:
+                        note += f"；可恢复副本：{backup_path}"
+                    self.reporter.warn(
+                        f"⚠ {note}: {str(remove_err).splitlines()[0]}")
+                    current = str(dest_path)
             else:
                 target_changed = True
                 note = "登记失败，目标已被其他操作更新；已保留后来文件与旧图备份"
                 if backup_path:
                     note += f"（可恢复副本：{backup_path}）"
                 current = str(dest_path)
-            self.reporter.warn(f"⚠ {note}: {dest_path.name}")
+            if not remove_failed:
+                self.reporter.warn(f"⚠ {note}: {dest_path.name}")
             return False, dict(
                 conv, ok=False, reason="register_failed", note=note,
                 current_path=current, conflict=target_changed,
                 keep_existing=target_changed, old_restored=old_restored,
                 restore_failed=False, target_changed=target_changed,
+                new_removed=new_removed, remove_failed=remove_failed,
                 backup_path=backup_path, backup_verified=backup_verified)
         conv["current_path"] = str(dest_path)
         if not conv.get("ok"):
@@ -1075,6 +1107,7 @@ class PixivDownloader:
                            or ("同页冲突，保留现有文件" if conv.get("conflict")
                                else "失败"))
                     self.reporter.progress(i, total, f"{filename} → {why}")
+                    self.last_failure_notes.append(f"{filename}: {why}")
                     self.not_found.append(filename)
                 self._fire_progress("artwork_page", i, total, filename[:10])
             else:
@@ -1089,6 +1122,7 @@ class PixivDownloader:
                         self.reporter.warn(
                             f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
                 self.reporter.progress(i, total, f"{filename} → 失败")
+                self.last_failure_notes.append(f"{filename}: 下载失败")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 self.not_found.append(filename)
             time.sleep(random.uniform(
@@ -1331,6 +1365,7 @@ class PixivDownloader:
                            or ("同页冲突，保留现有文件" if conv.get("conflict")
                                else "失败"))
                     self.reporter.progress(i, total, f"{filename} → {why}")
+                    self.last_failure_notes.append(f"{filename}: {why}")
                     self.not_found.append(filename)
                 self._fire_progress("artwork_page", i, total, filename[:10])
             else:
@@ -1345,6 +1380,7 @@ class PixivDownloader:
                         self.reporter.warn(
                             f"⚠ 标记失败状态失败: {str(e).splitlines()[0]}")
                 self.reporter.progress(i, total, f"{filename} → 失败")
+                self.last_failure_notes.append(f"{filename}: 下载失败")
                 self._fire_progress("artwork_page", i, total, filename[:10])
                 self.not_found.append(filename)
 

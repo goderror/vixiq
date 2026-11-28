@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128n`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128o`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128n`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128o`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,33 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.100 「重下修复」回滚复验三处返修（2026-11-28，前端 `20261128o`，已发布到安装版）
+
+- **恢复候选复制期间换图**：回滚循环改为「先复制并核验恢复候选，再重新核验目标身份，
+  最后替换」；复制期间目标被换 → `target_changed/conflict`，保留后来文件与 `.bak`。
+  T171 新增 ③d 在 `shutil.copy2` 返回前换入第三张图，断言文件/备份/登记/字段。
+- **跨格式清理**：新旧路径不同时按实际移除结果回执，新增
+  `new_removed / remove_failed`；移除被占用时保留新图并报告路径，不再写成「已撤销」。
+  T171 新增 ③e（仅新 PNG 的 `os.remove` 注入 `PermissionError`）。
+- **队列失败详情**：爬虫 `last_failure_notes` 记录页级回执；引擎把
+  `error_note` 写入队列（迁移 032），最终 `item_progress` 为
+  `失败：<详情>` / `完成：部分页失败…`；前端队列行可展开「详情」，
+  普通失败/完成行保持原样。新增 T207；浏览器
+  `check_download_repair_queue_ui.py` 候选 3 连跑与安装版均通过。
+- 回归：T170 1 次、T171 5 次、T207 3 次定向通过；全量 **198/198**（203.25 s），日志
+  `_dev_runtime/diagnostics/trae-20261128o-download-repair-rework-smoke.log`。
+  首次全量 196/198 的两项均为测试环境问题（T206 Node 替身缺 `classList`/未含
+  `itemNoteHtml`；T200 瞬时 `MemoryError` 单跑通过），已从测试修复后复跑全绿。
+- **候选/发布**：候选（`built_at 2026-11-28 22:35:49`，前端 `20261128o`）在 7813
+  通过版本、`/api/cart/repair` 跳过回执与 app.js 详情接线检查。回滚清单
+  `_dev_runtime/backups/publish-20261128o-20261128-223923.json`（5 个旧文件、
+  10 个替换项、2 个新建、15,469,883 字节）。候选/dist/安装版 exe `3cd5c051ba64…`、
+  base_library `142537b102c1…`、app.js `b4ced0b979a7…`、index.html
+  `8340d230f6aa…`、style.css `6e7bd9d62e49…`、迁移 032 `4ef3e3c1774e…`；
+  两处配置哈希未变。安装版 7810 前端
+  `20261128o-1795876549-1795876550-1795859951`、健康正常，真实库已应用 032。
+  交接见 `trae-20261128o-download-repair-rollback-rework-handoff-20261128.md`。
 
 ### 4.99 「重下修复」登记失败后的原图回滚（2026-11-28，前端 `20261128n`，已发布到安装版）
 

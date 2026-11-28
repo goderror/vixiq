@@ -6318,10 +6318,17 @@ class PixivDatabase:
         return row is not None
 
     def queue_update_status(self, item_id: int, status: str) -> None:
-        self.conn.execute(
-            "UPDATE download_queue_items SET status=? WHERE id=?",
-            (status, item_id),
-        )
+        # 重置为待下载等于重新开始: 清掉上一次的失败详情, 避免旧结果跟到新任务行上。
+        if status == "pending":
+            self.conn.execute(
+                "UPDATE download_queue_items SET status=?, error_note=NULL WHERE id=?",
+                (status, item_id),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE download_queue_items SET status=? WHERE id=?",
+                (status, item_id),
+            )
         self.conn.commit()
 
     def queue_claim_item(self, item_id: int) -> int:
@@ -6340,13 +6347,16 @@ class PixivDatabase:
         self.conn.commit()
         return cur.rowcount
 
-    def queue_finish_item(self, item_id: int, status: str) -> int:
+    def queue_finish_item(self, item_id: int, status: str,
+                          error_note: "str | None" = None) -> int:
         """下载引擎收尾写回 (done/failed): 只在**本行仍是 running**时才改, 返回受影响行数。
         理由同 queue_claim_item —— 被清掉的行不该被收尾写回「复活」,
-        也不该覆盖别人刚写进去的状态。"""
+        也不该覆盖别人刚写进去的状态。
+
+        error_note: 该行的最终失败/部分失败详情 (含回滚状态与备份路径); None 表示无。"""
         cur = self.conn.execute(
-            "UPDATE download_queue_items SET status=? "
-            "WHERE id=? AND status='running'", (status, item_id))
+            "UPDATE download_queue_items SET status=?, error_note=? "
+            "WHERE id=? AND status='running'", (status, error_note, item_id))
         self.conn.commit()
         return cur.rowcount
 
@@ -6373,9 +6383,12 @@ class PixivDatabase:
         return cur.rowcount
 
     def queue_reset_failed(self) -> int:
-        """把全部失败(failed)任务重置为待下载(pending), 返回重置数。"""
+        """把全部失败(failed)任务重置为待下载(pending), 返回重置数。
+
+        同时清掉上一次的失败详情: 重跑的任务行不应继续挂着旧回执。"""
         cur = self.conn.execute(
-            "UPDATE download_queue_items SET status='pending' WHERE status='failed'")
+            "UPDATE download_queue_items SET status='pending', error_note=NULL "
+            "WHERE status='failed'")
         self.conn.commit()
         return cur.rowcount
 

@@ -4770,7 +4770,7 @@ function renderTaskTable() {
         <td class="task-title">${esc(it.title || '(未命名任务)')}</td>
         <td class="task-author">${esc(it.author_name || '—')}</td>
         <td>${esc(it.item_type === 'artwork' ? '作品' : it.item_type === 'author_all' ? '作者全部' : it.item_type)}</td>
-        <td class="cell-progress" id="cart-prog-${it.id}">${progressCell(it.id, it.status)}</td>
+        <td class="cell-progress${it.error_note ? ' has-note' : ''}" id="cart-prog-${it.id}">${progressCell(it.id, it.status, it.error_note)}</td>
         <td class="cell-status">${statusTag(it.status)}</td>
         <td class="mono">${fmtTime(it.added_at)}</td>
         <td class="cell-ops">
@@ -4781,9 +4781,16 @@ function renderTaskTable() {
   }).join('');
 }
 
-function progressCell(itemId, status) {
-  if (status === 'done') return '✓ 完成';
-  if (status === 'failed') return '✖ 失败';
+function itemNoteHtml(label, note, cls) {
+  // 下载队列行保留失败/部分失败详情 (含「旧图尚未恢复」与备份路径), 点「详情」展开。
+  return `<details class="cart-note ${cls}"><summary>${label}`
+    + `<span class="cart-note-hint">详情</span></summary>`
+    + `<div class="cart-note-body">${esc(note)}</div></details>`;
+}
+
+function progressCell(itemId, status, note) {
+  if (status === 'done') return note ? itemNoteHtml('✓ 完成', note, 'done') : '✓ 完成';
+  if (status === 'failed') return note ? itemNoteHtml('✖ 失败', note, 'failed') : '✖ 失败';
   if (status === 'running') return `<span style="color:var(--accent)">进行中…</span>`;
   return '—';
 }
@@ -4802,16 +4809,27 @@ function updateOverallProgress(cur, total, status) {
 function updateItemProgress(itemId, cur, total, status) {
   const cell = $('#cart-prog-' + itemId);
   if (!cell) return;
-  if (status === '完成' || status === 'ok' || status === 'done') cell.textContent = '✓ 完成';
-  else if (status === '失败' || status === 'failed') cell.textContent = '✖ 失败';
-  else {
-    // 纯阶段信号 (如「正在合成动图」) 不伪造百分比, 用与共用进度一致的流动样式呈现
-    if (/^正在/.test(String(status || ''))) {
-      cell.innerHTML = '<div class="cart-flow"><div class="op-track flow">'
-        + '<div class="op-fill"></div></div><span>' + esc(status) + '</span></div>';
-    } else {
-      const pct = total ? Math.round(cur / total * 100) : 0;
-      cell.textContent = `${pct}% (${cur}/${total}) ${status || ''}`;
+  const s = String(status == null ? '' : status);
+  // 最终结果带详情: "失败：<详情>" / "完成：<部分页失败详情>" —— 行内可展开。
+  const detail = /^(?:失败|完成)：/.test(s) ? s.slice(3) : '';
+  if (detail) {
+    const failed = s.startsWith('失败');
+    cell.classList.add('has-note');
+    cell.innerHTML = itemNoteHtml(failed ? '✖ 失败' : '✓ 完成', detail,
+                                  failed ? 'failed' : 'done');
+  } else {
+    cell.classList.remove('has-note');
+    if (s === '完成' || s === 'ok' || s === 'done') cell.textContent = '✓ 完成';
+    else if (s === '失败' || s === 'failed') cell.textContent = '✖ 失败';
+    else {
+      // 纯阶段信号 (如「正在合成动图」) 不伪造百分比, 用与共用进度一致的流动样式呈现
+      if (/^正在/.test(s)) {
+        cell.innerHTML = '<div class="cart-flow"><div class="op-track flow">'
+          + '<div class="op-fill"></div></div><span>' + esc(s) + '</span></div>';
+      } else {
+        const pct = total ? Math.round(cur / total * 100) : 0;
+        cell.textContent = `${pct}% (${cur}/${total}) ${s}`;
+      }
     }
   }
   // 同步更新状态列
@@ -4819,9 +4837,13 @@ function updateItemProgress(itemId, cur, total, status) {
   if (row) {
     const st = row.querySelector('.tag-state');
     if (st) {
-      if (status === '完成') { st.className = 'tag-state done'; st.textContent = '✓ 完成'; }
-      else if (status === '失败') { st.className = 'tag-state failed'; st.textContent = '✖ 失败'; }
-      else { st.className = 'tag-state running'; st.textContent = '进行中'; }
+      if (s === '完成' || s === 'ok' || s === 'done' || s.startsWith('完成：')) {
+        st.className = 'tag-state done'; st.textContent = '✓ 完成';
+      } else if (s === '失败' || s === 'failed' || s.startsWith('失败：')) {
+        st.className = 'tag-state failed'; st.textContent = '✖ 失败';
+      } else {
+        st.className = 'tag-state running'; st.textContent = '进行中';
+      }
     }
   }
 }

@@ -1284,6 +1284,21 @@ main.cards-collapsed #tab-wallpapers .wf-card .wf-meta { padding: 8px 10px; }
 }
 /* 运行中那一栏的「进行中…」也是动态控件, 给状态列一个稳定最小宽度防止微抖 */
 #cart-table .cell-status { min-width: 84px; white-space: nowrap; }
+/* 失败/部分失败详情: 该格改为可换行, 「详情」展开后显示回滚状态与备份路径 */
+#cart-table .cell-progress.has-note {
+  white-space: normal; overflow: visible; text-overflow: clip;
+}
+.cart-note summary {
+  cursor: pointer; white-space: nowrap; font-weight: 600; font-size: 12px;
+}
+.cart-note.done summary { color: var(--success); }
+.cart-note.failed summary,
+.cart-note.failed .cart-note-hint { color: var(--error); }
+.cart-note-hint { margin-left: 6px; font-weight: 500; color: var(--muted); }
+.cart-note-body {
+  margin-top: 4px; white-space: pre-wrap; word-break: break-all;
+  font-size: 11px; line-height: 1.5; color: var(--muted);
+}
 
 /* ===== 图库 ↔ 磁盘对账: 缺失/空目录/损坏 健康条 ===== */
 .health-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
