@@ -640,7 +640,7 @@ function wallFilesPreview(name) {
 
 function wallModal(title, html) {
   ++WFA.workSeq;
-  openLibModal(title, `<div id="wf-modal-content">${html}</div><p id="wf-modal-error" class="err-text" role="alert"></p>`);
+  openLibModal(title, `<div id="wf-modal-content"><div id="wf-modal-progress"></div>${html}</div><p id="wf-modal-error" class="err-text" role="alert"></p>`);
   $('#wf-modal-content').addEventListener('click', e => {
     const action = e.target.closest('[data-wall-action]');
     if (action) wallAction(action.dataset.wallAction, [action.dataset.name]);
@@ -763,7 +763,7 @@ async function wallAction(action, explicit) {
       const disk = $('input[name="wf-delete-mode"]:checked').value === 'disk';
       if (disk && !confirm(`将所选 ${files.length} 张壁纸文件送入 Windows 回收站？`)) return false;
       const ctl = await window.runWithProgress({
-        key: 'wall-files-delete', host: '#op-progress-host',
+        key: 'wall-files-delete', host: '#wf-modal-progress',
         label: disk ? '删除壁纸' : '移出壁纸库', unit: '张',
         scanText: disk ? '正在送入 Windows 回收站…' : '正在移入应用回收站…',
         request: {

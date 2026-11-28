@@ -398,7 +398,7 @@ function harnessBody() {
         start: async () => ({ status: 'ok', task: { id: 't4', status: 'running', done: 0, total: 2 } }),
         read: async () => {
           reads += 1;
-          return reads < 3
+          return reads < 5
             ? { status: 'running', done: 1, total: 2 }
             : { status: 'done', done: 2, total: 2, result: { n: 2 } };
         },
@@ -446,6 +446,26 @@ function harnessBody() {
     await sleep(40);
     assert.strictEqual(done, 1);
     assert.strictEqual(reads, 1);
+  });
+
+  test('任务启动后立即查一次状态, 不等轮询间隔', async () => {
+    reset();
+    let reads = 0, done = 0;
+    runWithProgress({
+      key: 'task7', host: '#h2', unit: '张', mode: 'task',
+      task: {
+        start: async () => ({ status: 'ok', task: { id: 't7', status: 'running', done: 0, total: 1 } }),
+        read: async () => {
+          reads += 1;
+          return { status: 'done', done: 1, total: 1, result: { n: 1 } };
+        },
+        idOf: r => r.task.id, snapshotOf: r => r.task, intervalMs: 500,
+      },
+      onDone: () => { done += 1; },
+    });
+    await sleep(40);
+    assert.strictEqual(reads, 1, '启动回执后应立即查一次真实状态');
+    assert.strictEqual(done, 1);
   });
 
   test('GET 在途时关窗再开, 放行旧 GET 后继续推进', async () => {

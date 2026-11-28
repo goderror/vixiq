@@ -4805,9 +4805,10 @@ function updateItemProgress(itemId, cur, total, status) {
   if (status === '完成' || status === 'ok' || status === 'done') cell.textContent = '✓ 完成';
   else if (status === '失败' || status === 'failed') cell.textContent = '✖ 失败';
   else {
-    // 纯阶段信号 (如「正在合成动图」) 不伪造百分比, 直接显示阶段文字
+    // 纯阶段信号 (如「正在合成动图」) 不伪造百分比, 用与共用进度一致的流动样式呈现
     if (/^正在/.test(String(status || ''))) {
-      cell.textContent = String(status);
+      cell.innerHTML = '<div class="cart-flow"><div class="op-track flow">'
+        + '<div class="op-fill"></div></div><span>' + esc(status) + '</span></div>';
     } else {
       const pct = total ? Math.round(cur / total * 100) : 0;
       cell.textContent = `${pct}% (${cur}/${total}) ${status || ''}`;
@@ -10147,9 +10148,10 @@ async function runSourceSearch(aid, forceSauce) {
       },
       read: () => api('/api/reverse/status'),
       idOf: () => 'source-search-single',
+      // 启动回执只表示已受理: 不伪造 total/done, 首查由共用层立即发出
       snapshotOf: () => ({ status: 'started',
-        src_search: { running: true, artwork_id: String(aid), done: 0,
-                      total: 1, phase: 'running', current: '' } }),
+        src_search: { running: true, artwork_id: String(aid), phase: 'running',
+                      current: '' } }),
       intervalMs: 1000,
       map: {
         running: s => mineSs(s) && !!s.src_search.running,
@@ -10157,8 +10159,17 @@ async function runSourceSearch(aid, forceSauce) {
           ? (s.src_search.error || '反搜失败') : '',
         result: s => mineSs(s) ? s.src_search.result : null,
         stage: () => '搜索来源',
-        done: s => mineSs(s) ? (s.src_search.done || 0) : 0,
-        total: s => mineSs(s) ? (s.src_search.total || 0) : 0,
+        // 拿到真实页数前用流动; 单页长等待也用流动, 多页且有逐页结果才计数
+        done: s => {
+          if (!mineSs(s)) return 0;
+          const ss = s.src_search;
+          return Number(ss.total || 0) > 1 ? (ss.done || 0) : 0;
+        },
+        total: s => {
+          if (!mineSs(s)) return 0;
+          const n = Number(s.src_search.total || 0);
+          return n > 1 ? n : 0;
+        },
         current: s => mineSs(s) ? (s.src_search.current || '') : '',
       },
       onState: (s) => { renderReverseTasks(s); },
@@ -12735,7 +12746,8 @@ async function opTaskStart(run) {
     opRunFinish(run, 'error', { error: '任务未返回可查询的任务号' });
     return;
   }
-  await opTaskLoop(run, false);
+  // 启动回执只表示已受理: 立即查一次真实状态, 避免短任务先显示一个假计数
+  await opTaskLoop(run, true);
 }
 
 function opUploadStart(run) {

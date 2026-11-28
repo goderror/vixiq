@@ -2304,6 +2304,11 @@ body.ob-open { overflow: hidden; }
 }
 .op-progress-host:empty { display: none; }
 .op-progress-host .op-progress { margin: 0; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+/* 下载任务行内的纯阶段流动 (如「正在合成动图」): 复用共用流动条样式 */
+.cart-flow { display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--accent); min-width: 90px; }
+.cart-flow .op-track { flex: 1 1 auto; min-width: 36px; height: 4px; margin-top: 0; }
+.cart-flow span { white-space: nowrap; }
 .op-progress {
   margin: 6px 0 8px; padding: 8px 10px; border: 1px solid var(--border);
   border-radius: 8px; background: #fbfcfe; font-size: 12px;

@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128j`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128k`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128j`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128k`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,32 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.96 共用进度收口：入库并发写入保护 + 三个显示问题（2026-11-28，前端 `20261128k`，已发布到安装版）
+
+- **入库移源并发**：`_adopt_unlink_identity` 的删除句柄改为只共享读+删除、**不共享写**。
+  已有写入句柄时打开失败 → `kept` 保留原件；句柄持有期间外部也无法再开写句柄，
+  身份核验到删除之间不会再有写入。
+- **壁纸移出/回收**：`wallModal` 新增 `#wf-modal-progress`，`wall-files-delete`
+  挂到确认弹窗内，不再被 `#lib-modal` 遮罩挡住；保留两种确认与部分失败明细。
+- **单图反搜来源**：启动快照只表示已受理，不再伪造 `total:1`；`opTaskStart`
+  启动回执后立即查一次；单页/未知页数流动，多页才显示真实逐页计数；
+  仍只认本 `artwork_id`，409 不启动第二套轮询。
+- **下载队列动图**：`updateItemProgress` 对 `正在…` 阶段在行内注入 `cart-flow`
+  （复用 `op-track flow` 与减少动效），完成/失败清除流动。
+- **回归**：T205/T206/T125 通过；新增 `test_source_search_progress.cjs`（5 项）与
+  `test_cart_ugoira_progress.cjs`（4 项）；T206 增加两条 Windows 并发写入断言。
+  全量 **197/197**（177.71 s），日志
+  `_dev_runtime/diagnostics/trae-20261128k-operation-progress-final-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 17:59:11`，前端 `20261128k`）在 7813
+  通过入库任务/旧接口/上限检查。回滚清单
+  `_dev_runtime/backups/publish-20261128k-20261128-175953.json`（6 个旧文件、
+  12 个替换项、15,508,953 字节）。候选/dist/安装版 exe `71047d241a38…`、
+  base_library `15194e09bc64…`、app.js `4a556ab25ce0…`、index.html
+  `415858de31e8…`、wallpaper-admin.js `d634a4add656…`、style.css
+  `d3db2148eee4…`；两处配置哈希未变。安装版 7810 前端
+  `20261128k-1795859951-1795859951-1795859951`、健康正常。
+  交接见 `trae-20261128k-operation-progress-final-handoff-20261128.md`。
 
 ### 4.95 共用进度入口返工：入库移源身份保护 + 连续接回 + 遗漏入口（2026-11-28，前端 `20261128j`，已发布到安装版）
 

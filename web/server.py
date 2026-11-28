@@ -387,7 +387,8 @@ def _adopt_win_api():
         "FILE_DISPOSITION_INFO_STRUCT": _FILE_DISPOSITION_INFO,
         "CreateFileW": create, "GetFileInformationByHandle": info,
         "SetFileInformationByHandle": dispose, "CloseHandle": close,
-        "GENERIC_READ": 0x80000000, "DELETE": 0x00010000,
+        "GENERIC_READ": 0x80000000, "GENERIC_WRITE": 0x40000000,
+        "DELETE": 0x00010000,
         "FILE_SHARE_READ": 0x1, "FILE_SHARE_WRITE": 0x2,
         "FILE_SHARE_DELETE": 0x4, "OPEN_EXISTING": 3,
         "FILE_ATTRIBUTE_NORMAL": 0x80, "FileDispositionInfo": 4,
@@ -418,7 +419,9 @@ def _adopt_unlink_identity(path: str, expected: dict) -> "tuple[str, str]":
         ct = api["ctypes"]
         handle = api["CreateFileW"](
             str(path), api["GENERIC_READ"] | api["DELETE"],
-            api["FILE_SHARE_READ"] | api["FILE_SHARE_WRITE"] | api["FILE_SHARE_DELETE"],
+            # 收尾核验与删除期间拒绝写共享: 已有写入句柄 → CreateFileW 直接失败,
+            # 进入原件保留分支; 我们持有句柄期间外部也无法再打开写句柄。
+            api["FILE_SHARE_READ"] | api["FILE_SHARE_DELETE"],
             None, api["OPEN_EXISTING"], api["FILE_ATTRIBUTE_NORMAL"], None)
         if not handle or handle == api["INVALID_HANDLE_VALUE"]:
             err = ct.get_last_error()
