@@ -74,6 +74,8 @@ function harnessBody() {
     assert.strictEqual(snap.src_search.running, true);
     assert.ok(!('total' in snap.src_search), snap);
     assert.ok(!('done' in snap.src_search), snap);
+    assert.strictEqual(captured.task.fastFollowUpMs, 180,
+                       '首查 running 后应在约 180ms 补查一次');
   });
 
   test('单页保持流动, 多页才显示真实计数', async () => {

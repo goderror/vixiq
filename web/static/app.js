@@ -10148,17 +10148,19 @@ async function runSourceSearch(aid, forceSauce) {
       },
       read: () => api('/api/reverse/status'),
       idOf: () => 'source-search-single',
-      // 启动回执只表示已受理: 不伪造 total/done, 首查由共用层立即发出
+      // 启动回执只表示已受理: 不伪造 total/done, 首查由共用层立即发出;
+      // 首查 running 后 180ms 再补查一次 (后台常在几十毫秒内完成), 之后回到 1s。
       snapshotOf: () => ({ status: 'started',
         src_search: { running: true, artwork_id: String(aid), phase: 'running',
                       current: '' } }),
       intervalMs: 1000,
+      fastFollowUpMs: 180,
       map: {
         running: s => mineSs(s) && !!s.src_search.running,
         error: s => (mineSs(s) && s.src_search.phase === 'error')
           ? (s.src_search.error || '反搜失败') : '',
         result: s => mineSs(s) ? s.src_search.result : null,
-        stage: () => '搜索来源',
+        stage: () => '正在搜索来源…',
         // 拿到真实页数前用流动; 单页长等待也用流动, 多页且有逐页结果才计数
         done: s => {
           if (!mineSs(s)) return 0;
@@ -12659,6 +12661,10 @@ async function opTaskLoop(run, immediate) {
   const deadline = Date.now() + (a.timeoutMs || 30 * 60 * 1000);
   let errors = 0;
   let delay = !immediate;
+  // 启动观察期快速补查: 首查 running 后短时间内再查一次, 然后回到正常节奏。
+  // 仅任务显式声明 fastFollowUpMs 时启用 (当前只有单图反搜来源)。
+  let fastNext = false;
+  let fastLeft = Number(a.fastFollowUpMs || 0) > 0 ? 1 : 0;
   run.looping = true;
   try {
     while (run.gen === gen && !run.settled) {
@@ -12668,8 +12674,12 @@ async function opTaskLoop(run, immediate) {
         delay = false;
         continue;
       }
-      if (delay) await new Promise(r => setTimeout(r, a.intervalMs || 600));
+      if (delay) {
+        const waitMs = fastNext ? Number(a.fastFollowUpMs) : (a.intervalMs || 600);
+        await new Promise(r => setTimeout(r, waitMs));
+      }
       delay = true;
+      fastNext = false;
       if (run.gen !== gen || run.settled) return;
       if (run.detached) continue;
       let snap = null;
@@ -12707,6 +12717,10 @@ async function opTaskLoop(run, immediate) {
       if (Date.now() > deadline) {
         opRunFinish(run, 'error', { error: '任务超时，可稍后返回重试接回' });
         return;
+      }
+      if (fastLeft > 0) {
+        fastLeft -= 1;
+        fastNext = true;
       }
     }
   } finally {

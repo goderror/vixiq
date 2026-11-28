@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128k`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128l`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128k`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128l`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,29 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.97 单图反搜短任务快速反馈（2026-11-28，前端 `20261128l`，已发布到安装版）
+
+- `opTaskLoop` 新增可选 `fastFollowUpMs`：首查 running 后按该间隔补查一次，再回到
+  `intervalMs`；仍是一条串行链，detach/resume、旧回包隔离、完成只结算一次不变。
+- 仅 `runSourceSearch` 设 `fastFollowUpMs: 180`；启动快照仍只表示已受理，单页/未知
+  页数流动，多页 (`total > 1`) 才显示真实逐页计数；流动文案「正在搜索来源…」。
+- 新增浏览器回归 `check_source_search_fast_feedback_ui.py`：真实页面 + 页面内 `api`
+  替身，覆盖首查即完成、首查 running 后 50ms 完成、慢查询流动、多页 1/3→2/3、
+  420px 窄窗；候选 7813 与安装版 7810 均通过。
+- 回归：`test_operation_progress_entry.cjs` 新增快速补查用例；
+  `test_source_search_progress.cjs` 断言 180ms；T206 静态补充。全量 **197/197**
+  （192.36 s），日志
+  `_dev_runtime/diagnostics/trae-20261128l-source-search-fast-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 18:55:07`，前端 `20261128l`）在 7813
+  通过入库检查与单图反搜浏览器回归。回滚清单
+  `_dev_runtime/backups/publish-20261128l-20261128-185643.json`（4 个旧文件、
+  8 个替换项、15,338,181 字节）。候选/dist/安装版 exe `d6c22a75686d…`、
+  base_library `334381eb61ea…`、app.js `8f82c3924161…`、index.html
+  `adad9e64d43a…`、wallpaper-admin.js `d634a4add656…`、style.css
+  `d3db2148eee4…`；两处配置哈希未变。安装版 7810 前端
+  `20261128l-1795863307-1795859951-1795859951`、健康正常。
+  交接见 `trae-20261128l-source-search-fast-handoff-20261128.md`。
 
 ### 4.96 共用进度收口：入库并发写入保护 + 三个显示问题（2026-11-28，前端 `20261128k`，已发布到安装版）
 

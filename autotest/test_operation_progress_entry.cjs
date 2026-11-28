@@ -468,6 +468,31 @@ function harnessBody() {
     assert.strictEqual(done, 1);
   });
 
+  test('首查 running 后快速补查一次, 不等到一个轮询间隔', async () => {
+    reset();
+    let stamps = [], done = 0;
+    const t0 = Date.now();
+    runWithProgress({
+      key: 'task8', host: '#h2', unit: '张', mode: 'task',
+      task: {
+        start: async () => ({ status: 'ok', task: { id: 't8', status: 'running', done: 0, total: 1 } }),
+        read: async () => {
+          stamps.push(Date.now() - t0);
+          return stamps.length === 1
+            ? { status: 'running', done: 0, total: 1 }
+            : { status: 'done', done: 1, total: 1, result: { n: 1 } };
+        },
+        idOf: r => r.task.id, snapshotOf: r => r.task,
+        intervalMs: 1000, fastFollowUpMs: 150,
+      },
+      onDone: () => { done += 1; },
+    });
+    await sleep(500);
+    assert.strictEqual(stamps.length, 2, stamps);
+    assert.ok(stamps[1] < 500, '快速补查应在 500ms 内（实得 ' + stamps[1] + 'ms）');
+    assert.strictEqual(done, 1);
+  });
+
   test('GET 在途时关窗再开, 放行旧 GET 后继续推进', async () => {
     reset();
     let reads = 0, done = 0;
