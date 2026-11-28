@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128g`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128h`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128g`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128h`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,29 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.93 反搜添加图片落盘返修：半文件清理 + 同名并发防覆盖（2026-11-28，前端 `20261128h`，已发布到安装版）
+
+- **半文件**：`POST /api/reverse/upload` 每张先写 `input/.upload-tmp/.<uuid>.part`
+  独占暂存，保存成功后才在发布锁内选最终名并发布；任何写入/发布异常只删本请求
+  暂存，既有收件箱文件不动。`.part` 不会被待反搜清单列出；故障解除后同名重试
+  可直接使用原文件名。
+- **并发同名**：新增 `_REVERSE_UPLOAD_LOCK` 作为同一收件箱发布互斥边界；锁内重新
+  选名，优先 `os.link`（目标存在即换 `(2)/(3)`），文件系统不支持硬链接时回退
+  Windows 不覆盖的 `rename`；回执写实际最终名，旧重名文件字节不变。
+- **回归**：T204 新增「真实写入 24 字节后失败 → 收件箱无图、暂存无 `.part`、同名重试
+  成功」与「Event 暂停两个客户端并发同名 → 名字不同、两份内容各自正确」；
+  全量 **195/195**（197.46 s），日志
+  `_dev_runtime/diagnostics/trae-20261128h-reverse-upload-write-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 15:05:09`，前端 `20261128h`）在 7813
+  通过反搜添加 API/UI、临时目录与作品编辑回归及既有 **12 项**检查（日志
+  `trae-20261128h-feature-checks.log` / `trae-20261128h-candidate-checks.log`）。
+  回滚清单 `_dev_runtime/backups/publish-20261128h-20261128-150811.json`（3 个旧文件、
+  6 个替换项、14,497,579 字节）。dist 与安装版 exe `a21cf04391ec…`、base_library
+  `be292f9f17d0…`、app.js `7cea8fb79483…`（与 g 相同）、index.html `1475098f235d…`；
+  两处 `config/user.json` 哈希未变。安装版 7810 前端
+  `20261128h-1795842613-1795695345-1795519082`、健康正常，反搜添加图片/临时目录/
+  作品编辑/以图搜图/副本扫描/壁纸库/回收站/清理缺失/缩略图/PNG UI 检查通过。
 
 ### 4.92 反搜收件箱「添加图片」共用进度（2026-11-28，前端 `20261128g`，已发布到安装版）
 

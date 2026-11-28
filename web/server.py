@@ -316,6 +316,8 @@ def _scopes_for_request(path: str, method: str, body: "dict | None",
 
 # 下载任务单飞: 同一时刻只允许一个 run_cart 后台线程 (2026-09-15 并发下载事故)
 _cart_busy = threading.Event()
+# 反搜收件箱发布互斥: 同一进程内并发上传在这里重新选名并原子发布, 避免同名覆盖。
+_REVERSE_UPLOAD_LOCK = threading.Lock()
 # 临时目录手动清理与下载启动的同步边界: 下载一旦被选中(忙标记置上), 清理就不再删
 # downloads; 反过来清理正删 downloads 时, 下载启动会等它删完再重建。
 _TEMP_USE_LOCK = threading.Lock()
@@ -15624,6 +15626,10 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         saved, rejected = [], []
         rejected_details = []
+        # 先写本请求独占的 .part 暂存, 再在发布锁内选最终名并原子链接/改名;
+        # 失败只清理本请求的暂存, 不碰既有收件箱文件。.part 不会被待反搜清单列出。
+        staging_dir = input_root / ".upload-tmp"
+        staging_dir.mkdir(parents=True, exist_ok=True)
         for f in request.files.getlist("files") or request.files.getlist("images"):
             # 只取 basename, 防路径穿越
             base = _os.path.basename((f.filename or "").replace("\\", "/"))
@@ -15632,17 +15638,47 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 rejected.append(name)
                 rejected_details.append({"name": name, "reason": "格式不支持"})
                 continue
-            target = input_root / base
-            if target.exists():  # 重名加 (2)/(3)…
-                stem, suf = target.stem, target.suffix
-                i = 2
-                while (input_root / f"{stem} ({i}){suf}").exists():
-                    i += 1
-                target = input_root / f"{stem} ({i}){suf}"
+            tmp = staging_dir / f".{uuid.uuid4().hex}.part"
             try:
-                f.save(str(target))
-                saved.append(target.name)
+                f.save(str(tmp))
+                with _REVERSE_UPLOAD_LOCK:
+                    stem, suf = Path(base).stem, Path(base).suffix
+                    i = 1
+                    while True:
+                        name = base if i == 1 else f"{stem} ({i}){suf}"
+                        target = input_root / name
+                        try:
+                            if target.exists():
+                                i += 1
+                                continue
+                            try:
+                                # 硬链接不覆盖已存在目标; 目标在等待期间被占则换 (2)
+                                os.link(str(tmp), str(target))
+                            except FileExistsError:
+                                i += 1
+                                continue
+                            except OSError:
+                                if target.exists():
+                                    i += 1
+                                    continue
+                                # 文件系统不支持硬链接: Windows 的 rename 同样不覆盖
+                                os.rename(str(tmp), str(target))
+                            try:
+                                tmp.unlink()
+                            except OSError:
+                                pass
+                            saved.append(target.name)
+                            break
+                        except OSError as e:
+                            if target.exists():
+                                i += 1
+                                continue
+                            raise e
             except Exception as e:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
                 rejected.append(base)
                 rejected_details.append({"name": base,
                                          "reason": f"写入失败：{e}"})
