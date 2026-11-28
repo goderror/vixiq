@@ -15623,11 +15623,14 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
         input_root.mkdir(parents=True, exist_ok=True)
         IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         saved, rejected = [], []
+        rejected_details = []
         for f in request.files.getlist("files") or request.files.getlist("images"):
             # 只取 basename, 防路径穿越
             base = _os.path.basename((f.filename or "").replace("\\", "/"))
             if not base or Path(base).suffix.lower() not in IMG_EXT:
-                rejected.append(base or "(空文件名)")
+                name = base or "(空文件名)"
+                rejected.append(name)
+                rejected_details.append({"name": name, "reason": "格式不支持"})
                 continue
             target = input_root / base
             if target.exists():  # 重名加 (2)/(3)…
@@ -15639,9 +15642,13 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
             try:
                 f.save(str(target))
                 saved.append(target.name)
-            except Exception:
+            except Exception as e:
                 rejected.append(base)
-        return jsonify({"status": "ok", "saved": saved, "rejected": rejected})
+                rejected_details.append({"name": base,
+                                         "reason": f"写入失败：{e}"})
+        # saved/rejected 保持原字段; rejected_details 是新前端用的逐项原因
+        return jsonify({"status": "ok", "saved": saved, "rejected": rejected,
+                        "rejected_details": rejected_details})
 
     @app.route("/api/library/import", methods=["POST"])
     def api_library_import():

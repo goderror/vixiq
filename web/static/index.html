@@ -8,8 +8,8 @@
      换图标后必须换 URL 才会重新拉取, 否则标签页一直显示旧图标 -->
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20260919a">
 <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=20260919a">
-<link rel="stylesheet" href="/static/style.css?v=20261128f">
-<link rel="stylesheet" href="/static/management-toolbar.css?v=20261128f">
+<link rel="stylesheet" href="/static/style.css?v=20261128g">
+<link rel="stylesheet" href="/static/management-toolbar.css?v=20261128g">
 </head>
 <body>
 
@@ -205,6 +205,10 @@
         <button id="reverse-clear" class="btn danger" title="清空待反搜区（送进电脑回收站，可还原）">🗑️ 清空待反搜</button>
         <button id="reverse-clear-result" class="btn ghost" title="清空结果面板">🧹 清空结果</button>
         <input type="file" id="reverse-file-input" accept="image/*" multiple style="display:none">
+      </div>
+      <div id="reverse-upload-task" class="hidden">
+        <div id="reverse-upload-progress"></div>
+        <div id="reverse-upload-note" class="hint" style="overflow-wrap:anywhere"></div>
       </div>
       <div id="reverse-progress" class="rev-progress" style="display:none">
         <div class="progress-wrap">
@@ -999,10 +1003,10 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=20261128f"></script>
-<script src="/static/wallpaper-admin.js?v=20261128f"></script>
-<script src="/static/management-drawer-state.js?v=20261128f"></script>
-<script src="/static/management-toolbar.js?v=20261128f"></script>
+<script src="/static/app.js?v=20261128g"></script>
+<script src="/static/wallpaper-admin.js?v=20261128g"></script>
+<script src="/static/management-drawer-state.js?v=20261128g"></script>
+<script src="/static/management-toolbar.js?v=20261128g"></script>
 </body>
 </html>
 

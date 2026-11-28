@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128f`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128g`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128f`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128g`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.92 反搜收件箱「添加图片」共用进度（2026-11-28，前端 `20261128g`，已发布到安装版）
+
+- **前端**：反搜工具行下方新增 `#reverse-upload-task`；选图后按钮即时「正在添加…」，
+  用 `XMLHttpRequest.upload.onprogress` 的真实总/已传字节驱动共用计数条
+  「已上传 X／Y」，未知总量用「正在上传图片…」流动；字节发完到回执之间切
+  「正在写入收件箱…」流动；收到 `saved/rejected` 后显示「已添加 N 张 · 未添加 M 项」
+  与逐项原因。约 300ms 阈值、减少动效、快回直接结果。
+- **任务语义**：同一页面只发一个请求；`_revUploadSeq`+`_revUploadXHR` 丢弃旧批次
+  迟到 progress/error；切页回来由 `loadReverseStatus` 末尾 `revUploadRepaint()` 接回；
+  网络中断/超时/HTTP/响应异常恢复按钮，提示先看待反搜区、不自动整批重传。
+- **后端**：`POST /api/reverse/upload` 保留 `saved/rejected`，新增
+  `rejected_details`（格式不支持/写入失败原因），重名与 basename 规则不变。
+- **回归**：Node 13 项 + T204 真实 multipart（多选/重名 `(2)`/格式拒绝/模拟写入失败/
+  既有文件不动/空请求）；全量 **195/195**（177.89 s），日志
+  `_dev_runtime/diagnostics/trae-20261128g-reverse-upload-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 13:10:13`，前端 `20261128g`）在 7813
+  通过反搜添加 API/UI、临时目录与作品编辑回归及既有 **12 项**检查（日志
+  `trae-20261128g-feature-checks.log` / `trae-20261128g-candidate-checks.log`）。
+  回滚清单 `_dev_runtime/backups/publish-20261128g-20261128-131315.json`（4 个旧文件、
+  8 个替换项、15,289,500 字节）。dist 与安装版 exe `3e7156204fa8…`、base_library
+  `dc299517c734…`、app.js `7cea8fb79483…`、index.html `4c26b87329ff…`；两处
+  `config/user.json` 哈希未变。安装版 7810 前端
+  `20261128g-1795842613-1795695345-1795519082`、健康正常，反搜添加图片/临时目录/
+  作品编辑/以图搜图/副本扫描/壁纸库/回收站/清理缺失/缩略图/PNG UI 检查通过。
 
 ### 4.91 临时目录清理返修：逐项占用检查 + 读取失败统计（2026-11-28，前端 `20261128f`，已发布到安装版）
 

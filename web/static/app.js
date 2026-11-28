@@ -12746,6 +12746,8 @@ async function loadReverseStatus() {
     renderReverseTasks(r);
     // 总进度条
     renderReverseProgress(r.progress);
+    // 添加图片是页面内上传任务: 切页回来/刷新收件箱后接回同一进度或结果
+    revUploadRepaint();
     return r;
   } catch (e) {
     $('#reverse-status').textContent = '读取失败: ' + e.message;
@@ -13019,25 +13021,217 @@ window.revDiscard = async function (files) {
   } catch (e) { toast('丢弃失败: ' + e.message, 'err'); }
 };
 
+// 反搜收件箱「添加图片」上传进度: 真实字节计数 → 写入收件箱流动 → 结果
+let _revUploadSeq = 0;
+let _revUploadXHR = null;
+let _revUploadState = null;
+
+function revUploadFmt(n) {
+  return fmtSize(Math.max(0, Number(n) || 0)) || '0 B';
+}
+
+function revUploadSetBusy(busy) {
+  const btn = $('#reverse-upload');
+  if (btn) {
+    btn.disabled = !!busy;
+    btn.textContent = busy ? '正在添加…' : '➕ 添加图片';
+  }
+  const inp = $('#reverse-file-input');
+  if (inp) inp.disabled = !!busy;
+}
+
+function revUploadEnsureControls() {
+  const host = $('#reverse-upload-progress');
+  if (!host) return null;
+  if (host.dataset.ready !== '1') {
+    host.innerHTML = opProgressHtml('rev-up-flow', {
+        mode: 'flow', text: '正在上传图片…' }) +
+      opProgressHtml('rev-up-count', {
+        mode: 'count', label: '添加图片', text: '已上传 0 B／0 B',
+        hidden: true });
+    host.dataset.ready = '1';
+    opRevealProgressIn(host);
+  }
+  return host;
+}
+
+function revUploadPaint(st) {
+  const area = $('#reverse-upload-task');
+  const note = $('#reverse-upload-note');
+  if (!area || !note) return;
+  if (!st || st.phase === 'idle') {
+    area.classList.add('hidden');
+    return;
+  }
+  area.classList.remove('hidden');
+  revUploadEnsureControls();
+  if (st.phase === 'uploading') {
+    if (Number(st.total) > 0 && Number(st.loaded) >= 0) {
+      opProgressPaint('rev-up-flow', { mode: 'flow', hidden: true });
+      opProgressPaint('rev-up-count', {
+        mode: 'count', hidden: false, done: st.loaded, total: st.total,
+        label: '添加图片', stage: '正在上传图片',
+        text: `已上传 ${revUploadFmt(st.loaded)}／${revUploadFmt(st.total)}`,
+      });
+    } else {
+      opProgressPaint('rev-up-flow', {
+        mode: 'flow', hidden: false, stage: '正在上传图片',
+        text: '正在上传图片…',
+      });
+      opProgressPaint('rev-up-count', { mode: 'count', hidden: true });
+    }
+    note.textContent = '';
+    revUploadSetBusy(true);
+    return;
+  }
+  if (st.phase === 'writing') {
+    opProgressPaint('rev-up-flow', {
+      mode: 'flow', hidden: false, stage: '正在写入收件箱',
+      text: '正在写入收件箱…',
+    });
+    opProgressPaint('rev-up-count', { mode: 'count', hidden: true });
+    note.textContent = '';
+    revUploadSetBusy(true);
+    return;
+  }
+  opProgressPaint('rev-up-flow', { mode: 'flow', hidden: true });
+  opProgressPaint('rev-up-count', { mode: 'count', hidden: true });
+  revUploadSetBusy(false);
+  note.innerHTML = st.html || esc(st.text || '');
+}
+
+function revUploadResultHtml(data) {
+  const saved = Array.isArray(data.saved) ? data.saved : [];
+  const rejected = Array.isArray(data.rejected) ? data.rejected : [];
+  const details = Array.isArray(data.rejected_details)
+    ? data.rejected_details : [];
+  const parts = [`已添加 ${saved.length} 张`];
+  if (rejected.length) parts.push(`未添加 ${rejected.length} 项`);
+  let html = `<div>${esc(parts.join(' · '))}</div>`;
+  if (details.length) {
+    const rows = details.slice(0, 5).map(x =>
+      `<li><code>${esc(x.name || '')}</code> ${esc(x.reason || '')}</li>`).join('');
+    html += `<ul>${rows}</ul>`
+      + (details.length > 5 ? `<div class="hint">等 ${details.length} 项</div>` : '');
+  } else if (rejected.length) {
+    html += `<div class="hint">${esc(rejected.slice(0, 5).join('、'))}`
+      + `${rejected.length > 5 ? ' 等' : ''}</div>`;
+  }
+  if (rejected.length) {
+    html += '<div class="hint">格式不支持或写入失败的条目未写入；修正后可重新选择。</div>';
+  }
+  return html;
+}
+
+function revUploadFailHtml(msg) {
+  return `<span class="err-text">添加失败：${esc(msg || '未知错误')}</span>`
+    + '<div class="hint">请先查看下方待反搜区，已写入的图片会显示；'
+    + '不要整批重传，可重新选择后重试。</div>';
+}
+
+async function revUploadRefreshInbox() {
+  try { await loadReverseStatus(); } catch (e) {}
+}
+
+function revUploadRepaint() {
+  if (_revUploadState) revUploadPaint(_revUploadState);
+  else {
+    const area = $('#reverse-upload-task');
+    if (area) area.classList.add('hidden');
+  }
+  revUploadSetBusy(!!_revUploadXHR);
+}
+window.revUploadRepaint = revUploadRepaint;
+
 async function uploadReverseImages(input) {
-  const files = input.files;
+  const files = input && input.files;
   if (!files || !files.length) return;
-  input.disabled = true;
+  if (_revUploadXHR) {
+    // 同一页面只执行本次选择一次: 正在上传时忽略新的选择
+    input.value = '';
+    return;
+  }
+  const list = Array.from(files);
+  const token = ++_revUploadSeq;
+  _revUploadState = { phase: 'uploading', loaded: -1, total: 0 };
+  revUploadPaint(_revUploadState);
+
+  const fd = new FormData();
+  list.forEach(f => fd.append('files', f));
+  const xhr = new XMLHttpRequest();
+  _revUploadXHR = xhr;
+  const mine = () => token === _revUploadSeq && xhr === _revUploadXHR;
+  const finish = (st) => {
+    if (!mine()) return;
+    _revUploadXHR = null;
+    _revUploadState = st;
+    revUploadPaint(st);
+    input.value = '';
+    void revUploadRefreshInbox();
+  };
+
+  xhr.open('POST', '/api/reverse/upload');
+  xhr.timeout = 120000;
+  xhr.upload.onprogress = (e) => {
+    if (!mine()) return;
+    const total = e && e.lengthComputable ? Number(e.total || 0) : 0;
+    _revUploadState = total > 0
+      ? { phase: 'uploading', loaded: Number(e.loaded || 0), total }
+      : { phase: 'uploading', loaded: -1, total: 0 };
+    revUploadPaint(_revUploadState);
+  };
+  xhr.upload.onload = () => {
+    if (!mine()) return;
+    // 字节已发完, 服务器还在保存/重命名: 进入写入阶段
+    _revUploadState = { phase: 'writing' };
+    revUploadPaint(_revUploadState);
+  };
+  xhr.onload = () => {
+    if (!mine()) return;
+    if (xhr.status < 200 || xhr.status >= 300) {
+      let msg = 'HTTP ' + xhr.status;
+      try {
+        const d = JSON.parse(xhr.responseText || '{}');
+        msg = d.error || d.message || msg;
+      } catch (e) {}
+      finish({ phase: 'error', html: revUploadFailHtml(msg) });
+      return;
+    }
+    let data = null;
+    try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {
+      finish({ phase: 'error',
+               html: revUploadFailHtml('接口响应异常，未能确认写入结果') });
+      return;
+    }
+    if (!data || data.status !== 'ok') {
+      finish({ phase: 'error',
+               html: revUploadFailHtml((data && (data.error || data.message))
+                                       || '接口未返回成功结果') });
+      return;
+    }
+    const saved = Array.isArray(data.saved) ? data.saved : [];
+    const rejected = Array.isArray(data.rejected) ? data.rejected : [];
+    toast(`已添加 ${saved.length} 张`
+          + (rejected.length ? ` · 未添加 ${rejected.length} 项` : ''),
+          rejected.length ? 'warn' : 'ok');
+    finish({ phase: 'done', html: revUploadResultHtml(data) });
+  };
+  xhr.onerror = () => {
+    if (!mine()) return;
+    finish({ phase: 'error', html: revUploadFailHtml('网络中断') });
+  };
+  xhr.ontimeout = () => {
+    if (!mine()) return;
+    finish({ phase: 'error', html: revUploadFailHtml('上传超时') });
+  };
+  xhr.onabort = () => {
+    if (!mine()) return;
+    finish({ phase: 'error', html: revUploadFailHtml('上传已取消') });
+  };
   try {
-    const fd = new FormData();
-    for (const f of files) fd.append('files', f);
-    const r = await fetch('/api/reverse/upload', { method: 'POST', body: fd });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
-    let msg = `已添加 ${data.saved.length} 张图片 ✓`;
-    if (data.rejected && data.rejected.length) msg += `（${data.rejected.length} 个非图片文件已跳过）`;
-    toast(msg, 'ok');
-    await loadReverseStatus();
+    xhr.send(fd);
   } catch (e) {
-    toast('添加失败: ' + e.message, 'err');
-  } finally {
-    input.disabled = false;
-    input.value = '';  // 允许再次选同一文件
+    finish({ phase: 'error', html: revUploadFailHtml(e.message || String(e)) });
   }
 }
 
