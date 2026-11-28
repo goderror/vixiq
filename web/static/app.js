@@ -18,9 +18,25 @@ window.switchTab = function (name) {
   const mSheet = $('#m-more-sheet');
   if (mSheet) mSheet.classList.add('hidden');
   $$('.tabpage').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
-  // 网络查询缩略图观察器只服务于搜索页; 切走时断开, 回来时按当前布局重新挂载
-  if (name === 'search') netThumbAttach($('#search-result'));
-  else netThumbReset();
+  // 网络查询缩略图观察器只服务于搜索页; 切走时断开。
+  // 回来时若缓存里仍有原始响应 → 重画一份新 DOM/新版本号, 旧图的迟到回调自然失效;
+  // 只有没有原始响应的旧缓存才按现有 DOM 重新挂载。
+  if (name === 'search') {
+    const box = $('#search-result');
+    const cached = searchCache[searchScope];
+    if (cached && cached.res && box && box.innerHTML.trim()) {
+      const main = document.querySelector('main');
+      const top = main ? main.scrollTop : 0;
+      renderSearch(box, cached.res);
+      cached.html = box.innerHTML;
+      if (main) main.scrollTop = top;
+      netThumbAttach(box);
+    } else {
+      netThumbAttach(box);
+    }
+  } else {
+    netThumbReset();
+  }
   document.dispatchEvent(new CustomEvent('vixiq:tab-change', { detail: { name } }));
   actPush('NAV', '切换页面 → ' + name, {});   // 活动日志: 记下用户去哪一页了
   if (name === 'library') { libSync(); loadStats(); loadLibrary(); loadLibFacets(); loadTrashBadge(); }
@@ -2735,6 +2751,9 @@ const NET_THUMB_PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,' + encodeURICom
   + '<rect width="100%" height="100%" fill="#eef1f5"/></svg>');
 const NET_THUMB_MARGIN = 150;
 let _netThumbObserver = null;
+// 网络查询结果版本号: 换批/切 scope/离开搜索页/安全模式重画都会 +1。
+// 旧 img 的迟到 load/error 回调必须对不上版本号而失效, 不能给旧节点重试真实图。
+let _netThumbEpoch = 0;
 
 function netThumbSrc(w) {
   const u = (w && (w.image_urls || [])[0]) || '';
@@ -2744,16 +2763,30 @@ function netThumbSrc(w) {
 }
 
 function netThumbReset() {
+  _netThumbEpoch += 1;
   if (_netThumbObserver) {
     try { _netThumbObserver.disconnect(); } catch (e) { /* 忽略 */ }
     _netThumbObserver = null;
   }
 }
 
+function netThumbNodeCurrent(img) {
+  if (!img || !img.isConnected) return false;
+  if (img.dataset.netEpoch !== String(_netThumbEpoch)) return false;
+  const box = document.querySelector('#search-result');
+  return !!(box && box.contains(img));
+}
+
 function netThumbLoad(img, high = false) {
-  if (!img || img.dataset.netLoaded === '1') return;
+  if (!netThumbNodeCurrent(img) || img.dataset.netLoaded === '1') return;
   const u = img.dataset.netSrc;
   if (!u) return;
+  // 当前安全模式不允许显示的卡片: 即使旧回调晚到也不设置真实地址。
+  if (safemode && img.dataset.netR18 === '1' && u.indexOf('data:') !== 0) {
+    img.dataset.netLoaded = '1';
+    img.src = R18_MASK_SVG;
+    return;
+  }
   img.dataset.netLoaded = '1';
   img.decoding = 'async';
   if (high) img.setAttribute('fetchpriority', 'high');
@@ -2761,17 +2794,25 @@ function netThumbLoad(img, high = false) {
 }
 
 window.netThumbError = function (img) {
-  const u = (img && img.dataset && img.dataset.netSrc) || '';
-  if (img && img.dataset.netRetried !== '1' && u && u.indexOf('data:') !== 0) {
+  // 离开查询页/换批/安全模式重画后的旧节点: 迟到 error 不得触发任何重试。
+  if (!netThumbNodeCurrent(img)) return;
+  const curSrc = (img.getAttribute && img.getAttribute('src')) || '';
+  // 当前仍是占位/打码 data URI: 这是旧请求的迟到 error, 不能据此换真实地址重试。
+  if (curSrc.indexOf('data:') === 0) return;
+  if (safemode && img.dataset.netR18 === '1') {
+    img.src = R18_MASK_SVG;
+    img.title = '';
+    return;
+  }
+  const u = (img.dataset && img.dataset.netSrc) || '';
+  if (img.dataset.netRetried !== '1' && u && u.indexOf('data:') !== 0) {
     img.dataset.netRetried = '1';
     // 同 URL 首次失败后换一个带重试参数的代理地址; 上游 URL 本身不变。
     img.src = u + (u.indexOf('?') >= 0 ? '&' : '?') + 'vixiq_retry=1';
     return;
   }
-  if (img) {
-    img.src = NET_THUMB_PLACEHOLDER;
-    img.title = '缩略图加载失败，可稍后重试';
-  }
+  img.src = NET_THUMB_PLACEHOLDER;
+  img.title = '缩略图加载失败，可稍后重试';
 };
 
 function netThumbEagerCount() {
@@ -2789,6 +2830,19 @@ function netThumbAttach(box) {
   if (!box || !isTabActive('search')) return;
   const imgs = Array.from(box.querySelectorAll('img[data-net-src]'));
   if (!imgs.length) return;
+  // 当前结果统一盖上本轮版本号。缓存 HTML 的旧批次图片先取消旧请求、回到占位,
+  // 再按当前布局重新排队 —— 旧请求的迟到回调不会拿到真实地址重试。
+  const epoch = String(_netThumbEpoch);
+  imgs.forEach((img) => {
+    if (img.dataset.netEpoch === epoch) return;
+    const src = (img.getAttribute && img.getAttribute('src')) || '';
+    if (img.dataset.netLoaded === '1' || src.indexOf('data:') !== 0) {
+      img.src = NET_THUMB_PLACEHOLDER;
+      img.dataset.netLoaded = '';
+      img.dataset.netRetried = '';
+    }
+    img.dataset.netEpoch = epoch;
+  });
   const main = document.querySelector('main');
   if (!main || typeof IntersectionObserver !== 'function') {
     imgs.forEach(img => netThumbLoad(img));
@@ -4525,13 +4579,17 @@ function renderWorksGrid(works, gallery = false, netLazy = false, netEager = nul
     const thumbUrl = netLazy ? '' : imgSrc((w.image_urls || [])[0], w);
     const lazyUrl = netLazy ? netThumbSrc(w) : '';
     const eager = netLazy && idx < eagerN && !!lazyUrl;
+    const r18Unsafe = !!(w && w.is_r18 !== false && w.is_r18 !== 0);
+    const netMeta = `data-net-epoch="${_netThumbEpoch}"`
+      + ` data-net-r18="${r18Unsafe ? '1' : '0'}"`;
     const thumbAttrs = netLazy
       ? (eager
         ? `src="${esc(lazyUrl)}" data-net-src="${esc(lazyUrl)}" data-net-loaded="1"`
-          + ` decoding="async"${idx < 3 ? ' fetchpriority="high"' : ''}`
+          + ` ${netMeta} decoding="async"${idx < 3 ? ' fetchpriority="high"' : ''}`
           + ` onerror="netThumbError(this)"`
         : (lazyUrl
-          ? `src="${NET_THUMB_PLACEHOLDER}" data-net-src="${esc(lazyUrl)}" onerror="netThumbError(this)"`
+          ? `src="${NET_THUMB_PLACEHOLDER}" data-net-src="${esc(lazyUrl)}" ${netMeta}`
+            + ` onerror="netThumbError(this)"`
           : `src="${NET_THUMB_PLACEHOLDER}"`))
       : `src="${thumbUrl}" onerror="this.style.visibility='hidden'"`;
     return `

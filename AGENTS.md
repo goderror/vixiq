@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-29（当前前端版本 `20261129a`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-29（当前前端版本 `20261129b`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261129a`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261129b`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.104 网络查询缩略图迟到失败不再重试（2026-11-29，前端 `20261129b`，已发布到安装版）
+
+- `_netThumbEpoch` 查询结果版本号：换查询/翻批/切 scope/离开搜索页/安全模式重画都
+  +1；缩略图带 `data-net-epoch/data-net-r18`。`netThumbNodeCurrent` 校验节点仍连接、
+  版本号当前、仍在 `#search-result` 内。
+- `netThumbError` 对旧节点直接返回；当前 src 仍是 data 占位/打码时也返回；
+  安全模式已开启且卡片为 R18/未知时只回占位，不发起 `vixiq_retry=1`。
+- `netThumbLoad` / IntersectionObserver 回调共用同一约束；切回搜索页优先用缓存
+  原始响应重画新 DOM/新版本号，旧缓存节点重新挂载前先取消旧请求回占位。
+- 回归：新增三条迟到路径（开安全模式后旧 R18 慢 500、翻批后旧慢 500、切回缓存结果），
+  均断言旧资源请求 1 次、重试 0 次；安全模式初次渲染 0 真实请求；正常单图失败仍重试
+  一次。候选与安装版浏览器日志
+  `trae-20261129b-network-thumb-late-ui{,-install}.log`。
+- 全量 **199/199**（203.60 s），日志
+  `_dev_runtime/diagnostics/trae-20261129b-network-thumb-late-smoke.log`；
+  首轮 4 项内存分配失败为残留 headless Edge 占满内存，清理后复跑全绿。
+- **候选/发布**：候选（`built_at 2026-11-29 01:02:07`，前端 `20261129b`）在 7813
+  通过全部迟到/边界回归。回滚清单
+  `_dev_runtime/backups/publish-20261129b-20261129-011540.json`（4 个旧文件、
+  8 个替换项、15,360,736 字节）。候选/dist/安装版 exe `eb6c44b0cb5e…`、
+  base_library `df4b20918adb…`、app.js `2f198389a576…`、index.html
+  `0314e400d65c…`、style.css `6e7bd9d62e49…`；两处配置哈希未变。
+  安装版 7810 前端 `20261129b-1795885327-1795876550-1795859951`、健康正常。
+  交接见 `trae-20261129b-network-thumb-late-retry-handoff-20261129.md`。
 
 ### 4.103 网络查询缩略图首屏优先 + 滚动补图（2026-11-29，前端 `20261129a`，已发布到安装版）
 
