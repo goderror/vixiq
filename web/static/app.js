@@ -2033,13 +2033,16 @@ function renderAuthors(items) {
 // 🔍 重复作者: 按规范化名字/曾用名分组，列出同名但不同 ID 的作者，逐组确认合并。
 // 只负责发现和引导；同名不等于同一人，绝不自动合并。
 window.openAuthorDuplicates = async function () {
-  try {
-    const r = await api('/api/library/author-duplicates');
-    const groups = r.groups || [];
-    window._authorDupGroups = groups;
-    if (!groups.length) { toast('没有发现重复作者', 'ok'); return; }
-    const body = groups.map((g, gi) => {
-      const rows = g.items.map((it, i) => `<tr>
+  await runWithProgress({
+    key: 'author-duplicates', host: '#op-progress-host', label: '查找重复作者',
+    scanText: '正在查找重复作者…',
+    request: { run: () => api('/api/library/author-duplicates'), timeout: 30000 },
+    onDone: (r) => {
+      const groups = (r && r.groups) || [];
+      window._authorDupGroups = groups;
+      if (!groups.length) { toast('没有发现重复作者', 'ok'); return; }
+      const body = groups.map((g, gi) => {
+        const rows = g.items.map((it, i) => `<tr>
         <td>${esc(it.name)}</td>
         <td class="mono">${esc(it.author_id)}</td>
         <td>${it.is_pixiv ? 'pixiv' : '自定义'}</td>
@@ -2047,18 +2050,20 @@ window.openAuthorDuplicates = async function () {
         <td>${(it.sources || []).map(s => `<span class="tag src-tag">${esc(sourceLabel(s))}</span>`).join(' ') || '—'}</td>
         <td><button class="btn ghost" onclick="mergeAuthorGroup(${gi},${i})">合并到这位</button></td>
       </tr>`).join('');
-      return `<div class="author-dup-group">
+        return `<div class="author-dup-group">
         <div class="author-dup-name">同名：${esc(g.name)}</div>
         <div class="table-wrap"><table class="table lib-list"><thead><tr>
           <th>作者名</th><th>ID</th><th>类型</th><th>作品数</th><th>来源</th><th>操作</th>
         </tr></thead><tbody>${rows}</tbody></table></div>
       </div>`;
-    }).join('');
-    openLibModal('🔍 重复作者（' + groups.length + ' 组）', `
+      }).join('');
+      openLibModal('🔍 重复作者（' + groups.length + ' 组）', `
       <div class="hint">同名/同别名不等于同一人。确认是同一人后，选一个目标，把组内其他条目合并过去；
         合并会迁移作品、曾用名和链接，并同步文件夹。</div>
       ${body}`, { lg: true });
-  } catch (e) { toast('读取重复作者失败: ' + e.message, 'err'); }
+    },
+    onError: (e) => toast('读取重复作者失败: ' + e.message, 'err'),
+  });
 };
 
 window.mergeAuthorGroup = async function (gi, ti) {
@@ -2069,21 +2074,36 @@ window.mergeAuthorGroup = async function (gi, ti) {
   if (!srcs.length) return;
   if (!confirm(`把这组里的其他 ${srcs.length} 条作者合并到「${dst.name}（${dst.author_id}）」？\n\n`
     + '同名不代表同一人，请确认。合并后源作者记录会删除，作品/曾用名/链接迁到目标。')) return;
-  try {
-    let moved = 0, files = 0;
-    for (const s of srcs) {
-      const r = await api('/api/library/author-merge', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ src_id: s.author_id, dst_id: dst.author_id }) });
-      const err = apiErr(r); if (err) throw new Error(err);
-      moved += Number(r.artworks || 0);
-      files += Number(r.files_gathered || 0);
-    }
-    toast(`已合并 ${srcs.length} 条作者，迁移 ${moved} 个作品`
-      + (files ? `，${files} 个文件已归位` : ''), 'ok');
-    closeLibModal();
-    loadAuthors(); loadLibFacets(); loadLibrary();
-  } catch (e) { toast('合并失败: ' + e.message, 'err'); }
+  await runWithProgress({
+    key: 'author-merge', host: '#op-progress-host', label: '合并作者', unit: '位',
+    scanText: '正在合并作者…',
+    request: {
+      run: async ({ report }) => {
+        let moved = 0, files = 0;
+        for (let i = 0; i < srcs.length; i += 1) {
+          const s = srcs[i];
+          report({ stage: `正在合并到「${dst.name}」`, done: i,
+                   total: srcs.length, current: s.name });
+          const r = await api('/api/library/author-merge', { method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ src_id: s.author_id, dst_id: dst.author_id }) });
+          const err = apiErr(r); if (err) throw new Error(err);
+          moved += Number(r.artworks || 0);
+          files += Number(r.files_gathered || 0);
+          report({ done: i + 1, total: srcs.length, current: s.name });
+        }
+        return { moved, files, n: srcs.length };
+      },
+      timeout: 180000,
+    },
+    onDone: (res) => {
+      toast(`已合并 ${res.n} 条作者，迁移 ${res.moved} 个作品`
+        + (res.files ? `，${res.files} 个文件已归位` : ''), 'ok');
+      closeLibModal();
+      loadAuthors(); loadLibFacets(); loadLibrary();
+    },
+    onError: (e) => toast('合并失败: ' + e.message, 'err'),
+  });
 };
 
 // 作者主页链接 (danbooru 式): 优先用**记录的第一条来源链接**, 其次 pixiv 官方主页。
@@ -4062,24 +4082,30 @@ function paintAiText() {
 }
 
 async function runAiText() {
-  const btn = $('#ai-run'), st = $('#ai-state');
-  if (btn) btn.disabled = true;
+  const st = $('#ai-state');
   if (st) st.textContent = '正在上传并生成…';
-  try {
-    const r = await api('/api/ai/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: aiFormBody() });
-    if (!r || r.ok !== true) throw new Error((r && r.error) || '生成失败');
-    // 生成等了好几秒, 结果**先上屏**再说 —— 表单状态 (密钥尾号等) 后台慢慢刷,
-    // 别让一次多余的 GET 挡在标题前面。loadAiText 里的 paintAiText
-    // 会拿「已配置:…」盖掉刚显示的标题, 所以刷完再恢复一次。
-    const got = `「${r.title || '—'}」 ${r.mood || ''}`;
-    if (st) st.textContent = got;
-    loadAiText().catch(() => {}).then(() => { if (st) st.textContent = got; });
-    toast('壁纸文案已生成并保存', 'ok');
-  } catch (e) {
-    if (st) st.textContent = '生成失败：' + (e.message || e);
-    toast('生成失败: ' + (e.message || e), 'err');
-  } finally { if (btn) btn.disabled = false; }
+  await runWithProgress({
+    key: 'ai-run', host: '#ai-progress', label: '生成壁纸文案',
+    button: '#ai-run', busyText: '生成中…',
+    scanText: '正在上传并生成壁纸文案…',
+    request: {
+      run: () => api('/api/ai/run', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: aiFormBody() }),
+      timeout: 90000,
+      validate: r => (!r || r.ok !== true) ? ((r && r.error) || '生成失败') : '',
+    },
+    onDone: (r) => {
+      // 生成等了好几秒, 结果**先上屏**再说 —— 表单状态后台慢慢刷, 刷完再恢复标题
+      const got = `「${r.title || '—'}」 ${r.mood || ''}`;
+      if (st) st.textContent = got;
+      loadAiText().catch(() => {}).then(() => { if (st) st.textContent = got; });
+      toast('壁纸文案已生成并保存', 'ok');
+    },
+    onError: (e) => {
+      if (st) st.textContent = '生成失败：' + e.message;
+      toast('生成失败: ' + e.message, 'err');
+    },
+  });
 }
 
 async function testAiText() {
@@ -9840,32 +9866,50 @@ window.batchSourceSearch = async function () {
     + `反搜结果只作参考，不会自动改动作品。继续？`)) return;
 
   switchTab('reverse');
-  $('#rev-gallery-result').innerHTML = '<div class="hint">🔄 正在搜索来源…</div>';
-  try {
-    await api('/api/library/batch-source-search', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ artwork_ids: aids }) });
-  } catch (e) {
-    $('#rev-gallery-result').innerHTML =
-      `<div class="hint err-text">启动失败: ${esc(e.message)}</div>`;
-    return;
-  }
-  clearInterval(galleryPollTimer);
-  galleryPollTimer = setInterval(async () => {
-    let st = {};
-    try { st = (await api('/api/reverse/status')).src_search || {}; } catch (e) { /* 忽略 */ }
-    renderReverseTasks(await loadReverseStatus());
-    const b = st.batch;
-    if (!b) return;
-    if (st.running) {
+  $('#rev-gallery-result').innerHTML = '';
+  await runWithProgress({
+    key: 'batch-source', mode: 'task', host: '#op-progress-host',
+    note: '#rev-gallery-result', label: '搜索来源', unit: '个',
+    scanText: '正在搜索来源…',
+    task: {
+      fixedId: 'batch-source',
+      start: () => api('/api/library/batch-source-search', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artwork_ids: aids }) }),
+      read: () => api('/api/reverse/status'),
+      idOf: () => 'batch-source',
+      snapshotOf: () => ({ status: 'ok',
+        src_search: { running: true, batch: { done: 0, total: aids.length } } }),
+      intervalMs: 1500,
+      map: {
+        // 启动后的第一两次查询可能还没看到 src_search → 先按运行中处理, 不误判完成
+        running: s => !!(s && (!s.src_search || s.src_search.running)),
+        error: s => (s.src_search && s.src_search.phase === 'error')
+          ? (s.src_search.error || '搜索来源失败') : '',
+        result: s => (s.src_search && s.src_search.batch) || null,
+        stage: () => '搜索来源',
+        done: s => (s.src_search && s.src_search.batch && s.src_search.batch.done) || 0,
+        total: s => (s.src_search && s.src_search.batch && s.src_search.batch.total) || 0,
+        current: s => (s.src_search && s.src_search.current) || '',
+      },
+      onState: (s) => {
+        renderReverseTasks(s);
+        const b = (s.src_search && s.src_search.batch) || {};
+        $('#rev-gallery-result').innerHTML =
+          `<div class="hint">🔄 搜索来源 ${b.done || 0}/${b.total || 0}`
+          + (s.src_search && s.src_search.current
+            ? ` · 当前 ${esc(s.src_search.current)}` : '') + '…</div>';
+      },
+    },
+    onDone: (b) => {
+      if (b) renderBatchSourceResult(b);
+      else $('#rev-gallery-result').innerHTML = '<div class="hint">搜索来源已完成</div>';
+    },
+    onError: (e) => {
       $('#rev-gallery-result').innerHTML =
-        `<div class="hint">🔄 搜索来源 ${b.done}/${b.total}`
-        + (st.current ? ` · 当前 ${esc(st.current)}` : '') + '…</div>';
-      return;
-    }
-    clearInterval(galleryPollTimer);
-    renderBatchSourceResult(b);
-  }, 1500);
+        `<div class="hint err-text">搜索来源失败: ${esc(e.message)}</div>`;
+    },
+  });
 };
 
 let _batchSourceItems = [];   // 最近一次「批量搜索来源」的结果, 供逐条/一键应用
@@ -9901,7 +9945,25 @@ window.applyAllBatchSource = async function () {
   });
   if (!todo.length) { toast('没有可应用的条目', 'info'); return; }
   if (!confirm(`将把 ${todo.length} 条来源信息写入对应作品（不会覆盖已有的 pixiv 作者），继续？`)) return;
-  for (const i of todo) await window.applyBatchSource(i);
+  await runWithProgress({
+    key: 'batch-source-apply', host: '#op-progress-host',
+    label: '应用来源', unit: '条', scanText: '正在写入来源…',
+    request: {
+      run: async ({ report }) => {
+        for (let n = 0; n < todo.length; n += 1) {
+          const it = _batchSourceItems[todo[n]] || {};
+          report({ stage: '正在写入来源', done: n, total: todo.length,
+                   current: it.artwork_id || '' });
+          await window.applyBatchSource(todo[n]);
+          report({ done: n + 1, total: todo.length });
+        }
+        return { n: todo.length };
+      },
+      timeout: 300000,
+    },
+    onDone: (res) => toast(`来源应用完成：处理 ${res.n} 条`, 'ok'),
+    onError: (e) => toast('应用来源失败: ' + e.message, 'err'),
+  });
 };
 
 function renderBatchSourceResult(b) {
@@ -10278,14 +10340,25 @@ window.saveMergeImages = async function () {
   } else {
     body.title = ($('#merge-new-title').value || '').trim();
   }
-  try {
-    const r = await api('/api/library/merge-pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    toast(`已合并 ${r.pages_moved} 张图片到作品 ${r.target_id}` + (r.artworks_removed.length ? `（${r.artworks_removed.length} 个源作品已搬空移除）` : '') + `，移动 ${r.files_moved} 个文件 ✓`, 'ok');
-    libSelected.clear();
-    _libAnchor = null;
-    closeLibModal();
-    loadLibrary(); loadStats(); loadLibFacets();
-  } catch (e) { toast('合并失败: ' + e.message, 'err'); }
+  await runWithProgress({
+    key: 'merge-pages', host: '#op-progress-host', label: '合并图片', unit: '张',
+    scanText: '正在合并图片…',
+    request: {
+      run: () => api('/api/library/merge-pages', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+      timeout: 180000,
+      validate: r => (!r || r.status !== 'ok')
+        ? ((r && (r.message || r.error)) || '合并失败') : '',
+    },
+    onDone: (r) => {
+      toast(`已合并 ${r.pages_moved} 张图片到作品 ${r.target_id}` + (r.artworks_removed.length ? `（${r.artworks_removed.length} 个源作品已搬空移除）` : '') + `，移动 ${r.files_moved} 个文件 ✓`, 'ok');
+      libSelected.clear();
+      _libAnchor = null;
+      closeLibModal();
+      loadLibrary(); loadStats(); loadLibFacets();
+    },
+    onError: (e) => toast('合并失败: ' + e.message, 'err'),
+  });
 };
 
 // ✂️ 拆分: 把选中的图片从所属作品里拆出来。两种形态 ——
@@ -10344,28 +10417,38 @@ window.saveSplitImages = async function () {
   const items = [...libSelected].map(parsePageKey);
   if (!items.length) return;
   const mode = ($$('#lib-modal input[name="split-mode"]').find(r => r.checked) || {}).value || 'each';
-  try {
-    let r, msg;
-    if (mode === 'group') {
-      r = await api('/api/library/merge-pages', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items, target: 'new',
-                               title: ($('#split-new-title').value || '').trim() }) });
-      msg = `已拆出 ${r.pages_moved} 张，组成新作品 ${r.target_id}`;
-    } else {
-      r = await api('/api/library/split-pages', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items }) });
-      msg = `已拆出 ${r.pages_moved} 张，每张独立成作品`;
-    }
-    if (r.artworks_removed && r.artworks_removed.length)
-      msg += `（${r.artworks_removed.length} 个原作品已搬空并删除）`;
-    toast(msg + ' ✓', 'ok');
-    libSelected.clear();
-    _libAnchor = null;
-    closeLibModal();
-    loadLibrary(); loadStats(); loadLibFacets();
-  } catch (e) { toast('拆分失败: ' + e.message, 'err'); }
+  await runWithProgress({
+    key: 'split-pages', host: '#op-progress-host', label: '拆分图片', unit: '张',
+    scanText: '正在拆分图片…',
+    request: {
+      run: async () => {
+        if (mode === 'group') {
+          const r = await api('/api/library/merge-pages', { method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items, target: 'new',
+                                   title: ($('#split-new-title').value || '').trim() }) });
+          return { r, msg: `已拆出 ${r.pages_moved} 张，组成新作品 ${r.target_id}` };
+        }
+        const r = await api('/api/library/split-pages', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items }) });
+        return { r, msg: `已拆出 ${r.pages_moved} 张，每张独立成作品` };
+      },
+      timeout: 180000,
+      validate: x => (!x || !x.r || x.r.status !== 'ok')
+        ? ((x && x.r && (x.r.message || x.r.error)) || '拆分失败') : '',
+    },
+    onDone: ({ r, msg }) => {
+      if (r.artworks_removed && r.artworks_removed.length)
+        msg += `（${r.artworks_removed.length} 个原作品已搬空并删除）`;
+      toast(msg + ' ✓', 'ok');
+      libSelected.clear();
+      _libAnchor = null;
+      closeLibModal();
+      loadLibrary(); loadStats(); loadLibFacets();
+    },
+    onError: (e) => toast('拆分失败: ' + e.message, 'err'),
+  });
 };
 
 // ✏️ 批量编辑: 弹窗中每个字段带「修改」勾选, 只提交勾选的字段
@@ -10440,7 +10523,16 @@ window.saveBatchEdit = async function () {
     libSelected.clear();    // 批量操作完成后清空选择 (避免残留勾选误导后续操作)
     closeLibModal(); loadLibrary(); loadStats(); loadLibFacets();
   };
-  try { await submit(body); } catch (e) { toast('批量编辑失败: ' + e.message, 'err'); }
+  await runWithProgress({
+    key: 'batch-edit', host: '#op-progress-host', label: '批量编辑', unit: '个',
+    scanText: '正在更新作品…',
+    request: {
+      run: async () => { await submit(body); return { n: ids.length }; },
+      timeout: 180000,
+    },
+    onDone: () => {},
+    onError: (e) => toast('批量编辑失败: ' + e.message, 'err'),
+  });
 };
 
 // ---- 弹窗: 编辑作品 / 编辑标签 ----
@@ -12433,6 +12525,10 @@ function opTaskApply(run, snap) {
     current: opTaskValue(map, 'current', snap, (snap && snap.current) || ''),
   };
   opRunPaint(run, st);
+  const task = run.o.task || {};
+  if (typeof task.onState === 'function') {
+    try { task.onState(snap, run); } catch (e) {}
+  }
   const err = opTaskValue(map, 'error', snap,
     snap && snap.status === 'error' ? (snap.error || '任务失败') : '');
   if (err) return { terminal: true, error: String(err) };
