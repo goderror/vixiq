@@ -316,6 +316,9 @@ def _scopes_for_request(path: str, method: str, body: "dict | None",
 
 # 下载任务单飞: 同一时刻只允许一个 run_cart 后台线程 (2026-09-15 并发下载事故)
 _cart_busy = threading.Event()
+# 临时目录手动清理与下载启动的同步边界: 下载一旦被选中(忙标记置上), 清理就不再删
+# downloads; 反过来清理正删 downloads 时, 下载启动会等它删完再重建。
+_TEMP_USE_LOCK = threading.Lock()
 # 下载进行中又有新任务加入 → 跑完当前这轮后自动补跑一轮
 _cart_rerun = threading.Event()
 # 设置页「退出程序」防重入: 已在退出流程中则重复请求直接返回
@@ -845,8 +848,15 @@ def _launch_run_cart(only_ids: "list[int] | None" = None,
     由正在跑的线程收尾后自动补跑 (那时队列里新增的 pending 项会被一并捞走)。"""
     if _cancel_event.is_set():
         _cancel_event.clear()
-    if _cart_busy.is_set():
-        _cart_rerun.set()
+    with _TEMP_USE_LOCK:
+        if _cart_busy.is_set():
+            _cart_rerun.set()
+            busy = True
+        else:
+            # 在同步边界内先置忙: 清理任务此时再查 downloads 会看到"正在使用"。
+            _cart_busy.set()
+            busy = False
+    if busy:
         try:
             _reporter().warn("已有下载任务正在执行，已排队，完成后自动继续…")
         except Exception:
@@ -854,7 +864,6 @@ def _launch_run_cart(only_ids: "list[int] | None" = None,
         return
 
     def _task():
-        _cart_busy.set()
         mark_dirty("queue")          # 队列状态立刻变"进行中", 各页面按域刷新
         try:
             while True:
@@ -900,7 +909,14 @@ def _launch_run_cart(only_ids: "list[int] | None" = None,
         finally:
             _cart_busy.clear()
 
-    threading.Thread(target=_task, daemon=True).start()
+    try:
+        threading.Thread(target=_task, daemon=True).start()
+    except Exception as e:
+        _cart_busy.clear()
+        try:
+            _reporter().error(f"下载线程启动失败: {e}")
+        except Exception:
+            pass
 
 
 # ---------- 共享 SearchClient (连查不重开浏览器; 默认无头, 可切有头供用户围观) ----------
@@ -5043,22 +5059,45 @@ def _temp_run(task_id: str, root: Path) -> None:
                 pass
             return
 
-        active = _temp_active_reasons(root)
+        def _active_reason(name: str) -> str:
+            return _temp_active_reasons(root).get(name) or ""
+
+        def _remove_one(entry: dict) -> dict:
+            try:
+                return paths.remove_temp_entry(entry, root)
+            except Exception as e:
+                return {"outcome": "failed",
+                        "reason": f"{type(e).__name__}: {e}", "freed": 0}
+
         for idx, entry in enumerate(entries):
             if not is_current():
                 return
             name = str(entry.get("name") or "")
             upd(current=name)
             _temp_call_hook("item", name=name, index=idx, total=total)
-            reason = active.get(name) or ""
-            if reason:
-                settle("skipped", name, reason)
-                continue
-            try:
-                res = paths.remove_temp_entry(entry, root)
-            except Exception as e:
-                res = {"outcome": "failed",
-                       "reason": f"{type(e).__name__}: {e}", "freed": 0}
+            # 扫描后任务可能刚开始用 downloads / browser: 每项删前重查当前使用状态。
+            if name == "downloads":
+                with _TEMP_USE_LOCK:
+                    reason = _active_reason(name)
+                    if reason:
+                        settle("skipped", name, reason)
+                        continue
+                    res = _remove_one(entry)
+            elif name == "browser":
+                # 搜索客户端/登录浏览器有各自的锁: 等启动中的 profile 落定再判断
+                with _client_lock:
+                    with _manual_lock:
+                        reason = _active_reason(name)
+                        if reason:
+                            settle("skipped", name, reason)
+                            continue
+                        res = _remove_one(entry)
+            else:
+                reason = _active_reason(name)
+                if reason:
+                    settle("skipped", name, reason)
+                    continue
+                res = _remove_one(entry)
             outcome = str((res or {}).get("outcome") or "failed")
             if outcome not in ("cleaned", "skipped", "failed"):
                 outcome = "failed"

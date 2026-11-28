@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128e`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128f`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128e`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128f`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.91 临时目录清理返修：逐项占用检查 + 读取失败统计（2026-11-28，前端 `20261128f`，已发布到安装版）
+
+- **扫描后开始的占用**：`_temp_run` 每个候选删除前重新调用 `_temp_active_reasons`；
+  `downloads` 在 `_TEMP_USE_LOCK` 内「重查 + 删除」，`_launch_run_cart` 在锁内先置
+  `_cart_busy`（线程启动失败清忙），扫描后开始的下载不会被删；`browser` 在
+  `_client_lock`+`_manual_lock` 内重查搜索/登录浏览器，仍在用时跳过。
+- **读取失败统计**：`utils/paths.py` 新增 `_lstat_probe` 区分「已不存在」与
+  「权限/其它 OSError」；`list_temp_entries` 把能枚举但读不到身份的顶层项计入分母并
+  标记 `missing/error`；`remove_temp_entry` 对初扫 error 报「无法核验（已保留）」、
+  处理时读失败报「无法读取属性（已保留）」、外部已移除报「已不存在」跳过；
+  `_remove_tree` 返回 `(实际删除字节, 是否真的删过)`，子项读属性失败保留并只累计实际
+  删除字节，外部先删的目录不虚增 cleaned。
+- **回归**：T202 新增扫描后置 `_cart_busy`、初扫/处理时 `lstat` 失败、他处先移除文件/
+  目录五组断言；T64 下载单飞、14 项 Node、T203 作品编辑保持通过。全量 **194/194**
+  （182.09 s），日志 `_dev_runtime/diagnostics/trae-20261128f-temp-clean-rework-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 12:32:20`，前端 `20261128f`）在 7813
+  通过临时目录 API/UI、作品编辑 API/UI 与既有 **12 项**检查（日志
+  `trae-20261128f-feature-checks.log` / `trae-20261128f-candidate-checks.log`）。
+  回滚清单 `_dev_runtime/backups/publish-20261128f-20261128-123452.json`（3 个旧文件、
+  6 个替换项、14,494,571 字节）。dist 与安装版 exe `2b4bdd1745eb…`、base_library
+  `e262a09d0f4f…`、app.js `781d5a5d7a16…`（与 e 相同）、index.html `a60ca17e894b…`；
+  两处 `config/user.json` 哈希未变。安装版 7810 前端
+  `20261128f-1795809184-1795695345-1795519082`、健康正常，临时目录/作品编辑/
+  以图搜图/副本扫描/壁纸库/回收站/清理缺失/缩略图/PNG UI 检查通过。
 
 ### 4.90 编辑作品只保存并记录实际改动（2026-11-28，前端 `20261128e`，已发布到安装版）
 
