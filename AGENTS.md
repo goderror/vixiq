@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128q`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-29（当前前端版本 `20261129a`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128q`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261129a`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,31 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.103 网络查询缩略图首屏优先 + 滚动补图（2026-11-29，前端 `20261129a`，已发布到安装版）
+
+- `renderWorksGrid` 新增网络查询专用 `netLazy/netEager`：首屏按 main 实际宽度
+  直出约两行（1280 宽 10 张，前 3 张 high），其余只留 `data-net-src`；
+  `main` 上的 IntersectionObserver 按真实行距预取，滚到附近才设真实地址。
+- 换查询/翻批/切 scope/切走搜索页断开观察器；缓存结果保留原始响应并按当前
+  安全模式重渲染。R18 与分级未知只用占位，不发真实图请求；单图失败自动
+  `vixiq_retry=1` 重试一次后回占位。图库共享分支、大图、本地缩略图不变。
+- 测量（真实页面 + 本地 20ms 合成图，1280×760，3 次中位数）：
+  - 关键词 24：首屏请求 24→10，滚动一屏累计 24→15，首屏字节 1,656→690；
+  - 作者 60：首屏请求 60→10，滚动一屏累计 60→15，首屏字节 4,140→690；
+  - 首图/首屏可见图呈现时间基本持平（合成图差异在 1–2 帧内），不宣称更快。
+- 边界：400px 窄窗首屏 4 张、滚动 6 张；安全模式 0 真实请求；失败重试、
+  翻批不残留、空结果、快滚均通过。
+- 回归：新增 T208 静态接线；全量 **199/199**（184.32 s），日志
+  `_dev_runtime/diagnostics/trae-20261129a-network-thumb-smoke.log`。
+- **候选/发布**：候选（`built_at 2026-11-29 00:24:38`，前端 `20261129a`）在 7813
+  通过测量与边界回归。回滚清单
+  `_dev_runtime/backups/publish-20261129a-20261129-003347.json`（4 个旧文件、
+  8 个替换项、15,355,133 字节）。候选/dist/安装版 exe `5fb15028d376…`、
+  base_library `69996f4fc4d8…`、app.js `ffdc18ee3737…`、index.html
+  `eb9552c774bb…`、style.css `6e7bd9d62e49…`；两处配置哈希未变。
+  安装版 7810 前端 `20261129a-1795883078-1795876550-1795859951`、健康正常。
+  交接见 `trae-20261129a-network-search-thumb-lazy-handoff-20261129.md`。
 
 ### 4.102 「重下修复」产物身份锚点与备份拒绝（2026-11-28，前端 `20261128q`，已发布到安装版）
 

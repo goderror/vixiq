@@ -18,6 +18,9 @@ window.switchTab = function (name) {
   const mSheet = $('#m-more-sheet');
   if (mSheet) mSheet.classList.add('hidden');
   $$('.tabpage').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  // 网络查询缩略图观察器只服务于搜索页; 切走时断开, 回来时按当前布局重新挂载
+  if (name === 'search') netThumbAttach($('#search-result'));
+  else netThumbReset();
   document.dispatchEvent(new CustomEvent('vixiq:tab-change', { detail: { name } }));
   actPush('NAV', '切换页面 → ' + name, {});   // 活动日志: 记下用户去哪一页了
   if (name === 'library') { libSync(); loadStats(); loadLibrary(); loadLibFacets(); loadTrashBadge(); }
@@ -2723,6 +2726,105 @@ function safeThumb(u, w) {
   return imgSrc(u, w);
 }
 
+// ===== 网络查询缩略图: 首屏优先 + 滚动补图 =====
+// 查询结果一次可能 24/60 张, 旧实现一渲染就把全部 src 设成上游代理地址, 首屏
+// 带宽被整批图片抢占。这里只给当前 main 滚动容器可见范围 + 下方一行附近的图
+// 设真实地址, 其余留 data-net-src, 滚动到附近再由 IntersectionObserver 启动。
+const NET_THUMB_PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">'
+  + '<rect width="100%" height="100%" fill="#eef1f5"/></svg>');
+const NET_THUMB_MARGIN = 150;
+let _netThumbObserver = null;
+
+function netThumbSrc(w) {
+  const u = (w && (w.image_urls || [])[0]) || '';
+  // 安全模式: R18 或分级未知一律用现有占位, 不把真实地址交给浏览器。
+  if (safemode && w && w.is_r18 !== false && w.is_r18 !== 0) return R18_MASK_SVG;
+  return imgSrc(u, w);
+}
+
+function netThumbReset() {
+  if (_netThumbObserver) {
+    try { _netThumbObserver.disconnect(); } catch (e) { /* 忽略 */ }
+    _netThumbObserver = null;
+  }
+}
+
+function netThumbLoad(img, high = false) {
+  if (!img || img.dataset.netLoaded === '1') return;
+  const u = img.dataset.netSrc;
+  if (!u) return;
+  img.dataset.netLoaded = '1';
+  img.decoding = 'async';
+  if (high) img.setAttribute('fetchpriority', 'high');
+  img.src = u;
+}
+
+window.netThumbError = function (img) {
+  const u = (img && img.dataset && img.dataset.netSrc) || '';
+  if (img && img.dataset.netRetried !== '1' && u && u.indexOf('data:') !== 0) {
+    img.dataset.netRetried = '1';
+    // 同 URL 首次失败后换一个带重试参数的代理地址; 上游 URL 本身不变。
+    img.src = u + (u.indexOf('?') >= 0 ? '&' : '?') + 'vixiq_retry=1';
+    return;
+  }
+  if (img) {
+    img.src = NET_THUMB_PLACEHOLDER;
+    img.title = '缩略图加载失败，可稍后重试';
+  }
+};
+
+function netThumbEagerCount() {
+  // 首屏直接带 src 的卡片数: 桌面 2 行 (可见 + 下方一行), 窄窗按 2 列算。
+  const main = document.querySelector('main');
+  if (!main) return 10;
+  const cols = main.clientWidth <= 480
+    ? 2
+    : Math.max(2, Math.floor((main.clientWidth - 28) / 214));
+  return cols * 2;
+}
+
+function netThumbAttach(box) {
+  netThumbReset();
+  if (!box || !isTabActive('search')) return;
+  const imgs = Array.from(box.querySelectorAll('img[data-net-src]'));
+  if (!imgs.length) return;
+  const main = document.querySelector('main');
+  if (!main || typeof IntersectionObserver !== 'function') {
+    imgs.forEach(img => netThumbLoad(img));
+    return;
+  }
+  const mr = main.getBoundingClientRect();
+  // 预取距离按真实行距算: 至少一行, 窄窗再留一点余量; 不再用固定 150px 猜。
+  let margin = main.clientWidth <= 480 ? 120 : NET_THUMB_MARGIN;
+  const tops = Array.from(new Set(imgs.map(
+    img => Math.round(img.getBoundingClientRect().top)))).sort((a, b) => a - b);
+  if (tops.length > 1) {
+    const stride = tops[1] - tops[0];
+    if (stride > 0 && stride < 2000) margin = Math.max(margin, stride + 20);
+  }
+  const pending = [];
+  let highLeft = 3;
+  imgs.forEach((img) => {
+    const r = img.getBoundingClientRect();
+    // 首屏可见 + 下方一行附近: 立即请求; 前 3 张给高优先级。
+    if (r.bottom >= mr.top && r.top <= mr.bottom + margin) {
+      netThumbLoad(img, highLeft-- > 0);
+    } else {
+      pending.push(img);
+    }
+  });
+  if (!pending.length) return;
+  _netThumbObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      netThumbLoad(entry.target);
+      try { _netThumbObserver.unobserve(entry.target); } catch (e) { /* 忽略 */ }
+    });
+  }, { root: main, rootMargin: `0px 0px ${margin}px 0px`, threshold: 0.01 });
+  pending.forEach(img => _netThumbObserver.observe(img));
+}
+
 // 是否可在 pixiv 原站补下: 非 pixiv 来源(ext_/merged_/其他来源)点了加入清单也是
 // 必然失败(pixiv 无此作品, crawler 检测 404 后标 ERROR), 直接不给「加入清单」入口。
 // 双保险: ① 非数字 ID (ext_/merged_) 一律排除; ② 有 source 且非 pixiv 的排除;
@@ -2862,6 +2964,7 @@ function showFeedBox() { const el = $('#search-feed'); if (el) el.hidden = false
 
 // 空输入 = 回到推荐 (以前只弹「请输入搜索内容」, 用户没有回到推荐的路)
 async function backToFeed() {
+  netThumbReset();
   showFeedBox();
   const sbox = $('#search-result');
   if (sbox) sbox.innerHTML = fullHintHtml();
@@ -2929,16 +3032,29 @@ function setSearchScope(scope) {
   if (!scope || scope === searchScope) return;   // 已激活/无效, 忽略
   authorDetailBack = null;   // 手动切子页 → 不再是「从关键词结果进作者详情」, 返回条撤掉
   const box = $('#search-result');
-  // 切走前先把当前页渲染内容记到旧 scope 缓存
-  if (searchCache[searchScope]) searchCache[searchScope] = { q: searchCache[searchScope].q, html: box.innerHTML };
-  else searchCache[searchScope] = { q: $('#search-input').value.trim(), html: box.innerHTML };
+  netThumbReset();           // 切 scope: 旧观察器立即断开
+  // 切走前把当前页内容记到旧 scope 缓存; 原始响应一起保留, 返回时按当前安全模式重渲染
+  const prev = searchCache[searchScope] || {};
+  searchCache[searchScope] = {
+    q: prev.q || $('#search-input').value.trim(),
+    res: prev.res,
+    html: box.innerHTML,
+  };
   searchScope = scope;
   $$('.sstab[data-scope]').forEach(b => b.classList.toggle('active', b.dataset.scope === scope));
-  // 恢复该 scope 之前的缓存; 有则直接显示(不重复请求), 没有则只给空提示(不强搜)
+  // 恢复该 scope 之前的缓存; 有原始响应就重渲染(安全模式/懒加载按当前状态),
+  // 只有旧 HTML 时直接显示并重新挂滚动补图。
   const cached = searchCache[scope];
-  if (cached && cached.html && cached.html !== fullHintHtml()) {
-    box.innerHTML = cached.html;
+  if (cached && cached.res) {
+    renderSearch(box, cached.res);
+    cached.html = box.innerHTML;
     // 缓存里的按钮态可能过时 (如下载已完成): 强制重查一次刷新文案/状态
+    box.querySelectorAll('button[data-cart-aid],button[data-cart-author]')
+      .forEach(b => { delete b.dataset.dec; });
+    decorateCartButtons(box);
+  } else if (cached && cached.html && cached.html !== fullHintHtml()) {
+    box.innerHTML = cached.html;
+    netThumbAttach(box);
     box.querySelectorAll('button[data-cart-aid],button[data-cart-author]')
       .forEach(b => { delete b.dataset.dec; });
     decorateCartButtons(box);
@@ -2960,6 +3076,7 @@ async function doSearch(text, opts = {}) {
     return;
   }
   hideFeed();                       // 开始真搜索 → 收起推荐区
+  netThumbReset();                  // 换批/新查询: 断掉上一批的滚动补图观察
   const mySeq = ++searchSeq;
   const scope = searchScope;
   const box = $('#search-result');
@@ -3065,6 +3182,7 @@ window.keywordWorksPage = async function (dir) {
 };
 
 function renderSearch(box, res) {
+  netThumbReset();
   if (res.status === 'not_found') {
     box.innerHTML = `<div class="hint">✖ ${esc(res.text || '未找到')}</div>`;
     return;
@@ -3091,7 +3209,7 @@ function renderSearch(box, res) {
       const a = res.artwork;
       html += `<div class="panel"><div class="artwork-big">` +
         `<div class="artwork-thumb-wrap">` +
-        `<img class="thumb${r18BlurCls(a)}" src="${imgSrc((a.image_urls || [])[0], a)}" alt="" onerror="this.style.visibility='hidden'">` +
+        `<img class="thumb${r18BlurCls(a)}" src="${netThumbSrc(a)}" alt="" decoding="async" fetchpriority="high" onerror="this.style.visibility='hidden'">` +
         `${r18FlagHtml(a)}</div>` +
         `<div style="flex:1;min-width:240px"><h2>${esc(a.title)}</h2>` +
         `<div class="w-meta" style="margin:6px 0">ID: ${esc(a.artwork_id)} · 作者: ${esc(a.author_name || a.author_id)} · ${esc(a.page_count || 1)} 页${a.is_r18 ? ' · R18' : ''}</div>` +
@@ -3109,7 +3227,7 @@ function renderSearch(box, res) {
     const [works, hidden] = splitAiWorks(res.works);
     if (works.length) {
       html += worksPagerHtml(res);
-      html += renderWorksGrid(works);
+      html += renderWorksGrid(works, false, true);
       html += aiHiddenHint(hidden);
       html += worksPagerHtml(res, true);
     } else if (hidden > 0) {
@@ -3127,7 +3245,7 @@ function renderSearch(box, res) {
     const off = Math.max(0, parseInt(res.works_offset || 0, 10) || 0);
     if (works.length) {
       html += '<h3 style="margin:4px 0 8px">作品</h3>' + keywordPagerHtml(res, all.length) +
-        renderWorksGrid(works) + aiHiddenHint(hidden) + keywordPagerHtml(res, all.length, true);
+        renderWorksGrid(works, false, true) + aiHiddenHint(hidden) + keywordPagerHtml(res, all.length, true);
     } else if (hidden > 0) {
       // 本批全是 AI 作品 → 不能只说"未找到", 否则用户以为这个词搜不出东西
       html += aiHiddenHint(hidden) + keywordPagerHtml(res, all.length, true);
@@ -3152,7 +3270,7 @@ function renderSearch(box, res) {
     }
     const [works, hidden] = splitAiWorks(res.works);
     if (works.length) {
-      html += '<h3 style="margin:14px 0 8px">作品</h3>' + renderWorksGrid(works) + aiHiddenHint(hidden);
+      html += '<h3 style="margin:14px 0 8px">作品</h3>' + renderWorksGrid(works, false, true) + aiHiddenHint(hidden);
     } else if (hidden > 0) {
       html += aiHiddenHint(hidden);
     } else {
@@ -3160,6 +3278,8 @@ function renderSearch(box, res) {
     }
   }
   box.innerHTML = html;
+  // 首屏优先: 只给可见 + 下方一行附近的网络查询缩略图设真实地址
+  netThumbAttach(box);
   // 结果里若有接口未带状态的按钮(如部分作者卡), 异步补齐一次
   decorateCartButtons(box);
   // 关注状态: 只有「确定到某一位作者」的结果才预取(1 次请求), 关键字作者列表不预取
@@ -4393,11 +4513,27 @@ function pagesBadgeHtml(w) {
     + `<b>${esc(label)}</b></span>`;
 }
 
-function renderWorksGrid(works, gallery = false) {
+function renderWorksGrid(works, gallery = false, netLazy = false, netEager = null) {
   const typeMap = {0: '插画', 1: '漫画', 2: '动图'};
-  return `<div class="works-grid">` + works.map(w => {
+  const eagerN = netLazy
+    ? (netEager == null ? netThumbEagerCount() : Number(netEager) || 0)
+    : 0;
+  return `<div class="works-grid">` + works.map((w, idx) => {
     // 原网页 URL: 优先 DB 记录的 source_url (外来源归档的直达链接), 否则 pixiv 作品的确定链接
     const origUrl = w.source_url || w.pixiv_url || '';
+    const thumbClass = 'thumb' + (netLazy ? ' net-lazy' : '') + r18BlurCls(w);
+    const thumbUrl = netLazy ? '' : imgSrc((w.image_urls || [])[0], w);
+    const lazyUrl = netLazy ? netThumbSrc(w) : '';
+    const eager = netLazy && idx < eagerN && !!lazyUrl;
+    const thumbAttrs = netLazy
+      ? (eager
+        ? `src="${esc(lazyUrl)}" data-net-src="${esc(lazyUrl)}" data-net-loaded="1"`
+          + ` decoding="async"${idx < 3 ? ' fetchpriority="high"' : ''}`
+          + ` onerror="netThumbError(this)"`
+        : (lazyUrl
+          ? `src="${NET_THUMB_PLACEHOLDER}" data-net-src="${esc(lazyUrl)}" onerror="netThumbError(this)"`
+          : `src="${NET_THUMB_PLACEHOLDER}"`))
+      : `src="${thumbUrl}" onerror="this.style.visibility='hidden'"`;
     return `
     <div class="work-card${w.file_missing ? ' is-missing' : ''}" data-key="${esc(w._key)}"${origUrl ? ` data-url="${esc(origUrl)}"` : ''} data-aid="${esc(w.artwork_id)}" data-r18="${w.is_r18 ? '1' : '0'}">
       ${gallery ? `<label class="card-sel" title="Shift+点击可范围多选"><input type="checkbox" data-key="${esc(w._key)}" ${libSelected.has(w._key) ? 'checked' : ''}></label>` : ''}
@@ -4406,8 +4542,7 @@ function renderWorksGrid(works, gallery = false) {
         ? `<img class="thumb" src="${imgSrc((w.image_urls || [])[0], w)}" alt=""
                title="本地文件已缺失（显示删前的缓存缩略图）"
                onerror="libThumbMissing(this)">`
-        : `<img class="thumb${r18BlurCls(w)}" src="${imgSrc((w.image_urls || [])[0], w)}" alt=""
-               onerror="this.style.visibility='hidden'">${r18FlagHtml(w)}`}
+        : `<img class="${thumbClass}" ${thumbAttrs} alt="">${r18FlagHtml(w)}`}
       <div class="w-body">
         ${w.file_missing ? '<div class="tag missing">⚠ 文件缺失</div>' : ''}${deletedTagHtml(w)}
         ${w.source && w.source !== 'pixiv' ? `<div class="tag">🌐 ${esc(sourceLabel(w.source))}${w.source_author ? ` · @${esc(w.source_author)}` : ''}</div>` : ''}
