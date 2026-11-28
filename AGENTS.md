@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128l`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128m`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128l`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128m`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,28 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.98 共用进度控件复用时的 300ms 显示阈值（2026-11-28，前端 `20261128m`，已发布到安装版）
+
+- `opRevealProgressIn` 把每个控件的 300ms 定时器存到 `el._opRevealTimer`，重设前先
+  `clearTimeout`；`opRunResetReveal` 清理类名的同时清理定时器。
+- `opRunEnsure` 复用现有节点时，用 `run.revealArmed` 保证每次新任务重新进入 300ms
+  等待；`opRunFinish` 清掉本轮定时器；`repaintOp` 对已结束任务不再重注入控件。
+- 同页连续两次短任务都直接出结果，不闪现；首轮结束后立即再做、超过 300ms 后再做、
+  同页先短后慢均通过。慢任务首次可见在 **325.9ms**（新任务自己的阈值之后）。
+- 回归：共用入口 Node 15 项；浏览器 `fast_twice` / `fast_after_wait` /
+  `slow_reuse` 通过；负向对照在旧版 `20261128l` 上能捕获第二轮 13.9ms 即显示。
+  全量 **197/197**（170.93 s），日志
+  `_dev_runtime/diagnostics/trae-20261128m-progress-reuse-smoke.log`。
+- **候选/发布**：候选包（`built_at 2026-11-28 19:18:30`，前端 `20261128m`）在 7813
+  通过复用浏览器回归。回滚清单
+  `_dev_runtime/backups/publish-20261128m-20261128-192049.json`（4 个旧文件、
+  8 个替换项、15,338,804 字节）。候选/dist/安装版 exe `5f0636d629ef…`、
+  base_library `c83949f2d916…`、app.js `d9a3eba58345…`、index.html
+  `fcf5e0b10386…`、wallpaper-admin.js `d634a4add656…`、style.css
+  `d3db2148eee4…`；两处配置哈希未变。安装版 7810 前端
+  `20261128m-1795864710-1795859951-1795859951`、健康正常。
+  交接见 `trae-20261128m-progress-reuse-handoff-20261128.md`。
 
 ### 4.97 单图反搜短任务快速反馈（2026-11-28，前端 `20261128l`，已发布到安装版）
 

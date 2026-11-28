@@ -12236,9 +12236,15 @@ function opRevealProgressIn(scope) {
   if (!scope || !scope.querySelectorAll) return;
   scope.querySelectorAll('.op-progress').forEach(el => {
     if (el.dataset.opReveal === '1') return;
+    // 复用节点时旧一轮的显示定时器必须先清掉, 否则它会按上一轮的时间提前显示本轮
+    if (el._opRevealTimer) {
+      clearTimeout(el._opRevealTimer);
+      el._opRevealTimer = null;
+    }
     el.dataset.opReveal = '1';
     el.classList.add('op-fade-in');
-    setTimeout(() => {
+    el._opRevealTimer = setTimeout(() => {
+      el._opRevealTimer = null;
       if (el.isConnected) el.classList.add('op-shown');
     }, 300);
   });
@@ -12466,11 +12472,21 @@ function opRunEnsure(run) {
     const area = opById(run.o.area);
     if (area) area.classList.remove('hidden');
   }
-  if (opById(run.flowId) && opById(run.countId)) return host;  host.innerHTML = opProgressHtml(run.flowId, {
+  if (opById(run.flowId) && opById(run.countId)) {
+    // 复用上一轮的节点: 每次新任务都要按本轮开始时间重新计 300ms 阈值
+    if (!run.revealArmed) {
+      opRunResetReveal(run);
+      opRevealProgressIn(host);
+      run.revealArmed = true;
+    }
+    return host;
+  }
+  host.innerHTML = opProgressHtml(run.flowId, {
       mode: 'flow', text: run.o.scanText || run.o.flowText || '正在处理…' }) +
     opProgressHtml(run.countId, {
       mode: 'count', label: run.o.label || '',
       text: `已处理 0／0 ${run.o.unit || '项'}`, hidden: true });
+  run.revealArmed = true;
   opRevealProgressIn(host);
   return host;
 }
@@ -12544,6 +12560,10 @@ function opRunResetReveal(run) {
   const host = opRunHost(run);
   if (!host || !host.querySelectorAll) return;
   host.querySelectorAll('.op-progress').forEach(el => {
+    if (el._opRevealTimer) {
+      clearTimeout(el._opRevealTimer);
+      el._opRevealTimer = null;
+    }
     el.classList.remove('op-fade-in', 'op-shown');
     delete el.dataset.opReveal;
   });
@@ -12559,7 +12579,7 @@ function opRunCreate(options) {
     gen: ++_opRunSeq, state: 'running', settled: false,
     last: null, snapshot: null, taskId: opSessionGet(key),
     looping: false, detached: false, xhr: null,
-    btnSaved: false, result: null, error: '',
+    btnSaved: false, result: null, error: '', revealArmed: false,
   };
   run.ctl = {
     key,
@@ -12590,6 +12610,14 @@ function opRunFinish(run, state, payload) {
   }
   if (opById(run.flowId)) opProgressPaint(run.flowId, { mode: 'flow', hidden: true });
   if (opById(run.countId)) opProgressPaint(run.countId, { mode: 'count', hidden: true });
+  // 结束即清掉本轮显示定时器: 后续复用节点时不会按旧任务的时间提前显示
+  [run.flowId, run.countId].forEach(id => {
+    const el = opById(id);
+    if (el && el._opRevealTimer) {
+      clearTimeout(el._opRevealTimer);
+      el._opRevealTimer = null;
+    }
+  });
   const note = opById(run.o.note);
   if (note) {
     if (state === 'error') {
@@ -12864,8 +12892,10 @@ async function runWithProgress(options, fn) {
 function repaintOp(key) {
   const run = _opRuns.get(key);
   if (!run) return false;
-  opRunEnsure(run);
-  if (run.last) opRunPaint(run, run.last);
+  if (!run.settled) {
+    opRunEnsure(run);
+    if (run.last) opRunPaint(run, run.last);
+  }
   const note = opById(run.o.note);
   if (run.settled && note) {
     if (run.state === 'error') {

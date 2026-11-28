@@ -137,17 +137,7 @@ function harnessBody() {
     if (fill) fill.style.width = (total ? done / total * 100 : 0).toFixed(1) + '%';
     if (txt) txt.textContent = o.text || (total ? `已处理 ${done}／${total} 项` : '');
   }
-  let revealCount = 0;
-  function opRevealProgressIn(scope) {
-    revealCount += 1;
-    if (!scope || !scope.querySelectorAll) return;
-    scope.querySelectorAll('.op-progress').forEach(e => {
-      if (e.dataset.opReveal === '1') return;
-      e.dataset.opReveal = '1';
-      e.classList.add('op-fade-in');
-      setTimeout(() => e.classList.add('op-shown'), 300);
-    });
-  }
+  /*__REVEAL_SLICE__*/
   function opFetchJson() { throw new Error('未配置 opFetchJson'); }
 
   const store = new Map();
@@ -187,7 +177,6 @@ function harnessBody() {
   function reset() {
     toasts = [];
     xhrs = [];
-    revealCount = 0;
     store.clear();
     registry.forEach(e => {
       e.classList.remove('hidden');
@@ -244,6 +233,49 @@ function harnessBody() {
     resolve({ ok: true });
     await p;
     assert.strictEqual($('#btn1').disabled, false);
+  });
+
+  test('同宿主复用: 第二次重新计 300ms 阈值, 不提前显示', async () => {
+    reset();
+    await runWithProgress({
+      key: 'req-reuse', host: '#h1', scanText: '处理中…',
+      request: { run: async () => ({ ok: true }) },
+    });
+    const flow = document.getElementById('req-reuse-flow');
+    await sleep(200);                       // 第二轮在首轮 300ms 阈值内启动
+    let resolve;
+    const p = runWithProgress({
+      key: 'req-reuse', host: '#h1', note: '#note1', scanText: '处理中…',
+      request: { run: () => new Promise(r => { resolve = r; }), timeout: 3000 },
+      resultHtml: () => '<div>二轮结果</div>',
+    });
+    await sleep(150);                       // 首轮定时器若残留会在此刻提前显示
+    assert.ok(flow.classList.contains('op-fade-in'),
+              '第二轮应重新进入 300ms 等待');
+    assert.ok(!flow.classList.contains('op-shown'),
+              '上一轮定时器不得提前显示第二轮');
+    await sleep(200);                       // 第二轮约 350ms
+    assert.ok(flow.classList.contains('op-shown'), '第二轮到 300ms 应显示');
+    resolve({ ok: true });
+    await p;
+    assert.ok($('#note1').innerHTML.includes('二轮结果'));
+  });
+
+  test('同宿主连续两次短请求都直接出结果', async () => {
+    reset();
+    const cfg = n => ({
+      key: 'req-reuse-fast', host: '#h1', note: '#note1',
+      scanText: '处理中…',
+      request: { run: async () => ({ n }) },
+      resultHtml: r => `<div>短任务${r.n}</div>`,
+    });
+    await runWithProgress(cfg(1));
+    assert.ok($('#note1').innerHTML.includes('短任务1'));
+    await runWithProgress(cfg(2));
+    assert.ok($('#note1').innerHTML.includes('短任务2'));
+    const flow = document.getElementById('req-reuse-fast-flow');
+    // 两次都在 300ms 内完成: 不应经过可见态
+    assert.ok(!flow.classList.contains('op-shown'));
   });
 
   test('请求失败显示错误并复位', async () => {
@@ -545,6 +577,14 @@ function harnessBody() {
   })();
 }
 
+const REVEAL_START = '// ---- 进度控件约 300ms 出现阈值';
+const REVEAL_END = '// ---- 单次状态请求超时';
+const ra = src.indexOf(REVEAL_START);
+const rb = src.indexOf(REVEAL_END, ra);
+if (ra < 0 || rb < 0) throw new Error('缺少 opRevealProgressIn 代码块');
+const revealSrc = src.slice(ra, rb);
+
 const generated = '(' + harnessBody.toString()
+  .replace('/*__REVEAL_SLICE__*/', () => revealSrc)
   .replace('/*__ENTRY_SLICE__*/', () => blockSrc) + ')();\n';
 new Function('assert', generated)(assert);
