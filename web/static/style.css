@@ -2297,6 +2297,13 @@ body.ob-open { overflow: hidden; }
 /* 进度控件约 300ms 出现阈值: 短任务直接出结果, 不闪进度条 */
 .op-progress.op-fade-in { opacity: 0; }
 .op-progress.op-fade-in.op-shown { opacity: 1; transition: opacity .2s ease; }
+/* 共用进度默认挂载区: 没有原状态区的入口使用; 空时不占位, 窄窗自动收窄 */
+.op-progress-host {
+  position: fixed; right: 18px; bottom: 18px;
+  width: min(360px, calc(100vw - 36px)); z-index: 80;
+}
+.op-progress-host:empty { display: none; }
+.op-progress-host .op-progress { margin: 0; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
 .op-progress {
   margin: 6px 0 8px; padding: 8px 10px; border: 1px solid var(--border);
   border-radius: 8px; background: #fbfcfe; font-size: 12px;

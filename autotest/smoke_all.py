@@ -24380,8 +24380,8 @@ def t199_wall_dupes_progress() -> None:
         srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
         for token in ("wall-dupes-task", "wall-dupes-progress", "wall-dupes-head",
                       "wall-dupes-list", "paintWallDupesTask", "wallDupesResultHead",
-                      "startWallDupesPolling", "loadWallDupes", "已扫描",
-                      "未完成", "扫描失败", "/api/wallpaper/dupes"):
+                      "wallDupesTaskOptions", "runWithProgress", "resumeOp",
+                      "已扫描", "未完成", "扫描失败", "/api/wallpaper/dupes"):
             assert token in js, f"壁纸副本扫描进度接线缺失: {token}"
         assert 'onclick="wallDupesOpen()"' in html, "壁纸管理入口缺「清理副本」"
         for token in ("_WALL_DUPES", "find_wall_dupes", "核对壁纸夹与图库索引"):
@@ -26415,6 +26415,7 @@ def t204_reverse_upload_progress() -> None:
         for token in ("reverse-upload-task", "reverse-upload-progress",
                       "rev-up-flow", "rev-up-count", "正在写入收件箱",
                       "已上传 ", "正在添加…", "revUploadRepaint",
+                      "revUploadOptions", "runWithProgress",
                       "rejected_details", "XMLHttpRequest"):
             assert token in js, f"反搜添加上传进度接线缺失: {token}"
         for token in ('id="reverse-upload-task"', 'id="reverse-upload-progress"',

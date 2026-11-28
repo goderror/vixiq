@@ -780,6 +780,7 @@
               <button id="ai-run" class="btn accent" onclick="runAiText()">⬆ 上传当前壁纸</button>
             </div>
             <div class="hint" style="margin-top:8px">当前状态：<span id="ai-state">读取中…</span></div>
+            <div id="ai-progress"></div>
             <div class="hint">「测试连接」用一次最省的请求验证地址 / 密钥 / 模型名，不发图、不要求有当前壁纸；生成只对当前这一张，换壁纸后需再点一次。</div>
           </div>
         </div>
@@ -982,6 +983,9 @@
     </div>
   </div>
 </div>
+
+<!-- 共用进度默认挂载区: 没有原状态区的入口使用 (空时不占位) -->
+<div id="op-progress-host" class="op-progress-host"></div>
 
 <!-- ===== 全局弹窗 (图库/作者/统计共用, 必须放在 body 直属, 否则切 tab 后被隐藏的 section 藏住) ===== -->
 <div id="lib-modal" class="modal-mask" style="display:none"

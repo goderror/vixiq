@@ -1285,22 +1285,11 @@ async function attachSimTask() {
 // ============ 🧹 壁纸副本清理 (「省空间」) —— 2026-09-24 ============
 // 壁纸夹里有 784 张和图库某页**字节一致**的副本 (约 5.37 GB): 删掉壁纸夹里那份不丢任何东西。
 // 两条硬规矩就落在这里 —— ① 绝不自动删, 逐条勾选; ② 只走 Windows 电脑回收站, 可还原。
-let wallDupesTimer = null, wallDupesSel = new Set(), wallDupesLast = null;
-let _wallDupesGen = 0;
-let _wallDupesInFlight = false;
-let _wallDupesStarting = false;
-let _wallDupesStartSeq = 0;   // 启动批次: 旧弹窗/旧一轮的 POST 回包不得影响当前轮
+let wallDupesSel = new Set(), wallDupesLast = null;
 
 function wallDupesModalAlive() {
   const m = $('#lib-modal');
   return !!(m && m.style.display !== 'none' && $('#wall-dupes-progress'));
-}
-
-function stopWallDupesPolling() {
-  // 先作废当前链: 关闭弹窗/换任务后, 已发出的旧回包不能再绘制
-  _wallDupesGen += 1;
-  if (wallDupesTimer) { clearTimeout(wallDupesTimer); wallDupesTimer = null; }
-  _wallDupesInFlight = false;
 }
 
 function ensureWallDupesControls() {
@@ -1315,18 +1304,6 @@ function ensureWallDupesControls() {
     host.dataset.ready = '1';
   }
   return host;
-}
-
-function resetWallDupesReveal() {
-  const host = $('#wall-dupes-progress');
-  if (!host) return;
-  if (host.querySelectorAll) {
-    host.querySelectorAll('.op-progress').forEach(el => {
-      el.classList.remove('op-fade-in', 'op-shown');
-      delete el.dataset.opReveal;
-    });
-  }
-  opRevealProgressIn(host);
 }
 
 function showWallDupesFlow(text) {
@@ -1442,129 +1419,103 @@ function wallDupesPaint(d) {
   list.innerHTML = wallDupesListHtml(d && d.result);
 }
 
-function startWallDupesPolling() {
-  if (wallDupesTimer || _wallDupesInFlight) return;
-  const gen = ++_wallDupesGen;
-  const tick = async () => {
-    wallDupesTimer = null;
-    if (gen !== _wallDupesGen) return;
-    if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
-    _wallDupesInFlight = true;
-    let d = null;
-    try { d = await opFetchJson('/api/wallpaper/dupes', 5000); }
-    catch (e) {
-      if (gen !== _wallDupesGen) return;   // 旧链回包: 不碰新任务的在途标记
-      _wallDupesInFlight = false;
-      if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
-      // 短暂查询失败: 保留最后进度, 稍后再查
-      wallDupesTimer = setTimeout(tick, 1000);
-      return;
-    }
-    if (gen !== _wallDupesGen) return;     // 迟到回包: 不绘制
-    _wallDupesInFlight = false;
-    if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
-    wallDupesLast = d;
-    wallDupesPaint(d);
-    if (d.status === 'scanning') {
-      wallDupesTimer = setTimeout(tick, 800);
-      return;
-    }
-    stopWallDupesPolling();                // 终态: 停止并让结果稳定
+function wallDupesTaskOptions(btn) {
+  return {
+    key: 'wall-dupes',
+    mode: 'task',
+    host: '#wall-dupes-progress',
+    flowId: 'wall-dupes-flow',
+    countId: 'wall-dupes-count',
+    label: '壁纸副本扫描',
+    unit: '张',
+    button: btn || null,
+    busyText: '扫描中…',
+    scanText: '正在核对壁纸夹与图库索引…',
+    countText: (done, total) => `已扫描 ${done}／${total} 张`,
+    task: {
+      fixedId: 'wall-dupes',
+      start: () => api('/api/wallpaper/dupes/scan', { method: 'POST' }),
+      read: () => opFetchJson('/api/wallpaper/dupes', 5000),
+      idOf: () => 'wall-dupes',
+      snapshotOf: r => (r && r.task) || {},
+      intervalMs: 800,
+      map: {
+        running: s => s.status === 'scanning',
+        error: s => s.status === 'error' ? (s.error || '扫描失败') : '',
+        result: s => s.result,
+        stage: s => s.status === 'scanning'
+          ? (Number(s.total || 0) > 0 ? '扫描壁纸' : '核对壁纸夹与图库索引') : '',
+        done: s => s.done || 0,
+        total: s => s.total || 0,
+        current: s => s.current || '',
+      },
+    },
+    onDone: (res, run) => {
+      wallDupesLast = run.snapshot || { status: 'done', result: res };
+      if (wallDupesModalAlive()) wallDupesPaint(wallDupesLast);
+    },
+    onError: (e) => {
+      wallDupesLast = { status: 'error', stage: '', result: null,
+                        error: (e.message || String(e)) };
+      if (wallDupesModalAlive()) wallDupesPaint(wallDupesLast);
+      toast('扫描失败: ' + (e.message || e), 'err');
+    },
+    onRepaint: (run) => {
+      if (run.snapshot && wallDupesModalAlive()) wallDupesPaint(run.snapshot);
+    },
   };
-  tick();
 }
 
 async function loadWallDupes(force) {
   if (!wallDupesModalAlive()) return;
-  if (!force && (_wallDupesStarting || wallDupesTimer || _wallDupesInFlight)) return;
-  const gen = ++_wallDupesGen;
-  _wallDupesInFlight = true;
+  const active = _opRuns.get('wall-dupes');
+  if (active && !active.settled && active.state === 'running') {
+    repaintOp('wall-dupes');
+    resumeOp('wall-dupes');
+    return;
+  }
+  if (!force && active) return;
+  showWallDupesFlow('正在读取扫描状态…');
   let d = null;
   try { d = await opFetchJson('/api/wallpaper/dupes', 5000); }
   catch (e) {
-    if (gen !== _wallDupesGen) return;
-    _wallDupesInFlight = false;
-    if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
-    if (!(wallDupesLast && wallDupesLast.status === 'scanning')) {
-      wallDupesLast = { status: 'error', stage: '', result: null,
-                        error: '读取扫描状态失败：' + (e.message || e) };
-      wallDupesPaint(wallDupesLast);
-    }
+    if (!wallDupesModalAlive()) return;
+    wallDupesLast = { status: 'error', stage: '', result: null,
+                      error: '读取扫描状态失败：' + (e.message || e) };
+    wallDupesPaint(wallDupesLast);
     return;
   }
-  if (gen !== _wallDupesGen) return;
-  _wallDupesInFlight = false;
-  if (!wallDupesModalAlive()) { stopWallDupesPolling(); return; }
+  if (!wallDupesModalAlive()) return;
   wallDupesLast = d;
   wallDupesPaint(d);
-  if (d && d.status === 'scanning') startWallDupesPolling();
+  if (d && d.status === 'scanning') resumeOp('wall-dupes', wallDupesTaskOptions(null));
 }
 
 async function wallDupesOpen() {
   wallDupesSel = new Set();
-  _wallDupesStartSeq += 1;     // 旧弹窗里还没回来的启动请求就此作废
-  _wallDupesStarting = false;
-  stopWallDupesPolling();
+  detachOp('wall-dupes');
   openLibModal('🧹 壁纸副本清理',
     '<div id="wall-dupes-task" class="hidden"><div id="wall-dupes-progress"></div></div>'
     + '<div id="wall-dupes-head" class="hint">正在读取扫描结果…</div>'
     + '<div id="wall-dupes-list"></div>', { lg: true });
   opClaimModal('wall-dupes');
   showWallDupesFlow('正在读取扫描状态…');
-  resetWallDupesReveal();
   await loadWallDupes(true);
 }
 
 function wallDupesClose() {
-  _wallDupesStartSeq += 1;     // 关闭后旧 POST 的成功/失败/收尾全部失效
-  _wallDupesStarting = false;
-  stopWallDupesPolling();
+  detachOp('wall-dupes');
   closeLibModal();
 }
 
 async function wallDupesScan(btn) {
-  if (_wallDupesStarting || _wallDupesInFlight) return;
   if (!wallDupesModalAlive()) return;
-  // 启动请求归属到这次弹窗实例 + 这一轮启动; 之后旧回包一律不认
-  const seq = opModalSeq();
-  const startId = ++_wallDupesStartSeq;
-  _wallDupesStarting = true;
-  if (btn) btn.disabled = true;
-  stopWallDupesPolling();
-  showWallDupesFlow('正在核对壁纸夹与图库索引…');
-  resetWallDupesReveal();
   const head = $('#wall-dupes-head');
   if (head) head.innerHTML = '';
   const list = $('#wall-dupes-list');
   if (list) list.innerHTML = '';
-  try {
-    const r = await api('/api/wallpaper/dupes/scan', { method: 'POST' });
-    if (startId !== _wallDupesStartSeq || !opModalSame(seq)) return;
-    if (!r || r.status !== 'ok') {
-      throw new Error((r && (r.msg || r.error)) || '启动扫描失败');
-    }
-    if (r.task) {
-      wallDupesLast = r.task;
-      wallDupesPaint(r.task);
-    }
-    if (r.task && r.task.status === 'scanning') startWallDupesPolling();
-    else await loadWallDupes(true);
-  } catch (e) {
-    if (startId !== _wallDupesStartSeq || !opModalSame(seq)) return;
-    stopWallDupesPolling();
-    wallDupesLast = { status: 'error', stage: '', result: null,
-                      error: (e.message || String(e)) };
-    if (wallDupesModalAlive()) wallDupesPaint(wallDupesLast);
-    toast('扫描失败: ' + (e.message || e), 'err');
-  } finally {
-    if (startId === _wallDupesStartSeq) {
-      _wallDupesStarting = false;
-      if (opModalSame(seq)
-          && !(wallDupesLast && wallDupesLast.status === 'scanning')) {
-        wallDupesPaint(wallDupesLast || { status: 'idle', result: null });
-      }
-    }
-  }
+  showWallDupesFlow('正在核对壁纸夹与图库索引…');
+  await runWithProgress(wallDupesTaskOptions(btn));
 }
 
 // 勾选态只改这一行文字, 不整体重画 (重画会把滚动位置和鼠标焦点一起弄丢)
@@ -4132,20 +4083,28 @@ async function runAiText() {
 }
 
 async function testAiText() {
-  const btn = $('#ai-test'), st = $('#ai-state');
-  if (btn) btn.disabled = true;
+  const st = $('#ai-state');
   if (st) st.textContent = '正在测试连接…';
-  try {
-    const r = await api('/api/ai/test', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: aiFormBody() });
-    if (!r || r.ok !== true) throw new Error((r && r.error) || '测试失败');
-    await loadAiText();
-    if (st) st.textContent = `连接正常：${r.model || '—'}（${r.ms || 0}ms）`;
-    toast('连接正常', 'ok');
-  } catch (e) {
-    if (st) st.textContent = '连接失败：' + (e.message || e);
-    toast('连接失败: ' + (e.message || e), 'err');
-  } finally { if (btn) btn.disabled = false; }
+  await runWithProgress({
+    key: 'ai-test', host: '#ai-progress', label: '测试连接',
+    button: '#ai-test', busyText: '测试中…',
+    scanText: '正在测试连接…',
+    request: {
+      run: () => api('/api/ai/test', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: aiFormBody() }),
+      timeout: 40000,
+      validate: r => (!r || r.ok !== true) ? ((r && r.error) || '测试失败') : '',
+    },
+    onDone: async (r) => {
+      await loadAiText();
+      if (st) st.textContent = `连接正常：${r.model || '—'}（${r.ms || 0}ms）`;
+      toast('连接正常', 'ok');
+    },
+    onError: (e) => {
+      if (st) st.textContent = '连接失败：' + e.message;
+      toast('连接失败: ' + e.message, 'err');
+    },
+  });
 }
 
 // ===== 🖼 壁纸库  从图库按规则生成壁纸 =====
@@ -12267,6 +12226,479 @@ function opTrackJob(key, jobId, o) {
   return p;
 }
 
+// ============ 共用进度入口 (三种接法: 普通请求 / 浏览器上传 / 后台任务) ============
+// 业务只声明 key、挂载点、执行函数与展示选项；启动反馈、按钮禁用/复位、约 300ms
+// 出现阈值、流动／计数切换、串行查询与超时重试、迟到回包隔离、切页接回都由这里统一处理。
+// 业务层继续负责确认、锁定对象、实际计数口径、提交/回滚与结果副作用。
+const _opRuns = new Map();      // key -> 当前/最近一个运行实例
+let _opRunSeq = 0;
+
+function opById(sel) {
+  if (!sel) return null;
+  if (typeof sel === 'object') return sel;
+  const s = String(sel);
+  return document.getElementById(s.charAt(0) === '#' ? s.slice(1) : s);
+}
+
+function opSessionSet(key, id) {
+  try {
+    if (id) sessionStorage.setItem('vixiq.op.' + key + '.task', id);
+    else sessionStorage.removeItem('vixiq.op.' + key + '.task');
+  } catch (e) {}
+}
+
+function opSessionGet(key) {
+  try { return sessionStorage.getItem('vixiq.op.' + key + '.task') || ''; }
+  catch (e) { return ''; }
+}
+
+function opWithTimeout(p, ms, text) {
+  if (!ms) return Promise.resolve(p);
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(text || '请求超时')), ms);
+    Promise.resolve(p).then(
+      v => { clearTimeout(t); resolve(v); },
+      e => { clearTimeout(t); reject(e); });
+  });
+}
+
+function opRunHost(run) {
+  return run && run.o.host ? opById(run.o.host) : opById('#op-progress-host');
+}
+
+function opRunEnsure(run) {
+  const host = opRunHost(run);
+  if (!host) return null;
+  if (run.o.area) {
+    const area = opById(run.o.area);
+    if (area) area.classList.remove('hidden');
+  }
+  if (opById(run.flowId) && opById(run.countId)) return host;  host.innerHTML = opProgressHtml(run.flowId, {
+      mode: 'flow', text: run.o.scanText || run.o.flowText || '正在处理…' }) +
+    opProgressHtml(run.countId, {
+      mode: 'count', label: run.o.label || '',
+      text: `已处理 0／0 ${run.o.unit || '项'}`, hidden: true });
+  opRevealProgressIn(host);
+  return host;
+}
+
+function opRunCountText(run, done, total) {
+  if (typeof run.o.countText === 'function') {
+    try { return run.o.countText(done, total); } catch (e) {}
+  }
+  return `已处理 ${done}／${total} ${run.o.unit || '项'}`;
+}
+
+function opRunPaint(run, st) {
+  if (!run || run.settled) return;
+  if (!opRunEnsure(run)) return;   // 反馈区已关闭: 不强行画到别处
+  const total = Math.max(0, Number((st && st.total) || 0));
+  const done = Math.max(0, Number((st && st.done) || 0));
+  const counting = total > 0;
+  const stage = String((st && st.stage) || run.o.scanText || '正在处理…');
+  run.last = Object.assign({}, run.last || {}, st || {}, { stage, done, total });
+  opProgressPaint(run.flowId, {
+    mode: 'flow', hidden: counting, stage,
+    text: counting ? (run.o.label || '正在处理…') : stage,
+  });
+  opProgressPaint(run.countId, {
+    mode: 'count', hidden: !counting, done, total,
+    label: run.o.label || '', stage,
+    text: opRunCountText(run, done, total),
+  });
+  const note = opById(run.o.note);
+  if (note && run.o.noteCurrent) {
+    note.textContent = (counting && st && st.current)
+      ? `当前：${st.current}` : (run.o.scanText || '');
+  }
+}
+
+function opRunBusy(run, busy) {
+  const o = (run && run.o) || {};
+  const btn = opById(o.button);
+  if (btn) {
+    if (busy) {
+      if (!run.btnSaved) {
+        run.btnSaved = true;
+        run.btnText = btn.textContent;
+        run.btnDisabled = !!btn.disabled;
+      }
+      btn.disabled = true;
+      if (o.busyText) btn.textContent = o.busyText;
+    } else if (run.btnSaved) {
+      btn.textContent = run.btnText;
+      btn.disabled = run.btnDisabled;
+      run.btnSaved = false;
+    }
+  }
+  const inputs = Array.isArray(o.inputs) ? o.inputs : (o.inputs ? [o.inputs] : []);
+  inputs.forEach(sel => {
+    const el = opById(sel);
+    if (!el) return;
+    if (busy) {
+      if (el.dataset.opDisabled === undefined) {
+        el.dataset.opDisabled = el.disabled ? '1' : '0';
+      }
+      el.disabled = true;
+    } else if (el.dataset.opDisabled !== undefined) {
+      el.disabled = el.dataset.opDisabled === '1';
+      delete el.dataset.opDisabled;
+    }
+  });
+}
+
+function opRunResetReveal(run) {
+  const host = opRunHost(run);
+  if (!host || !host.querySelectorAll) return;
+  host.querySelectorAll('.op-progress').forEach(el => {
+    el.classList.remove('op-fade-in', 'op-shown');
+    delete el.dataset.opReveal;
+  });
+}
+
+function opRunCreate(options) {
+  const o = options || {};
+  const key = String(o.key || 'op');
+  const run = {
+    key, o,
+    flowId: o.flowId || (key + '-flow'),
+    countId: o.countId || (key + '-count'),
+    gen: ++_opRunSeq, state: 'running', settled: false,
+    last: null, snapshot: null, taskId: opSessionGet(key),
+    polling: false, detached: false, xhr: null,
+    btnSaved: false, result: null, error: '',
+  };
+  run.ctl = {
+    key,
+    report(st) {
+      if (run.settled || run.gen !== _opRunSeq) return;
+      opRunPaint(run, st || {});
+    },
+    get state() { return run.state; },
+    get result() { return run.result; },
+    get error() { return run.error; },
+  };
+  _opRuns.set(key, run);
+  opRunResetReveal(run);
+  return run;
+}
+
+function opRunFinish(run, state, payload) {
+  if (!run || run.settled) return;
+  run.settled = true;
+  run.state = state;
+  run.result = payload && payload.result;
+  run.error = (payload && payload.error) || '';
+  run.xhr = null;
+  opRunBusy(run, false);
+  if (run.o.area) {
+    const area = opById(run.o.area);
+    if (area) area.classList.remove('hidden');
+  }
+  if (opById(run.flowId)) opProgressPaint(run.flowId, { mode: 'flow', hidden: true });
+  if (opById(run.countId)) opProgressPaint(run.countId, { mode: 'count', hidden: true });
+  const note = opById(run.o.note);
+  if (note) {
+    if (state === 'error') {
+      note.innerHTML = typeof run.o.errorHtml === 'function'
+        ? run.o.errorHtml(run.error)
+        : `<span class="err-text">${esc(run.error || '操作失败')}</span>`;
+    } else if (typeof run.o.resultHtml === 'function') {
+      note.innerHTML = run.o.resultHtml(run.result, run);
+    }
+  }
+  try {
+    if (state === 'error') {
+      if (typeof run.o.onError === 'function') {
+        run.o.onError(new Error(run.error || '操作失败'), run);
+      }
+    } else if (typeof run.o.onDone === 'function') {
+      run.o.onDone(run.result, run);
+    }
+  } catch (e) { /* 业务回调异常不影响共用状态 */ }
+}
+
+function opTaskValue(map, name, snap, fallback) {
+  const fn = map && map[name];
+  if (typeof fn !== 'function') return fallback;
+  try { return fn(snap); } catch (e) { return fallback; }
+}
+
+function opTaskApply(run, snap) {
+  const map = (run.o.task || {}).map || {};
+  const st = {
+    stage: opTaskValue(map, 'stage', snap, (snap && snap.stage) || ''),
+    done: Number(opTaskValue(map, 'done', snap, (snap && snap.done) || 0) || 0),
+    total: Number(opTaskValue(map, 'total', snap, (snap && snap.total) || 0) || 0),
+    current: opTaskValue(map, 'current', snap, (snap && snap.current) || ''),
+  };
+  opRunPaint(run, st);
+  const err = opTaskValue(map, 'error', snap,
+    snap && snap.status === 'error' ? (snap.error || '任务失败') : '');
+  if (err) return { terminal: true, error: String(err) };
+  const running = opTaskValue(map, 'running', snap,
+    !!(snap && (snap.status === 'running' || snap.status === 'scanning')));
+  if (!running) {
+    return { terminal: true,
+             result: opTaskValue(map, 'result', snap, snap && snap.result) };
+  }
+  return { terminal: false };
+}
+
+async function opTaskPoll(run) {
+  if (!run || run.polling || run.settled) return;
+  const a = run.o.task || {};
+  if (typeof a.read !== 'function' || !run.taskId) return;
+  const gen = run.gen;
+  const deadline = Date.now() + (a.timeoutMs || 30 * 60 * 1000);
+  let errors = 0;
+  run.polling = true;
+  try {
+    while (run.gen === gen && !run.detached && !run.settled) {
+      await new Promise(r => setTimeout(r, a.intervalMs || 600));
+      if (run.gen !== gen || run.detached || run.settled) return;
+      let snap = null;
+      try {
+        snap = await a.read(run.taskId);
+        errors = 0;
+      } catch (e) {
+        if (run.gen !== gen || run.detached) return;
+        errors += 1;
+        if (errors >= (a.retries || 5) || Date.now() > deadline) {
+          opRunFinish(run, 'error', {
+            error: '任务查询中断：' + (e.message || e) + '。可稍后返回重试接回',
+          });
+          return;
+        }
+        continue;
+      }
+      if (run.gen !== gen || run.detached || run.settled) return;
+      if (!snap) {
+        errors += 1;
+        if (errors >= (a.retries || 5)) {
+          opRunFinish(run, 'error', { error: '任务状态不可用，可稍后返回重试接回' });
+          return;
+        }
+        continue;
+      }
+      run.snapshot = snap;
+      const r = opTaskApply(run, snap);
+      if (r.terminal) {
+        if (r.error) opRunFinish(run, 'error', { error: r.error });
+        else opRunFinish(run, 'done', { result: r.result });
+        return;
+      }
+      if (Date.now() > deadline) {
+        opRunFinish(run, 'error', { error: '任务超时，可稍后返回重试接回' });
+        return;
+      }
+    }
+  } finally {
+    run.polling = false;
+  }
+}
+
+async function opTaskStart(run) {
+  const a = run.o.task || {};
+  let start = null;
+  try {
+    start = await opWithTimeout(a.start(), a.startTimeoutMs || 15000, '任务启动超时');
+  } catch (e) {
+    opRunFinish(run, 'error', { error: '任务启动失败：' + (e.message || e) });
+    return;
+  }
+  const snap = (typeof a.snapshotOf === 'function')
+    ? a.snapshotOf(start) : ((start && start.task) || start || {});
+  let id = typeof a.idOf === 'function'
+    ? a.idOf(start) : ((snap && snap.id) || (start && start.id));
+  if (!id && a.fixedId) id = a.fixedId;
+  if (id) {
+    run.taskId = String(id);
+    opSessionSet(run.key, run.taskId);
+  }
+  run.snapshot = snap;
+  if (typeof a.onAttached === 'function') {
+    try { a.onAttached(start, run); } catch (e) {}
+  }
+  const r = opTaskApply(run, snap);
+  if (r.terminal) {
+    if (r.error) opRunFinish(run, 'error', { error: r.error });
+    else opRunFinish(run, 'done', { result: r.result });
+    return;
+  }
+  if (!run.taskId) {
+    opRunFinish(run, 'error', { error: '任务未返回可查询的任务号' });
+    return;
+  }
+  await opTaskPoll(run);
+}
+
+function opUploadStart(run) {
+  const o = run.o || {};
+  const u = o.upload || {};
+  const xhr = new XMLHttpRequest();
+  run.xhr = xhr;
+  const gen = run.gen;
+  const mine = () => run.gen === gen && _opRuns.get(run.key) === run && !run.settled;
+  xhr.open('POST', u.url);
+  xhr.timeout = u.timeout || 120000;
+  xhr.upload.onprogress = (e) => {
+    if (!mine()) return;
+    const total = e && e.lengthComputable ? Number(e.total || 0) : 0;
+    const loaded = e ? Number(e.loaded || 0) : 0;
+    opRunPaint(run, { stage: u.stage || '正在上传图片…', done: loaded, total });
+  };
+  xhr.upload.onload = () => {
+    if (!mine()) return;
+    opRunPaint(run, { stage: u.writingStage || '正在写入…' });
+  };
+  xhr.onload = () => {
+    if (!mine()) return;
+    if (xhr.status < 200 || xhr.status >= 300) {
+      let msg = 'HTTP ' + xhr.status;
+      try {
+        const d = JSON.parse(xhr.responseText || '{}');
+        msg = d.error || d.message || msg;
+      } catch (e) {}
+      opRunFinish(run, 'error', { error: msg });
+      return;
+    }
+    let data = null;
+    let parsed = true;
+    try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) { parsed = false; }
+    if (!parsed) {
+      opRunFinish(run, 'error', { error: '接口响应异常，未能确认写入结果' });
+      return;
+    }
+    if (!data || data.status !== 'ok') {
+      opRunFinish(run, 'error', {
+        error: (data && (data.error || data.message)) || '接口未返回成功结果',
+      });
+      return;
+    }
+    opRunFinish(run, 'done', { result: data });
+  };
+  xhr.onerror = () => { if (mine()) opRunFinish(run, 'error', { error: '网络中断' }); };
+  xhr.ontimeout = () => { if (mine()) opRunFinish(run, 'error', { error: '上传超时' }); };
+  xhr.onabort = () => { if (mine()) opRunFinish(run, 'error', { error: '上传已取消' }); };
+  try {
+    xhr.send(u.formData);
+  } catch (e) {
+    opRunFinish(run, 'error', { error: e.message || String(e) });
+  }
+}
+
+async function runWithProgress(options, fn) {
+  const o = options || {};
+  const key = String(o.key || 'op');
+  const prev = _opRuns.get(key);
+  if (prev && !prev.settled && prev.state === 'running') {
+    // 重复点击/切页回来: 只重绘与接回, 不再发第二次请求
+    repaintOp(key);
+    return resumeOp(key) || prev.ctl;
+  }
+  const run = opRunCreate(o);
+  opRunBusy(run, true);
+  opRunPaint(run, { stage: o.scanText || o.flowText || '正在处理…' });
+  if (o.mode === 'upload') {
+    opUploadStart(run);
+    return run.ctl;
+  }
+  if (o.mode === 'task') {
+    void opTaskStart(run);
+    return run.ctl;
+  }
+  const request = o.request || {};
+  try {
+    let p;
+    if (typeof fn === 'function') p = fn({ report: run.ctl.report, run });
+    else if (typeof request.run === 'function') {
+      p = request.run({ report: run.ctl.report, run });
+    } else {
+      p = opFetchJson(request.url, request.timeout || 15000);
+    }
+    const result = await opWithTimeout(p, request.timeout || o.timeout || 0,
+      o.timeoutText || '请求超时');
+    if (typeof request.validate === 'function') {
+      const bad = request.validate(result);
+      if (bad) throw new Error(String(bad));
+    }
+    opRunFinish(run, 'done', { result });
+  } catch (e) {
+    opRunFinish(run, 'error', { error: e.message || String(e) });
+  }
+  return run.ctl;
+}
+
+function repaintOp(key) {
+  const run = _opRuns.get(key);
+  if (!run) return false;
+  opRunEnsure(run);
+  if (run.last) opRunPaint(run, run.last);
+  const note = opById(run.o.note);
+  if (run.settled && note) {
+    if (run.state === 'error') {
+      note.innerHTML = typeof run.o.errorHtml === 'function'
+        ? run.o.errorHtml(run.error)
+        : `<span class="err-text">${esc(run.error || '操作失败')}</span>`;
+    } else if (typeof run.o.resultHtml === 'function') {
+      note.innerHTML = run.o.resultHtml(run.result, run);
+    }
+  }
+  if (typeof run.o.onRepaint === 'function') {
+    try { run.o.onRepaint(run); } catch (e) {}
+  }
+  return true;
+}
+
+function resumeOp(key, options) {
+  let run = _opRuns.get(key);
+  if (!run) {
+    if (!options) return null;
+    run = opRunCreate(options);
+  }
+  if (run.polling || run.settled) return run.ctl;
+  const a = run.o.task || {};
+  if (!run.taskId) run.taskId = a.fixedId || opSessionGet(key);
+  if (!run.taskId) return run.ctl;
+  if (typeof a.read !== 'function') return run.ctl;
+  run.detached = false;
+  opRunBusy(run, true);
+  opRunPaint(run, run.last || { stage: run.o.scanText || '正在处理…' });
+  (async () => {
+    let snap = null;
+    try {
+      snap = await a.read(run.taskId);
+    } catch (e) {
+      opRunFinish(run, 'error', {
+        error: '任务查询中断：' + (e.message || e) + '。可稍后返回重试接回',
+      });
+      return;
+    }
+    if (run.settled || run.detached) return;
+    run.snapshot = snap;
+    const r = opTaskApply(run, snap || {});
+    if (r.terminal) {
+      if (r.error) opRunFinish(run, 'error', { error: r.error });
+      else opRunFinish(run, 'done', { result: r.result });
+      return;
+    }
+    void opTaskPoll(run);
+  })();
+  return run.ctl;
+}
+
+function detachOp(key) {
+  const run = _opRuns.get(key);
+  if (!run) return;
+  run.detached = true;
+}
+
+window.runWithProgress = runWithProgress;
+window.repaintOp = repaintOp;
+window.resumeOp = resumeOp;
+window.detachOp = detachOp;
+
 // ============ 一键整理 (预览后执行) ============
 // 顶部「❔ 说明」: 展开/收起各项操作的说明面板 (默认收起, 只在需要时看)
 window.tidyHelpToggle = function (btn) {
@@ -13021,83 +13453,9 @@ window.revDiscard = async function (files) {
   } catch (e) { toast('丢弃失败: ' + e.message, 'err'); }
 };
 
-// 反搜收件箱「添加图片」上传进度: 真实字节计数 → 写入收件箱流动 → 结果
-let _revUploadSeq = 0;
-let _revUploadXHR = null;
-let _revUploadState = null;
-
+// 反搜收件箱「添加图片」上传进度: 共用入口的浏览器上传接法 (真实字节 → 写入 → 结果)
 function revUploadFmt(n) {
   return fmtSize(Math.max(0, Number(n) || 0)) || '0 B';
-}
-
-function revUploadSetBusy(busy) {
-  const btn = $('#reverse-upload');
-  if (btn) {
-    btn.disabled = !!busy;
-    btn.textContent = busy ? '正在添加…' : '➕ 添加图片';
-  }
-  const inp = $('#reverse-file-input');
-  if (inp) inp.disabled = !!busy;
-}
-
-function revUploadEnsureControls() {
-  const host = $('#reverse-upload-progress');
-  if (!host) return null;
-  if (host.dataset.ready !== '1') {
-    host.innerHTML = opProgressHtml('rev-up-flow', {
-        mode: 'flow', text: '正在上传图片…' }) +
-      opProgressHtml('rev-up-count', {
-        mode: 'count', label: '添加图片', text: '已上传 0 B／0 B',
-        hidden: true });
-    host.dataset.ready = '1';
-    opRevealProgressIn(host);
-  }
-  return host;
-}
-
-function revUploadPaint(st) {
-  const area = $('#reverse-upload-task');
-  const note = $('#reverse-upload-note');
-  if (!area || !note) return;
-  if (!st || st.phase === 'idle') {
-    area.classList.add('hidden');
-    return;
-  }
-  area.classList.remove('hidden');
-  revUploadEnsureControls();
-  if (st.phase === 'uploading') {
-    if (Number(st.total) > 0 && Number(st.loaded) >= 0) {
-      opProgressPaint('rev-up-flow', { mode: 'flow', hidden: true });
-      opProgressPaint('rev-up-count', {
-        mode: 'count', hidden: false, done: st.loaded, total: st.total,
-        label: '添加图片', stage: '正在上传图片',
-        text: `已上传 ${revUploadFmt(st.loaded)}／${revUploadFmt(st.total)}`,
-      });
-    } else {
-      opProgressPaint('rev-up-flow', {
-        mode: 'flow', hidden: false, stage: '正在上传图片',
-        text: '正在上传图片…',
-      });
-      opProgressPaint('rev-up-count', { mode: 'count', hidden: true });
-    }
-    note.textContent = '';
-    revUploadSetBusy(true);
-    return;
-  }
-  if (st.phase === 'writing') {
-    opProgressPaint('rev-up-flow', {
-      mode: 'flow', hidden: false, stage: '正在写入收件箱',
-      text: '正在写入收件箱…',
-    });
-    opProgressPaint('rev-up-count', { mode: 'count', hidden: true });
-    note.textContent = '';
-    revUploadSetBusy(true);
-    return;
-  }
-  opProgressPaint('rev-up-flow', { mode: 'flow', hidden: true });
-  opProgressPaint('rev-up-count', { mode: 'count', hidden: true });
-  revUploadSetBusy(false);
-  note.innerHTML = st.html || esc(st.text || '');
 }
 
 function revUploadResultHtml(data) {
@@ -13134,105 +13492,62 @@ async function revUploadRefreshInbox() {
 }
 
 function revUploadRepaint() {
-  if (_revUploadState) revUploadPaint(_revUploadState);
-  else {
-    const area = $('#reverse-upload-task');
-    if (area) area.classList.add('hidden');
-  }
-  revUploadSetBusy(!!_revUploadXHR);
+  repaintOp('reverse-upload');
 }
 window.revUploadRepaint = revUploadRepaint;
+
+function revUploadOptions(input) {
+  const fd = new FormData();
+  Array.from(input.files || []).forEach(f => fd.append('files', f));
+  return {
+    key: 'reverse-upload',
+    mode: 'upload',
+    host: '#reverse-upload-progress',
+    flowId: 'rev-up-flow',
+    countId: 'rev-up-count',
+    area: '#reverse-upload-task',
+    label: '添加图片',
+    button: '#reverse-upload',
+    busyText: '正在添加…',
+    inputs: ['#reverse-file-input'],
+    scanText: '正在上传图片…',
+    upload: {
+      url: '/api/reverse/upload',
+      formData: fd,
+      timeout: 120000,
+      stage: '正在上传图片…',
+      writingStage: '正在写入收件箱…',
+    },
+    countText: (done, total) =>
+      `已上传 ${revUploadFmt(done)}／${revUploadFmt(total)}`,
+    resultHtml: revUploadResultHtml,
+    errorHtml: revUploadFailHtml,
+    onDone: (data) => {
+      const saved = Array.isArray(data.saved) ? data.saved : [];
+      const rejected = Array.isArray(data.rejected) ? data.rejected : [];
+      toast(`已添加 ${saved.length} 张`
+        + (rejected.length ? ` · 未添加 ${rejected.length} 项` : ''),
+        rejected.length ? 'warn' : 'ok');
+      input.value = '';
+      void revUploadRefreshInbox();
+    },
+    onError: () => {
+      input.value = '';
+      void revUploadRefreshInbox();
+    },
+  };
+}
 
 async function uploadReverseImages(input) {
   const files = input && input.files;
   if (!files || !files.length) return;
-  if (_revUploadXHR) {
+  const btn = $('#reverse-upload');
+  if (btn && btn.disabled) {
     // 同一页面只执行本次选择一次: 正在上传时忽略新的选择
     input.value = '';
     return;
   }
-  const list = Array.from(files);
-  const token = ++_revUploadSeq;
-  _revUploadState = { phase: 'uploading', loaded: -1, total: 0 };
-  revUploadPaint(_revUploadState);
-
-  const fd = new FormData();
-  list.forEach(f => fd.append('files', f));
-  const xhr = new XMLHttpRequest();
-  _revUploadXHR = xhr;
-  const mine = () => token === _revUploadSeq && xhr === _revUploadXHR;
-  const finish = (st) => {
-    if (!mine()) return;
-    _revUploadXHR = null;
-    _revUploadState = st;
-    revUploadPaint(st);
-    input.value = '';
-    void revUploadRefreshInbox();
-  };
-
-  xhr.open('POST', '/api/reverse/upload');
-  xhr.timeout = 120000;
-  xhr.upload.onprogress = (e) => {
-    if (!mine()) return;
-    const total = e && e.lengthComputable ? Number(e.total || 0) : 0;
-    _revUploadState = total > 0
-      ? { phase: 'uploading', loaded: Number(e.loaded || 0), total }
-      : { phase: 'uploading', loaded: -1, total: 0 };
-    revUploadPaint(_revUploadState);
-  };
-  xhr.upload.onload = () => {
-    if (!mine()) return;
-    // 字节已发完, 服务器还在保存/重命名: 进入写入阶段
-    _revUploadState = { phase: 'writing' };
-    revUploadPaint(_revUploadState);
-  };
-  xhr.onload = () => {
-    if (!mine()) return;
-    if (xhr.status < 200 || xhr.status >= 300) {
-      let msg = 'HTTP ' + xhr.status;
-      try {
-        const d = JSON.parse(xhr.responseText || '{}');
-        msg = d.error || d.message || msg;
-      } catch (e) {}
-      finish({ phase: 'error', html: revUploadFailHtml(msg) });
-      return;
-    }
-    let data = null;
-    try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {
-      finish({ phase: 'error',
-               html: revUploadFailHtml('接口响应异常，未能确认写入结果') });
-      return;
-    }
-    if (!data || data.status !== 'ok') {
-      finish({ phase: 'error',
-               html: revUploadFailHtml((data && (data.error || data.message))
-                                       || '接口未返回成功结果') });
-      return;
-    }
-    const saved = Array.isArray(data.saved) ? data.saved : [];
-    const rejected = Array.isArray(data.rejected) ? data.rejected : [];
-    toast(`已添加 ${saved.length} 张`
-          + (rejected.length ? ` · 未添加 ${rejected.length} 项` : ''),
-          rejected.length ? 'warn' : 'ok');
-    finish({ phase: 'done', html: revUploadResultHtml(data) });
-  };
-  xhr.onerror = () => {
-    if (!mine()) return;
-    finish({ phase: 'error', html: revUploadFailHtml('网络中断') });
-  };
-  xhr.ontimeout = () => {
-    if (!mine()) return;
-    finish({ phase: 'error', html: revUploadFailHtml('上传超时') });
-  };
-  xhr.onabort = () => {
-    if (!mine()) return;
-    finish({ phase: 'error', html: revUploadFailHtml('上传已取消') });
-  };
-  try {
-    xhr.send(fd);
-  } catch (e) {
-    finish({ phase: 'error', html: revUploadFailHtml(e.message || String(e)) });
-  }
+  await runWithProgress(revUploadOptions(input));
 }
 
 async function startReverse(mode, files, toastMsg) {
