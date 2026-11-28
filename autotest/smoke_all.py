@@ -3148,6 +3148,7 @@ def run_suite() -> SuiteResult:
     suite.add("T202", "🧹 清理临时目录: 扫描→逐顶层项计数 + 跳过/失败/链接保护 + 互斥 (隔离数据)", t202_temp_clean_progress)
     suite.add("T203", "✏️ 编辑作品: 只保存/记录实际改动 + 无改动不写库不刷新 (隔离数据)", t203_library_edit_actual_changes)
     suite.add("T204", "➕ 反搜收件箱添加图片: 真实 multipart 保存/重名/格式拒绝/写入失败 (隔离数据)", t204_reverse_upload_progress)
+    suite.add("T205", "📥 反搜收件箱选中入库: 后台任务逐张结算/身份核验/原件保留/上限/同批接回 + 旧接口兼容 (隔离数据)", t205_reverse_adopt_progress)
     suite.write_report()
     return suite
 
@@ -26434,6 +26435,275 @@ def t204_reverse_upload_progress() -> None:
         upaths.user_data = orig_ud
         upaths.data_root = orig_dr
         shutil.rmtree(str(tmp), ignore_errors=True)
+
+
+def t205_reverse_adopt_progress() -> None:
+    """T205: 反搜收件箱「选中入库」共用进度 + 后台任务 (隔离数据)。
+
+    覆盖: 扫描锁定范围/身份、普通成功、已登记重试身份核验、同路径替换、
+    转换失败保原格式、登记失败、源文件占用不能移走、500 上限、
+    同批接回/不同批 busy、旧接口字段兼容、前端静态接线与共用入口 Node 用例。
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    import threading
+
+    import utils.paths as upaths
+    import web.server as ws
+    from db.store import PixivDatabase
+
+    tmp = Path(tempfile.mkdtemp(prefix="t205adopt_"))
+    inp = tmp / "input"
+    img = tmp / "img"
+    (inp / "not_found").mkdir(parents=True, exist_ok=True)
+    (img / "#其他来源#").mkdir(parents=True, exist_ok=True)
+    orig_ud, orig_dr = upaths.user_data, upaths.data_root
+    orig_hook = ws._ADOPT_TASK_HOOK
+    orig_auto = None
+    orig_apply = None
+    orig_register = None
+    orig_unlink = Path.unlink
+
+    def _fake_user_data(rel):
+        p = tmp / str(rel)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    upaths.user_data = _fake_user_data
+    upaths.data_root = lambda: tmp
+    try:
+        from core.image_format import apply_ingest_format as _real_apply
+        from utils import config as uconfig
+        orig_auto = uconfig.ingest_auto_png
+        orig_apply = _real_apply
+        orig_register = PixivDatabase.register_foreign_file
+
+        client = ws.create_app().test_client()
+
+        def _start(files):
+            r = client.post("/api/reverse/adopt/task", json={"files": files})
+            j = r.get_json()
+            assert r.status_code == 200, (r.status_code, j)
+            assert j.get("status") == "ok" and j.get("task"), j
+            return j["task"]
+
+        def _wait(tid, timeout=30):
+            end = time.time() + timeout
+            last = {}
+            while time.time() < end:
+                r = client.get("/api/reverse/adopt/task?id=" + str(tid))
+                j = r.get_json()
+                if r.status_code == 404:
+                    raise AssertionError("任务丢失: " + str(j))
+                last = j.get("task") or {}
+                if last.get("status") != "running":
+                    return last
+                time.sleep(0.03)
+            raise AssertionError("入库任务超时: " + str(last))
+
+        def _run(files):
+            task = _start(files)
+            return _wait(task["id"])
+
+        # ① 参数校验
+        r = client.post("/api/reverse/adopt/task", json={"files": []})
+        assert r.status_code == 400, r.data
+
+        # ② 普通成功: 顶层 + not_found/ 相对路径
+        _write_png(inp / "top.png", (11, 22, 33))
+        _write_png(inp / "not_found" / "nf.png", (44, 55, 66))
+        task = _run(["top.png", "not_found/nf.png"])
+        res = task["result"]
+        assert task["status"] == "done", task
+        assert task["done"] == task["total"] == 2, task
+        assert len(res["imported"]) == 2 and not res["skipped"] and not res["failed"], res
+        assert set(res["removed_rels"]) == {"top.png", "not_found/nf.png"}, res
+        assert (img / "#其他来源#" / "top.png").is_file()
+        assert (img / "#其他来源#" / "nf.png").is_file()
+        assert not (inp / "top.png").exists() and not (inp / "not_found" / "nf.png").exists()
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            n_ext = db.conn.execute(
+                "SELECT COUNT(*) FROM artworks WHERE artwork_id LIKE 'ext_%'").fetchone()[0]
+        assert n_ext == 2, n_ext
+
+        # ③ 已登记重试: 第一次源文件被占用 → 已入库但原件仍在; 第二次身份核验通过 → 移走
+        _write_png(inp / "keep.png", (77, 88, 99))
+
+        def _block_keep(self, *a, **kw):
+            if self.name == "keep.png":
+                raise PermissionError("模拟源文件被占用")
+            return orig_unlink(self, *a, **kw)
+
+        Path.unlink = _block_keep
+        try:
+            task = _run(["keep.png"])
+        finally:
+            Path.unlink = orig_unlink
+        res = task["result"]
+        assert len(res["imported"]) == 1, res
+        assert res["source_kept"] == 1 and "keep.png" in res["kept_rels"], res
+        assert "已入库，收件箱原件仍在" in json.dumps(res, ensure_ascii=False), res
+        assert (inp / "keep.png").is_file(), "移走失败时源文件必须保留"
+        assert (img / "#其他来源#" / "keep.png").is_file()
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            n_before = db.conn.execute(
+                "SELECT COUNT(*) FROM artworks WHERE artwork_id LIKE 'ext_%'").fetchone()[0]
+        task = _run(["keep.png"])
+        res = task["result"]
+        assert not res["imported"] and len(res["skipped"]) == 1, res
+        assert "已入库" in res["skipped"][0]["reason"], res
+        assert "keep.png" in res["removed_rels"], res
+        assert not (inp / "keep.png").exists(), "已登记同图重试应移走原件"
+        with PixivDatabase(tmp / "pixiv.db") as db:
+            n_after = db.conn.execute(
+                "SELECT COUNT(*) FROM artworks WHERE artwork_id LIKE 'ext_%'").fetchone()[0]
+        assert n_after == n_before, (n_before, n_after)
+
+        # ④ 同路径已换文件: 扫描后替换 → 跳过并保留, 不入库
+        _write_png(inp / "swap.png", (1, 2, 3))
+
+        def _swap_hook(phase, info):
+            if phase == "scan":
+                _write_png(inp / "swap.png", (200, 100, 50), (9, 9))
+
+        ws._ADOPT_TASK_HOOK = _swap_hook
+        try:
+            task = _run(["swap.png"])
+        finally:
+            ws._ADOPT_TASK_HOOK = orig_hook
+        res = task["result"]
+        assert len(res["skipped"]) == 1 and "替换" in res["skipped"][0]["reason"], res
+        assert (inp / "swap.png").is_file(), "替换后的文件必须保留"
+        assert not (img / "#其他来源#" / "swap.png").exists()
+
+        # ⑤ 转换失败保原格式: imported 计入, convert_failed 只作附加结果不重复计数
+        _write_png(inp / "conv.png", (8, 8, 8))
+
+        def _fail_convert(src, out_path=None, enabled=True, delete_source=False):
+            return {"ok": False, "reason": "encode", "note": "PNG 转换失败"}
+
+        import core.image_format as cimg
+        uconfig.ingest_auto_png = lambda: True
+        cimg.apply_ingest_format = _fail_convert
+        try:
+            task = _run(["conv.png"])
+        finally:
+            cimg.apply_ingest_format = orig_apply
+            uconfig.ingest_auto_png = orig_auto
+        res = task["result"]
+        assert len(res["imported"]) == 1, res
+        assert len(res["convert_failed"]) == 1, res
+        assert "转换失败" in res["convert_failed"][0]["reason"], res
+        assert (img / "#其他来源#" / "conv.png").is_file()
+        assert not (inp / "conv.png").exists()
+        assert task["done"] == 1, task
+
+        # ⑥ 登记失败: 撤副本、源保留、失败原因明确
+        _write_png(inp / "reg.png", (4, 4, 4))
+
+        def _bad_register(self, *a, **kw):
+            raise RuntimeError("模拟登记失败")
+
+        PixivDatabase.register_foreign_file = _bad_register
+        try:
+            task = _run(["reg.png"])
+        finally:
+            PixivDatabase.register_foreign_file = orig_register
+        res = task["result"]
+        assert len(res["failed"]) == 1 and "登记失败" in res["failed"][0]["reason"], res
+        assert (inp / "reg.png").is_file(), "登记失败时源文件必须保留"
+        assert not (img / "#其他来源#" / "reg.png").exists(), "登记失败必须撤掉本次副本"
+
+        # ⑦ 单次上限: 前 500 张处理, 其余如实回报
+        task = _run([f"x{i}.png" for i in range(600)])
+        res = task["result"]
+        assert res["over_limit"] == 100, res
+        assert task["total"] == 500 and task["done"] == 500, task
+        assert len(res["failed"]) == 500, len(res["failed"])
+
+        # ⑧ 同批接回 / 不同批 busy
+        _write_png(inp / "slow1.png", (5, 5, 5))
+        _write_png(inp / "slow2.png", (6, 6, 6))
+        entered, gate = threading.Event(), threading.Event()
+
+        def _slow_hook(phase, info):
+            if phase == "item" and info.get("rel") == "slow1.png":
+                entered.set()
+                gate.wait(10)
+
+        ws._ADOPT_TASK_HOOK = _slow_hook
+        try:
+            task = _start(["slow1.png"])
+            assert entered.wait(5), "任务未进入处理阶段"
+            r_same = client.post("/api/reverse/adopt/task", json={"files": ["slow1.png"]})
+            j_same = r_same.get_json()
+            assert r_same.status_code == 200 and j_same.get("already") is True, j_same
+            assert j_same["task"]["id"] == task["id"], j_same
+            r_diff = client.post("/api/reverse/adopt/task", json={"files": ["slow2.png"]})
+            j_diff = r_diff.get_json()
+            assert r_diff.status_code == 409 and j_diff.get("status") == "busy", j_diff
+            gate.set()
+            done = _wait(task["id"])
+            assert done["status"] == "done" and len(done["result"]["imported"]) == 1, done
+        finally:
+            gate.set()
+            ws._ADOPT_TASK_HOOK = orig_hook
+
+        # ⑨ 旧接口字段兼容 + 只按实际移走结果回报
+        _write_png(inp / "legacy.png", (9, 9, 9))
+        r = client.post("/api/reverse/adopt", json={"files": ["legacy.png"]})
+        j = r.get_json()
+        assert r.status_code == 200 and j["status"] == "ok", j
+        assert len(j["imported"]) == 1 and j["removed_rels"] == ["legacy.png"], j
+        assert "source_kept" in j and "kept_rels" in j, j
+        assert not (inp / "legacy.png").exists()
+
+        # ⑩ 前端/服务端接线 + 共用入口 Node 用例
+        js = (PROJECT_ROOT / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        srv = (PROJECT_ROOT / "web" / "server.py").read_text(encoding="utf-8")
+        for token in ("reverse-adopt-task", "reverse-adopt-progress",
+                      "rev-adopt-flow", "rev-adopt-count", "正在核对所选图片",
+                      "已处理 ", "revAdoptRepaint", "revAdoptTaskOptions",
+                      "revAdoptResultHtml", "/api/reverse/adopt/task",
+                      "removed_rels", "source_kept", "已入库，收件箱原件仍在",
+                      "单次最多 500 张", "runWithProgress"):
+            assert token in js, f"入库进度前端接线缺失: {token}"
+        for token in ('id="reverse-adopt-task"', 'id="reverse-adopt-progress"',
+                      'id="reverse-adopt-note"', 'id="reverse-adopt-sel"'):
+            assert token in html, f"入库进度容器缺失: {token}"
+        for token in ("/api/reverse/adopt/task", "removed_rels", "kept_rels",
+                      "source_kept", "已入库，收件箱原件仍在", "_ADOPT_TASK"):
+            assert token in srv, f"入库任务服务端接线缺失: {token}"
+        for node_name in ("test_operation_progress_entry.cjs",
+                          "test_reverse_adopt_progress.cjs"):
+            node_test = PROJECT_ROOT / "autotest" / node_name
+            nr = subprocess.run(["node", str(node_test)], capture_output=True,
+                                text=True, encoding="utf-8", errors="replace",
+                                timeout=60)
+            assert nr.returncode == 0 and "NODE OK" in (nr.stdout or ""), \
+                (node_name, nr.returncode, nr.stdout, nr.stderr)
+    finally:
+        Path.unlink = orig_unlink
+        if orig_auto is not None:
+            try:
+                from utils import config as _uc
+                _uc.ingest_auto_png = orig_auto
+            except Exception:
+                pass
+        if orig_apply is not None:
+            try:
+                import core.image_format as _ci
+                _ci.apply_ingest_format = orig_apply
+            except Exception:
+                pass
+        if orig_register is not None:
+            PixivDatabase.register_foreign_file = orig_register
+        ws._ADOPT_TASK_HOOK = orig_hook
+        upaths.user_data = orig_ud
+        upaths.data_root = orig_dr
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> int:

@@ -318,6 +318,23 @@ def _scopes_for_request(path: str, method: str, body: "dict | None",
 _cart_busy = threading.Event()
 # 反搜收件箱发布互斥: 同一进程内并发上传在这里重新选名并原子发布, 避免同名覆盖。
 _REVERSE_UPLOAD_LOCK = threading.Lock()
+# 📥 反搜收件箱「选中入库」后台任务: 同一时间只允许一个执行窗口, 每张结算一次。
+_ADOPT_TASK_LOCK = threading.Lock()
+_ADOPT_EXEC_LOCK = threading.Lock()
+_ADOPT_TASK = {
+    "id": "", "status": "idle", "stage": "", "done": 0, "total": 0,
+    "current": "", "imported": 0, "skipped": 0, "failed": 0,
+    "convert_failed": 0, "source_kept": 0, "over_limit": 0,
+    "removed_rels": [], "kept_rels": [],
+    "skipped_items": [], "failed_items": [], "kept_items": [],
+    "convert_failed_items": [], "errors": [],
+    "files": [], "batch_key": "", "error": "",
+    "created_at": 0.0, "finished_at": 0.0, "result": None,
+}
+# 完成事件不能放进 _ADOPT_TASK (deepcopy 对 Lock/Event 会失败); 只保留当前任务的。
+_ADOPT_TASK_EVENTS: "dict[str, threading.Event]" = {}
+# 测试钩子 (生产为 None): 在扫描锁定后、逐项处理前插入动作。
+_ADOPT_TASK_HOOK = None
 # 临时目录手动清理与下载启动的同步边界: 下载一旦被选中(忙标记置上), 清理就不再删
 # downloads; 反过来清理正删 downloads 时, 下载启动会等它删完再重建。
 _TEMP_USE_LOCK = threading.Lock()
@@ -15196,6 +15213,500 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
                 return f
         return None
 
+    # ---------------- 📥 反搜收件箱「选中入库」后台任务 ----------------
+    # 旧同步接口 /api/reverse/adopt 与新任务接口共用这一套: 扫描阶段锁定本次范围与
+    # 文件身份 (size/mtime/ino/dev), 处理阶段逐张重新核验, 每张只在转换/登记/移源结果
+    # 全部确认后结算一次。源文件实际移走才进 removed_rels; 移不走则 kept_rels + 原因。
+    ADOPT_CAP = 500
+
+    def _adopt_snapshot_locked() -> dict:
+        return copy.deepcopy(_ADOPT_TASK)
+
+    def _adopt_event_set(task_id: str) -> None:
+        with _ADOPT_TASK_LOCK:
+            ev = _ADOPT_TASK_EVENTS.get(task_id)
+        if ev is not None:
+            ev.set()
+
+    def _adopt_call_hook(phase: str, **info) -> None:
+        hook = _ADOPT_TASK_HOOK
+        if not hook:
+            return
+        try:
+            hook(phase, info)
+        except Exception:
+            pass
+
+    def _adopt_identity(f: Path):
+        try:
+            st = os.stat(str(f))
+            return {"size": int(st.st_size),
+                    "mtime_ns": int(getattr(st, "st_mtime_ns", 0)),
+                    "ino": int(getattr(st, "st_ino", 0)),
+                    "dev": int(getattr(st, "st_dev", 0))}
+        except OSError:
+            return None
+
+    def _adopt_same_identity(a, b) -> bool:
+        if not a or not b:
+            return False
+        return (a.get("size") == b.get("size")
+                and a.get("mtime_ns") == b.get("mtime_ns")
+                and a.get("ino") == b.get("ino")
+                and a.get("dev") == b.get("dev"))
+
+    def _adopt_remove_source(src: Path) -> bool:
+        """实际移走返回 True; 已不存在也视为移走; 被占用/权限不足返回 False。"""
+        try:
+            src.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+
+    def _adopt_registered_identity_ok(rel_img: str, src: Path, img_root: Path):
+        """目标同名文件已登记时, 核验它是不是收件箱这张图的副本。
+
+        优先用转换记录的 source_md5/source_file_size 比源文件; 没有转换记录时用目标
+        的 md5/file_size 比源文件。True=同一张, False=不是/未登记, None=无法核验。"""
+        from utils.hashutil import md5_of
+        try:
+            with _db() as db:
+                page = db.find_page_by_local_path(rel_img)
+                if not page:
+                    return False
+                conv = db.get_page_conversion(page["artwork_id"], page["page_num"]) or {}
+        except Exception:
+            return None
+        try:
+            size = src.stat().st_size
+        except OSError:
+            return None
+        digest = {}
+
+        def _src_md5() -> str:
+            if "v" not in digest:
+                digest["v"] = md5_of(str(src))
+            return digest["v"]
+
+        src_md5 = conv.get("source_md5")
+        src_size = conv.get("source_file_size")
+        if src_md5:
+            try:
+                return (str(src_md5) == _src_md5()
+                        and (src_size is None or int(src_size) == size))
+            except Exception:
+                return None
+        target = img_root / rel_img
+        try:
+            target_size = target.stat().st_size
+        except OSError:
+            return None
+        if int(target_size) != int(size):
+            return False
+        target_md5 = conv.get("md5")
+        try:
+            if target_md5:
+                return str(target_md5) == _src_md5()
+            return md5_of(str(target)) == _src_md5()
+        except Exception:
+            return None
+
+    def _adopt_one(rel: str, src: Path, img_root: Path, dest_dir: Path,
+                   auto_png: bool, img_ext: set) -> dict:
+        """处理一张: 沿用原入库逻辑, 返回统一结果 (不在这里结算计数)。"""
+        import shutil as _sh
+        from core.image_format import (
+            actual_format_info, apply_ingest_format, extension_for_format,
+        )
+        from utils.hashutil import md5_of
+        name = src.name
+        if src.suffix.lower() not in img_ext:
+            return {"outcome": "skipped", "rel": rel, "file": name,
+                    "reason": "不是图片"}
+        info = actual_format_info(src)
+        fmt = str(info.get("actual_format") or "").lower()
+        actual_ext = extension_for_format(fmt, src.suffix.lower())
+        static = (fmt in ("jpeg", "webp", "bmp", "tiff")
+                  and not info.get("animated"))
+        target_ext = ".png" if (auto_png and (static or fmt == "png")) else actual_ext
+        target = dest_dir / (src.stem + target_ext)
+        # 同名已存在: 绝不覆盖; 同一图的原后缀/真实格式落点都算已存在。
+        other_names = {src.name, src.stem + actual_ext, src.stem + target_ext}
+        existing = [nm for nm in other_names if (dest_dir / nm).exists()]
+        if existing:
+            verdict = False
+            for nm in existing:
+                cand_rel = str((dest_dir / nm).relative_to(img_root)).replace("\\", "/")
+                v = _adopt_registered_identity_ok(cand_rel, src, img_root)
+                if v is True:
+                    verdict = True
+                    break
+                if v is None:
+                    verdict = None
+                    break
+            if verdict is True:
+                removed = _adopt_remove_source(src)
+                return {"outcome": "skipped", "rel": rel, "file": name,
+                        "reason": ("已入库（此前已处理）" if removed
+                                   else "已入库，收件箱原件仍在"),
+                        "removed": removed, "kept": not removed}
+            if verdict is None:
+                return {"outcome": "skipped", "rel": rel, "file": name,
+                        "reason": "图库里已有同名文件，但无法核验内容，已保留"}
+            return {"outcome": "skipped", "rel": rel, "file": name,
+                    "reason": "图库里已有同名文件"}
+
+        conv = apply_ingest_format(src, out_path=target, enabled=auto_png,
+                                   delete_source=False)
+        final_target = target
+        convert_failed = None
+        if conv.get("ok") and auto_png and not target.exists():
+            # 动图/多帧保持原格式: 按实际扩展名复制入库
+            fallback = dest_dir / (src.stem + actual_ext)
+            if fallback.exists():
+                return {"outcome": "skipped", "rel": rel, "file": name,
+                        "reason": "图库里已有同名文件"}
+            try:
+                _sh.copy2(str(src), str(fallback))
+            except Exception as e:
+                return {"outcome": "failed", "rel": rel, "file": name,
+                        "reason": f"复制失败: {e}"}
+            final_target = fallback
+            conv = dict(conv, current_path=str(fallback))
+        if not conv.get("ok"):
+            if conv.get("reason") == "unreadable" or not auto_png:
+                return {"outcome": "failed", "rel": rel, "file": name,
+                        "reason": conv.get("note") or "图片无法打开"}
+            # 可解码但 PNG 编码失败: 回退原格式入库, 并作为附加结果说明原因
+            fallback = dest_dir / (src.stem + actual_ext)
+            if fallback.exists():
+                return {"outcome": "skipped", "rel": rel, "file": name,
+                        "reason": "图库里已有同名文件"}
+            try:
+                _sh.copy2(str(src), str(fallback))
+            except Exception as e:
+                return {"outcome": "failed", "rel": rel, "file": name,
+                        "reason": f"复制失败: {e}"}
+            final_target = fallback
+            convert_failed = {
+                "file": name,
+                "reason": conv.get("note") or "PNG 转换失败，已保留原格式",
+            }
+            conv = {"ok": True, "converted": False, "record": False,
+                    "current_format": fmt or actual_ext.lstrip("."),
+                    "source_format": None, "source_file_size": None,
+                    "source_md5": None, "converted_at": None, "note": ""}
+        rel_img = str(final_target.relative_to(img_root)).replace("\\", "/")
+        try:
+            with _db() as db:
+                ext_id = db.register_foreign_file(
+                    rel_img, md5=md5_of(str(final_target)),
+                    file_size=final_target.stat().st_size)
+        except Exception as e:
+            # 登记抛异常: 撤掉本次副本, 源图留在收件箱, 重试不被同名挡住
+            try:
+                final_target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return {"outcome": "failed", "rel": rel, "file": name,
+                    "reason": f"登记失败: {e}"}
+        if not ext_id:
+            # 登记不上 (例如已登记过同一路径) → 把复制进来的副本撤掉, 别留半成品
+            try:
+                final_target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return {"outcome": "skipped", "rel": rel, "file": name,
+                    "reason": "已在图库登记过"}
+        try:
+            with _db() as db:
+                db.cleanup_orphans()
+        except Exception:
+            pass
+        removed = _adopt_remove_source(src)
+        record = {
+            "kind": "imported", "target": str(final_target), "ok": True,
+            "converted": bool(conv.get("converted")),
+            "record_conversion": bool(conv.get("record")),
+            "current_format": conv.get("current_format"),
+            "source_format": conv.get("source_format"),
+            "source_file_size": conv.get("source_file_size"),
+            "source_md5": conv.get("source_md5"),
+            "converted_at": conv.get("converted_at"),
+        }
+        return {"outcome": "imported", "rel": rel, "file": name,
+                "target": rel_img, "removed": removed, "kept": not removed,
+                "reason": "" if removed else "已入库，收件箱原件仍在",
+                "convert_failed": convert_failed, "ingest_record": record}
+
+    def _adopt_run(task_id: str, rels: list, input_root: Path, img_root: Path,
+                   dest_dir: Path) -> None:
+        """后台执行一次选中入库; 扫描锁范围/身份, 逐张核验后结算一次。"""
+        from utils.config import ingest_auto_png
+        img_ext = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        auto_png = ingest_auto_png()
+        imported_all: "list[str]" = []
+        skipped_all: "list[dict]" = []
+        failed_all: "list[dict]" = []
+        convert_all: "list[dict]" = []
+        removed_rels: "list[str]" = []
+        kept_rels: "list[str]" = []
+        kept_items: "list[dict]" = []
+        ingest_records: "list[dict]" = []
+
+        def upd(**kw) -> None:
+            with _ADOPT_TASK_LOCK:
+                if _ADOPT_TASK["id"] == task_id:
+                    _ADOPT_TASK.update(kw)
+
+        def fail(msg: str) -> None:
+            upd(status="error", stage="", current="", error=msg,
+                finished_at=time.time())
+            try:
+                _reporter().warn(f"📥 收件箱入库失败: {msg}")
+            except Exception:
+                pass
+
+        def settle(res: dict) -> bool:
+            outcome = str(res.get("outcome") or "failed")
+            rel = str(res.get("rel") or "")
+            file = str(res.get("file") or Path(rel).name)
+            reason = str(res.get("reason") or "")
+            if outcome == "imported":
+                imported_all.append(str(res.get("target") or rel))
+                if res.get("ingest_record"):
+                    ingest_records.append(res["ingest_record"])
+            elif outcome == "skipped":
+                skipped_all.append({"file": file, "reason": reason})
+            else:
+                failed_all.append({"file": file, "reason": reason})
+            if res.get("convert_failed"):
+                convert_all.append(res["convert_failed"])
+            if res.get("removed"):
+                removed_rels.append(rel)
+            if res.get("kept"):
+                kept_rels.append(rel)
+                kept_items.append({"file": file,
+                                   "reason": reason or "已入库，收件箱原件仍在"})
+            with _ADOPT_TASK_LOCK:
+                if _ADOPT_TASK["id"] != task_id:
+                    return False
+                _ADOPT_TASK["done"] = int(_ADOPT_TASK["done"]) + 1
+                _ADOPT_TASK["current"] = ""
+                if outcome == "imported":
+                    _ADOPT_TASK["imported"] = int(_ADOPT_TASK["imported"]) + 1
+                elif outcome == "skipped":
+                    _ADOPT_TASK["skipped"] = int(_ADOPT_TASK["skipped"]) + 1
+                    if len(_ADOPT_TASK["skipped_items"]) < 50:
+                        _ADOPT_TASK["skipped_items"].append(
+                            {"file": file, "reason": reason})
+                else:
+                    _ADOPT_TASK["failed"] = int(_ADOPT_TASK["failed"]) + 1
+                    if len(_ADOPT_TASK["failed_items"]) < 50:
+                        _ADOPT_TASK["failed_items"].append(
+                            {"file": file, "reason": reason})
+                    if len(_ADOPT_TASK["errors"]) < 50:
+                        _ADOPT_TASK["errors"].append(f"{file}：{reason}")
+                if res.get("kept"):
+                    _ADOPT_TASK["source_kept"] = int(_ADOPT_TASK["source_kept"]) + 1
+                    if len(_ADOPT_TASK["kept_items"]) < 50:
+                        _ADOPT_TASK["kept_items"].append(
+                            {"file": file, "reason": reason})
+                if res.get("convert_failed"):
+                    _ADOPT_TASK["convert_failed"] = int(_ADOPT_TASK["convert_failed"]) + 1
+                    if len(_ADOPT_TASK["convert_failed_items"]) < 50:
+                        _ADOPT_TASK["convert_failed_items"].append(res["convert_failed"])
+                return True
+
+        try:
+            # ① 扫描阶段: 锁定本次范围与每张的文件身份 (缺失也保留位置, 处理阶段如实失败)
+            scope: "list[dict]" = []
+            for rel in rels[:ADOPT_CAP]:
+                rel = str(rel)
+                src = _rev_resolve_input(input_root, rel)
+                scope.append({"rel": rel,
+                              "identity": _adopt_identity(src) if src else None})
+            total = len(scope)
+            upd(stage="processing", total=total)
+            _adopt_call_hook("scan", root=str(input_root), scope=scope)
+            # ② 处理阶段: 每张处理前重新解析+比对身份, 确认转换/登记/移源后才结算
+            for idx, entry in enumerate(scope):
+                rel = str(entry.get("rel") or "")
+                upd(current=rel)
+                _adopt_call_hook("item", rel=rel, index=idx, total=total)
+                src = _rev_resolve_input(input_root, rel)
+                if src is None:
+                    settle({"outcome": "failed", "rel": rel,
+                            "reason": "找不到该文件（可能已被处理/移走）"})
+                    continue
+                ident = _adopt_identity(src)
+                if entry.get("identity") is None:
+                    settle({"outcome": "failed", "rel": rel,
+                            "reason": "无法核验该文件（读取失败），已保留"})
+                    continue
+                if ident is None:
+                    settle({"outcome": "failed", "rel": rel,
+                            "reason": "无法核验该文件（读取失败），已保留"})
+                    continue
+                if not _adopt_same_identity(entry["identity"], ident):
+                    settle({"outcome": "skipped", "rel": rel,
+                            "reason": "文件已被替换，已保留（未入库）"})
+                    continue
+                try:
+                    res = _adopt_one(rel, src, img_root, dest_dir, auto_png, img_ext)
+                except Exception as e:
+                    res = {"outcome": "failed", "rel": rel,
+                           "reason": f"处理失败: {type(e).__name__}: {e}"}
+                if not settle(res):
+                    return
+            if ingest_records:
+                _record_ingested_conversions(img_root, ingest_records)
+            if imported_all:
+                audit_log.record(
+                    "add", "反搜收件箱手动入库",
+                    f"把 {len(imported_all)} 张待反搜图片收进图库（建自定义作品）："
+                    + "；".join(Path(x).name for x in imported_all[:5])
+                    + ("…" if len(imported_all) > 5 else ""),
+                    len(imported_all))
+                mark_dirty("artworks", "pages", "facets", "stats", "reverse")
+            result = {
+                "total": total, "imported": imported_all,
+                "skipped": skipped_all, "failed": failed_all,
+                "convert_failed": convert_all,
+                "source_kept": len(kept_rels),
+                "removed_rels": removed_rels, "kept_rels": kept_rels,
+                "kept_items": kept_items,
+                "over_limit": max(0, len(rels) - ADOPT_CAP),
+            }
+            with _ADOPT_TASK_LOCK:
+                if _ADOPT_TASK["id"] != task_id:
+                    return
+                _ADOPT_TASK.update({
+                    "status": "done", "stage": "", "current": "",
+                    "done": int(_ADOPT_TASK["done"]),
+                    "finished_at": time.time(), "result": result,
+                })
+            try:
+                _reporter().log(
+                    f"📥 收件箱入库完成: 入库 {len(imported_all)} 张, "
+                    f"跳过 {len(skipped_all)}, 失败 {len(failed_all)}, "
+                    f"原件仍在 {len(kept_rels)}")
+            except Exception:
+                pass
+        except Exception as e:
+            fail(f"入库任务异常：{type(e).__name__}: {e}")
+
+    def _adopt_task_start(rels: "list") -> "tuple[str, dict]":
+        """启动/接回一次选中入库。返回 (started|already|busy, 快照)。"""
+        requested = [str(x) for x in (rels or []) if str(x).strip()]
+        batch_key = hashlib.sha1(
+            "\n".join(sorted(requested)).encode("utf-8")).hexdigest()
+        with _ADOPT_TASK_LOCK:
+            if _ADOPT_TASK["status"] == "running":
+                same = _ADOPT_TASK["batch_key"] == batch_key
+                return ("already" if same else "busy"), _adopt_snapshot_locked()
+        if not _ADOPT_EXEC_LOCK.acquire(blocking=False):
+            with _ADOPT_TASK_LOCK:
+                same = (_ADOPT_TASK["status"] == "running"
+                        and _ADOPT_TASK["batch_key"] == batch_key)
+                return ("already" if same else "busy"), _adopt_snapshot_locked()
+        input_root = Path(paths.user_data(
+            _config["paths"].get("input_subdir", "input"))).resolve()
+        img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
+        dest_dir = img_root / _CUSTOM_SRC_DIR
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            _ADOPT_EXEC_LOCK.release()
+            return "busy", {"status": "error", "error": f"图库目录不可用：{e}"}
+        with _ADOPT_TASK_LOCK:
+            if _ADOPT_TASK["status"] == "running":
+                same = _ADOPT_TASK["batch_key"] == batch_key
+                _ADOPT_EXEC_LOCK.release()
+                return ("already" if same else "busy"), _adopt_snapshot_locked()
+            tid = uuid.uuid4().hex
+            ev = threading.Event()
+            _ADOPT_TASK_EVENTS.clear()
+            _ADOPT_TASK_EVENTS[tid] = ev
+            _ADOPT_TASK.update({
+                "id": tid, "status": "running", "stage": "scanning",
+                "done": 0, "total": 0, "current": "",
+                "imported": 0, "skipped": 0, "failed": 0,
+                "convert_failed": 0, "source_kept": 0,
+                "over_limit": max(0, len(requested) - ADOPT_CAP),
+                "removed_rels": [], "kept_rels": [],
+                "skipped_items": [], "failed_items": [], "kept_items": [],
+                "convert_failed_items": [], "errors": [],
+                "files": requested[:ADOPT_CAP], "batch_key": batch_key,
+                "error": "", "created_at": time.time(),
+                "finished_at": 0.0, "result": None,
+            })
+            started = _adopt_snapshot_locked()
+
+        def _task() -> None:
+            try:
+                _adopt_run(tid, requested, input_root, img_root, dest_dir)
+            finally:
+                _adopt_event_set(tid)
+                try:
+                    _ADOPT_EXEC_LOCK.release()
+                except Exception:
+                    pass
+
+        try:
+            threading.Thread(target=_task, daemon=True, name="reverse-adopt").start()
+        except Exception as e:
+            msg = f"无法启动入库线程：{type(e).__name__}: {e}"
+            with _ADOPT_TASK_LOCK:
+                if _ADOPT_TASK["id"] == tid:
+                    _ADOPT_TASK.update({"status": "error", "stage": "",
+                                        "error": msg, "finished_at": time.time()})
+            _adopt_event_set(tid)
+            try:
+                _ADOPT_EXEC_LOCK.release()
+            except Exception:
+                pass
+        return "started", started
+
+    def _adopt_task_wait(task_id: str, timeout: float = 600.0) -> "dict | None":
+        with _ADOPT_TASK_LOCK:
+            ev = _ADOPT_TASK_EVENTS.get(task_id)
+        if ev is not None:
+            ev.wait(timeout)
+        with _ADOPT_TASK_LOCK:
+            if _ADOPT_TASK["id"] == task_id:
+                return _adopt_snapshot_locked()
+        return None
+
+    @app.route("/api/reverse/adopt/task", methods=["POST"])
+    def api_reverse_adopt_task_start():
+        """启动/接回一次「选中入库」后台任务。
+
+        同一批重复提交返回 already + 当前任务; 不同批正在跑返回 busy + 快照。
+        """
+        data = request.get_json(silent=True) or {}
+        rels = data.get("files")
+        if not isinstance(rels, list) or not rels:
+            return jsonify({"status": "error", "error": "缺少 files"}), 400
+        kind, task = _adopt_task_start(rels)
+        if kind == "busy":
+            return jsonify({"status": "busy",
+                            "error": "已有收件箱入库任务在执行，请稍后重试",
+                            "task": task}), 409
+        if kind == "already":
+            return jsonify({"status": "ok", "already": True, "task": task})
+        return jsonify({"status": "ok", "task": task})
+
+    @app.route("/api/reverse/adopt/task", methods=["GET"])
+    def api_reverse_adopt_task_status():
+        tid = str(request.args.get("id") or "").strip()
+        with _ADOPT_TASK_LOCK:
+            if not tid or _ADOPT_TASK["id"] != tid:
+                return jsonify({"status": "idle", "task": None}), 404
+            return jsonify({"status": "ok", "task": _adopt_snapshot_locked()})
+
     @app.route("/api/reverse/adopt", methods=["POST"])
     def api_reverse_adopt():
         """**手动入库**: 把反搜收件箱里的图直接收进图库 (建自定义作品)。
@@ -15207,151 +15718,35 @@ background:#1976d2;color:#fff;font-size:15px;cursor:pointer}
 
         body: {"files": ["a.png", "not_found/b.png", ...]}
         """
-        import shutil as _sh
-        from core.image_format import (
-            actual_format_info, apply_ingest_format, extension_for_format,
-        )
-        from utils.config import ingest_auto_png
-        from utils.hashutil import md5_of
         data = request.get_json(silent=True) or {}
         rels = data.get("files")
         if not isinstance(rels, list) or not rels:
             return jsonify({"status": "error", "error": "缺少 files"}), 400
-        input_root = Path(paths.user_data(
-            _config["paths"].get("input_subdir", "input"))).resolve()
-        img_root = Path(paths.user_data(_config["paths"]["img_subdir"])).resolve()
-        dest_dir = img_root / _CUSTOM_SRC_DIR
-        IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-        imported, skipped, failed = [], [], []
-        convert_failed: "list[dict]" = []
-        ingest_records: "list[dict]" = []
-        auto_png = ingest_auto_png()
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        # 单次上限: 超出的必须**如实告诉用户**, 不能悄悄丢掉 (自查清单: "静默失败"类)
-        CAP = 500
-        over_limit = max(0, len(rels) - CAP)
-        for rel in rels[:CAP]:
-            src = _rev_resolve_input(input_root, rel)
-            if src is None:
-                failed.append({"file": str(rel), "reason": "找不到该文件（可能已被处理/移走）"})
-                continue
-            if src.suffix.lower() not in IMG_EXT:
-                skipped.append({"file": src.name, "reason": "不是图片"})
-                continue
-            # 以实际解码格式决定落点扩展名; 伪 PNG (JPEG 字节挂 .png) 也按真实格式
-            info = actual_format_info(src)
-            fmt = str(info.get("actual_format") or "").lower()
-            actual_ext = extension_for_format(fmt, src.suffix.lower())
-            static = (fmt in ("jpeg", "webp", "bmp", "tiff")
-                      and not info.get("animated"))
-            target_ext = ".png" if (auto_png and (static or fmt == "png")) else actual_ext
-            target = dest_dir / (src.stem + target_ext)
-            # 同名已存在: 绝不覆盖; 同一图的原后缀/真实格式落点都算已存在
-            other_names = {src.name, src.stem + actual_ext, src.stem + target_ext}
-            if any((dest_dir / nm).exists() for nm in other_names):
-                skipped.append({"file": src.name, "reason": "图库里已有同名文件"})
-                continue
-            conv = apply_ingest_format(src, out_path=target, enabled=auto_png,
-                                       delete_source=False)
-            final_target = target
-            if conv.get("ok") and auto_png and not target.exists():
-                # 动图/多帧保持原格式: 按实际扩展名复制入库
-                fallback = dest_dir / (src.stem + actual_ext)
-                if fallback.exists():
-                    skipped.append({"file": src.name, "reason": "图库里已有同名文件"})
-                    continue
-                try:
-                    _sh.copy2(str(src), str(fallback))
-                except Exception as e:
-                    failed.append({"file": src.name, "reason": f"复制失败: {e}"})
-                    continue
-                final_target = fallback
-                conv = dict(conv, current_path=str(fallback))
-            if not conv.get("ok"):
-                if conv.get("reason") == "unreadable":
-                    # 源图无法解码: 保留在收件箱, 列为入库失败, 不得登记
-                    failed.append({"file": src.name,
-                                   "reason": conv.get("note") or "图片无法打开"})
-                    continue
-                if not auto_png:
-                    failed.append({"file": src.name,
-                                   "reason": conv.get("note") or "图片无法打开"})
-                    continue
-                # 可解码但 PNG 编码失败: 回退原格式入库, 并在结果里说明原因
-                fallback = dest_dir / (src.stem + actual_ext)
-                if fallback.exists():
-                    skipped.append({"file": src.name, "reason": "图库里已有同名文件"})
-                    continue
-                try:
-                    _sh.copy2(str(src), str(fallback))
-                except Exception as e:
-                    failed.append({"file": src.name, "reason": f"复制失败: {e}"})
-                    continue
-                final_target = fallback
-                convert_failed.append({
-                    "file": src.name,
-                    "reason": conv.get("note") or "PNG 转换失败，已保留原格式",
-                })
-                conv = {"ok": True, "converted": False, "record": False,
-                        "current_format": fmt or actual_ext.lstrip("."),
-                        "source_format": None, "source_file_size": None,
-                        "source_md5": None, "converted_at": None, "note": ""}
-            rel_img = str(final_target.relative_to(img_root)).replace("\\", "/")
-            ext_id = None
-            try:
-                with _db() as db:
-                    ext_id = db.register_foreign_file(
-                        rel_img, md5=md5_of(str(final_target)),
-                        file_size=final_target.stat().st_size)
-            except Exception as e:
-                # 登记抛异常: 撤掉本次副本, 源图留在收件箱, 重试不被同名挡住
-                try:
-                    final_target.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                failed.append({"file": src.name, "reason": f"登记失败: {e}"})
-                continue
-            if not ext_id:
-                # 登记不上 (例如已登记过同一路径) → 把复制进来的副本撤掉, 别留半成品
-                try:
-                    final_target.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                skipped.append({"file": src.name, "reason": "已在图库登记过"})
-                continue
-            try:
-                with _db() as db:
-                    db.cleanup_orphans()
-            except Exception:
-                pass
-            try:
-                src.unlink(missing_ok=True)            # 入库成功才收回件箱里的源文件
-            except OSError:
-                pass
-            imported.append(rel_img)
-            ingest_records.append({
-                "kind": "imported", "target": str(final_target), "ok": True,
-                "converted": bool(conv.get("converted")),
-                "record_conversion": bool(conv.get("record")),
-                "current_format": conv.get("current_format"),
-                "source_format": conv.get("source_format"),
-                "source_file_size": conv.get("source_file_size"),
-                "source_md5": conv.get("source_md5"),
-                "converted_at": conv.get("converted_at"),
-            })
-        if ingest_records:
-            _record_ingested_conversions(img_root, ingest_records)
-        if imported:
-            audit_log.record("add", "反搜收件箱手动入库",
-                             f"把 {len(imported)} 张待反搜图片收进图库（建自定义作品）："
-                             + "；".join(Path(x).name for x in imported[:5])
-                             + ("…" if len(imported) > 5 else ""),
-                             len(imported))
-            mark_dirty("artworks", "pages", "facets", "stats", "reverse")
-        return jsonify({"status": "ok", "imported": imported,
-                        "skipped": skipped, "failed": failed,
-                        "convert_failed": convert_failed,
-                        "over_limit": over_limit})
+        kind, task = _adopt_task_start(rels)
+        if kind == "busy":
+            return jsonify({"status": "busy",
+                            "error": "已有收件箱入库任务在执行，请稍后重试",
+                            "task": task}), 409
+        if task and task.get("status") == "running":
+            task = _adopt_task_wait(str(task.get("id") or ""), 600.0)
+        if not task:
+            return jsonify({"status": "error", "error": "入库任务状态不可用"}), 500
+        if task.get("status") == "error":
+            return jsonify({"status": "error",
+                            "error": task.get("error") or "入库失败"}), 500
+        if task.get("status") == "running":
+            return jsonify({"status": "error",
+                            "error": "入库超时，请稍后查看任务状态"}), 500
+        res = task.get("result") or {}
+        return jsonify({"status": "ok",
+                        "imported": res.get("imported", []),
+                        "skipped": res.get("skipped", []),
+                        "failed": res.get("failed", []),
+                        "convert_failed": res.get("convert_failed", []),
+                        "over_limit": res.get("over_limit", 0),
+                        "removed_rels": res.get("removed_rels", []),
+                        "kept_rels": res.get("kept_rels", []),
+                        "source_kept": res.get("source_kept", 0)})
 
     @app.route("/api/reverse/discard", methods=["POST"])
     def api_reverse_discard():

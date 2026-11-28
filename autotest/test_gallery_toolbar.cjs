@@ -16,6 +16,22 @@ const context = vm.createContext({ console, $, $$: () => [], window: {},
   esc: s => String(s || '').replaceAll('<', '&lt;'), fmtSize: n => String(n || 0),
   sourceLabel: s => s, toast: msg => notices.push(msg),
   autoStartDownload: async () => calls.push({ start: true }), setLastAction() {},
+  // 共用进度入口替身: 直接执行请求并走业务完成回调 (本用例只验批量下载/修护入口)
+  runWithProgress: async (o) => {
+    let result;
+    try {
+      result = o.request && o.request.run ? await o.request.run() : undefined;
+      if (o.request && o.request.validate) {
+        const bad = o.request.validate(result);
+        if (bad) throw new Error(bad);
+      }
+      if (o.onDone) await o.onDone(result);
+      return { result };
+    } catch (e) {
+      if (o.onError) o.onError(e);
+      return { error: e };
+    }
+  },
   api: async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return { added: 1 }; },
   repairWorks: async ids => { calls.push({ repair: ids }); return false; },
 });

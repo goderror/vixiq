@@ -1545,13 +1545,22 @@ async function wallDupesDelete() {
     + '· 这些文件和图库里那份字节完全一致，删掉壁纸夹里这份不丢图\n'
     + '· 只动壁纸夹，图库和数据库都不碰\n'
     + '· 回收站里随时可以还原')) return;
-  const r = await api('/api/wallpaper/dupes/recycle',
-    { method: 'POST', body: JSON.stringify({ names: Array.from(wallDupesSel) }) });
-  const e = apiErr(r);
-  if (e) { toast(e, 'err'); return; }
-  toast('已移出 ' + r.recycled + ' 个副本，释放 ' + fmtSize(r.freed || 0), 'ok');
-  wallDupesSel = new Set();
-  await loadWallDupes(true);
+  await runWithProgress({
+    key: 'wall-dupes-delete', host: '#op-progress-host',
+    label: '移出壁纸副本', unit: '个', scanText: '正在送进回收站…',
+    request: {
+      run: () => api('/api/wallpaper/dupes/recycle', { method: 'POST',
+        body: JSON.stringify({ names: Array.from(wallDupesSel) }) }),
+      timeout: 180000,
+      validate: r => apiErr(r),
+    },
+    onDone: (r) => {
+      toast('已移出 ' + r.recycled + ' 个副本，释放 ' + fmtSize(r.freed || 0), 'ok');
+      wallDupesSel = new Set();
+      void loadWallDupes(true);
+    },
+    onError: (e) => toast(e.message, 'err'),
+  });
 }
 
 window.wallRefresh = wallRefresh;
@@ -9291,27 +9300,50 @@ window.libDeletePage = async function (aid, pageNum) {
 
 async function libBatchDelete() {
   if (!libSelected.size) return;
-  try {
-    if (libDataView === 'image') {
-      // 图片视图: 选中粒度 = 单张图片 (作品|页码), 只删被勾选的页
-      const items = [...libSelected].map(parsePageKey);
-      if (!confirm(`把选中的 ${items.length} 张图片移入回收站？\n\n随时可在「🗑️ 回收站」里恢复。`)) return;
-      const r = await _softDeletePages(items);
-      if (!r) return;
-      libSelected.clear();
-      _libAnchor = null;
-      toast(`已把 ${r.pages_deleted} 张图片移入回收站（可恢复）`
-            + (r.artworks_trashed ? ` · ${r.artworks_trashed} 个作品一并移入` : '') + ' 🗑️', 'ok');
-    } else {
-      // 作品视图: 选中粒度 = 作品, 整个作品移入回收站
-      if (!confirm(`把选中的 ${libSelected.size} 个作品移入回收站？\n\n图片文件会一起移入，随时可在「🗑️ 回收站」里恢复。`)) return;
-      const r = await api('/api/library/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [...libSelected] }) });
-      libSelected.clear();
-      _libAnchor = null;
-      toast(`已把 ${r.deleted} 个作品移入回收站（可恢复）` + (r.files_removed ? ` · 移动 ${r.files_removed} 个文件` : '') + ' 🗑️', 'ok');
-    }
-    loadLibrary(); loadStats(); loadLibFacets(); loadTrashBadge();
-  } catch (e) { toast('移入回收站失败: ' + e.message, 'err'); }
+  const imageView = libDataView === 'image';
+  const items = imageView ? [...libSelected].map(parsePageKey) : null;
+  if (imageView) {
+    if (!confirm(`把选中的 ${items.length} 张图片移入回收站？\n\n随时可在「🗑️ 回收站」里恢复。`)) return;
+  } else {
+    if (!confirm(`把选中的 ${libSelected.size} 个作品移入回收站？\n\n图片文件会一起移入，随时可在「🗑️ 回收站」里恢复。`)) return;
+  }
+  await runWithProgress({
+    key: 'lib-batch-delete', host: '#op-progress-host',
+    scanText: '正在移入回收站…',
+    request: {
+      run: async () => {
+        if (imageView) {
+          // 图片视图: 选中粒度 = 单张图片 (作品|页码), 只删被勾选的页
+          const r = await _softDeletePages(items);
+          if (!r) return { cancelled: true };
+          libSelected.clear();
+          _libAnchor = null;
+          return { kind: 'image', r };
+        }
+        // 作品视图: 选中粒度 = 作品, 整个作品移入回收站
+        const r = await api('/api/library/delete', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: [...libSelected] }) });
+        libSelected.clear();
+        _libAnchor = null;
+        return { kind: 'artwork', r };
+      },
+      timeout: 180000,
+    },
+    onDone: (out) => {
+      if (!out || out.cancelled) return;
+      const r = out.r || {};
+      if (out.kind === 'image') {
+        toast(`已把 ${r.pages_deleted} 张图片移入回收站（可恢复）`
+              + (r.artworks_trashed ? ` · ${r.artworks_trashed} 个作品一并移入` : '') + ' 🗑️', 'ok');
+      } else {
+        toast(`已把 ${r.deleted} 个作品移入回收站（可恢复）`
+              + (r.files_removed ? ` · 移动 ${r.files_removed} 个文件` : '') + ' 🗑️', 'ok');
+      }
+      loadLibrary(); loadStats(); loadLibFacets(); loadTrashBadge();
+    },
+    onError: (e) => toast('移入回收站失败: ' + e.message, 'err'),
+  });
 }
 
 // ============ 🗑️ 回收站页 ============
@@ -9769,25 +9801,36 @@ window.libBatchAddCart = async function () {
   });
   const items = [...artMap.values()];
   if (!items.length) { toast('补完作品仅支持有效的 Pixiv 作品', 'info'); return; }
-  try {
-    const r = await api('/api/cart/batch-add', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) });
-    const parts = [];
-    if (r.added) parts.push(`新加入 ${r.added} 个`);
-    if (r.already_downloaded) parts.push(`已下载 ${r.already_downloaded} 个（跳过）`);
-    if (r.in_queue) parts.push(`已在下载列表 ${r.in_queue} 个（跳过）`);
-    if (r.invalid) parts.push(`无效 ${r.invalid} 个`);
-    if (skipForeign) parts.push(`非 pixiv 来源 ${skipForeign} 个未加入`);
-    if (r.added > 0) {
-      toast('已加入清单，自动开始下载 ⬇（' + parts.join('，') + '）', 'ok');
-      await autoStartDownload();
-    } else {
-      // 全部已在库/在队列: 用 info 色, 与「成功新增并开始下载」的绿色区分
-      toast('✓ 没有新任务：' + parts.join('，'), 'info');
-    }
-    libSelected.clear(); _libAnchor = null; syncLibSelUI();
-    setLastAction('library', [], '刚加入的下载任务');
-  } catch (e) { toast('补完作品失败: ' + e.message, 'err'); }
+  await runWithProgress({
+    key: 'lib-batch-addcart', host: '#op-progress-host',
+    label: '补完作品', unit: '个', scanText: '正在加入下载清单…',
+    request: {
+      run: () => api('/api/cart/batch-add', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }) }),
+      timeout: 180000,
+      validate: r => (!r || r.status === 'error')
+        ? ((r && (r.error || r.message)) || '补完作品失败') : '',
+    },
+    onDone: async (r) => {
+      const parts = [];
+      if (r.added) parts.push(`新加入 ${r.added} 个`);
+      if (r.already_downloaded) parts.push(`已下载 ${r.already_downloaded} 个（跳过）`);
+      if (r.in_queue) parts.push(`已在下载列表 ${r.in_queue} 个（跳过）`);
+      if (r.invalid) parts.push(`无效 ${r.invalid} 个`);
+      if (skipForeign) parts.push(`非 pixiv 来源 ${skipForeign} 个未加入`);
+      if (r.added > 0) {
+        toast('已加入清单，自动开始下载 ⬇（' + parts.join('，') + '）', 'ok');
+        await autoStartDownload();
+      } else {
+        // 全部已在库/在队列: 用 info 色, 与「成功新增并开始下载」的绿色区分
+        toast('✓ 没有新任务：' + parts.join('，'), 'info');
+      }
+      libSelected.clear(); _libAnchor = null; syncLibSelUI();
+      setLastAction('library', [], '刚加入的下载任务');
+    },
+    onError: (e) => toast('补完作品失败: ' + e.message, 'err'),
+  });
 };
 
 // ♻ 重下修复: 用官方源【覆盖】重下选定作品 (旧文件自动备份为 .bak)。
@@ -9803,28 +9846,35 @@ async function repairWorks(ids, label) {
     + `· 被覆盖的旧文件自动备份为 .bak，可在「💾 备份」里对比后一键恢复\n`
     + `· 只跑这几个作品，不影响下载队列里的其他任务`
     + (label ? `\n\n范围：${label}` : ''))) return false;
-  try {
-    const r = await api('/api/cart/repair', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: pixivIds }) });
-    const err = apiErr(r);
-    if (err) throw new Error(err);
-    const parts = [];
-    if (r.added) {
-      parts.push(`已开始覆盖重下 ${r.added} 个` +
-        (r.backed_up ? `（旧文件已备份 ${r.backed_up} 张）` : '（本地还没有可覆盖的文件）'));
-    }
-    if (r.in_queue) parts.push(`已在下载列表 ${r.in_queue} 个（跳过）`);
-    if ((r.skipped || []).length) {
-      parts.push(`跳过 ${r.skipped.length} 个`);
-      console.warn('[重下修复] 跳过明细', r.skipped);
-    }
-    toast((r.added ? '♻ ' : '✓ ') + (parts.join('，') || '没有可重下的作品')
-      + (r.added ? '，进度见「下载任务」页' : ''), r.added ? 'ok' : 'info');
-    refreshCart();
-    if (r.added) setLastAction('library', [], '刚重下修复的作品');
-    return !!r.added;
-  } catch (e) { toast('重下修复失败: ' + e.message, 'err'); return false; }
+  const ctl = await runWithProgress({
+    key: 'repair-works', host: '#op-progress-host',
+    label: '重下修复', unit: '个', scanText: '正在备份旧文件并加入下载队列…',
+    request: {
+      run: () => api('/api/cart/repair', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: pixivIds }) }),
+      timeout: 180000,
+      validate: r => apiErr(r),
+    },
+    onDone: (r) => {
+      const parts = [];
+      if (r.added) {
+        parts.push(`已开始覆盖重下 ${r.added} 个` +
+          (r.backed_up ? `（旧文件已备份 ${r.backed_up} 张）` : '（本地还没有可覆盖的文件）'));
+      }
+      if (r.in_queue) parts.push(`已在下载列表 ${r.in_queue} 个（跳过）`);
+      if ((r.skipped || []).length) {
+        parts.push(`跳过 ${r.skipped.length} 个`);
+        console.warn('[重下修复] 跳过明细', r.skipped);
+      }
+      toast((r.added ? '♻ ' : '✓ ') + (parts.join('，') || '没有可重下的作品')
+        + (r.added ? '，进度见「下载任务」页' : ''), r.added ? 'ok' : 'info');
+      refreshCart();
+      if (r.added) setLastAction('library', [], '刚重下修复的作品');
+    },
+    onError: (e) => toast('重下修复失败: ' + e.message, 'err'),
+  });
+  return !!(ctl && ctl.result && ctl.result.added);
 }
 window.repairWorks = repairWorks;
 
@@ -13276,6 +13326,8 @@ async function loadReverseStatus() {
     renderReverseProgress(r.progress);
     // 添加图片是页面内上传任务: 切页回来/刷新收件箱后接回同一进度或结果
     revUploadRepaint();
+    // 选中入库是服务器后台任务: 切页/刷新后按会话任务号接回
+    revAdoptRepaint();
     return r;
   } catch (e) {
     $('#reverse-status').textContent = '读取失败: ' + e.message;
@@ -13499,7 +13551,10 @@ function updateReverseSelCount() {
   if (btnSel) btnSel.disabled = n === 0;
   // 批量「入库 / 丢弃」也跟着勾选状态启停 (反搜识别不出来时的出路)
   const bAdopt = $('#reverse-adopt-sel'), bDrop = $('#reverse-drop-sel');
-  if (bAdopt) bAdopt.disabled = n === 0;
+  const adoptRun = _opRuns.get('reverse-adopt');
+  const adoptBusy = !!(adoptRun && !adoptRun.settled
+                       && adoptRun.state === 'running');
+  if (bAdopt) bAdopt.disabled = n === 0 || adoptBusy;
   if (bDrop) bDrop.disabled = n === 0;
   const all = document.querySelectorAll('#reverse-pending-grid .rev-pick');
   const ckAll = $('#reverse-check-all');
@@ -13512,10 +13567,141 @@ function revSelectedRels() {
     .map(cb => cb.dataset.rel || cb.dataset.name).filter(Boolean);
 }
 
-// 📥 手动入库: 识别不出来的图也能进图库 (建自定义作品, 标题=文件名)
+// 📥 手动入库: 批量按钮走共用后台任务; 行内单张仍走旧同步接口
+function revAdoptResultHtml(res) {
+  res = res || {};
+  const imported = Array.isArray(res.imported) ? res.imported : [];
+  const skipped = Array.isArray(res.skipped) ? res.skipped : [];
+  const failed = Array.isArray(res.failed) ? res.failed : [];
+  const conv = Array.isArray(res.convert_failed) ? res.convert_failed : [];
+  const kept = Array.isArray(res.kept_items) ? res.kept_items : [];
+  const keptN = Number(res.source_kept || 0);
+  let html = `<div>${esc(`已入库 ${imported.length} 张 · 跳过 ${skipped.length} 张 · 失败 ${failed.length} 张`)}</div>`;
+  if (keptN) {
+    html += `<div>已入库 ${keptN} 张，收件箱原件仍在（可稍后重试移走）</div>`;
+    if (kept.length) {
+      html += '<ul>' + kept.slice(0, 5).map(x =>
+        `<li><code>${esc(x.file || '')}</code> ${esc(x.reason || '')}</li>`).join('') + '</ul>';
+    }
+  }
+  if (conv.length) {
+    html += `<div>${conv.length} 张转换失败，已按原格式入库`
+      + `（${esc(conv[0].reason || '')}）</div>`;
+  }
+  if (skipped.length) {
+    html += '<div class="hint">跳过：</div><ul>' + skipped.slice(0, 5).map(x =>
+      `<li><code>${esc(x.file || '')}</code> ${esc(x.reason || '')}</li>`).join('') + '</ul>'
+      + (skipped.length > 5 ? `<div class="hint">等 ${skipped.length} 张</div>` : '');
+  }
+  if (failed.length) {
+    html += '<div class="hint">失败：</div><ul>' + failed.slice(0, 5).map(x =>
+      `<li><code>${esc(x.file || '')}</code> ${esc(x.reason || '')}</li>`).join('') + '</ul>'
+      + (failed.length > 5 ? `<div class="hint">等 ${failed.length} 张</div>` : '');
+  }
+  if (res.over_limit) {
+    html += `<div class="hint">⚠ 单次最多 500 张，另有 ${res.over_limit} 张未处理（请再点一次）</div>`;
+  }
+  return html;
+}
+
+function revAdoptTaskOptions(list) {
+  return {
+    key: 'reverse-adopt',
+    mode: 'task',
+    host: '#reverse-adopt-progress',
+    flowId: 'rev-adopt-flow',
+    countId: 'rev-adopt-count',
+    area: '#reverse-adopt-task',
+    note: '#reverse-adopt-note',
+    label: '入库选中',
+    unit: '张',
+    button: '#reverse-adopt-sel',
+    busyText: '正在入库…',
+    scanText: '正在核对所选图片…',
+    noteCurrent: true,
+    countText: (done, total) => `已处理 ${done}／${total} 张`,
+    task: {
+      start: async () => {
+        const r = await api('/api/reverse/adopt/task', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: list }) });
+        if (r && r.status === 'busy') {
+          const e = new Error(r.error || '已有收件箱入库任务在执行');
+          e.task = r.task;
+          throw e;
+        }
+        if (!r || (r.status !== 'ok' && r.status !== 'already')) {
+          throw new Error((r && (r.error || r.message)) || '入库任务启动失败');
+        }
+        return r;
+      },
+      read: (id) => opFetchJson('/api/reverse/adopt/task?id='
+        + encodeURIComponent(id), 5000),
+      idOf: r => (r && r.task && r.task.id) || '',
+      snapshotOf: r => (r && r.task) || {},
+      intervalMs: 600,
+      map: {
+        running: s => s.status === 'running',
+        error: s => s.status === 'error' ? (s.error || '入库失败')
+          : (s.status === 'idle' ? '上次入库任务已失效，请重新点击' : ''),
+        result: s => s.result,
+        stage: s => s.stage === 'scanning' ? '正在核对所选图片' : '正在入库所选图片',
+        done: s => s.done || 0,
+        total: s => s.total || 0,
+        current: s => s.current || '',
+      },
+    },
+    resultHtml: revAdoptResultHtml,
+    onDone: (res, run) => {
+      const snap = (run && run.snapshot) || {};
+      const rr = snap.result || res || {};
+      const removed = Array.isArray(rr.removed_rels) ? rr.removed_rels : [];
+      // 只按实际移走结果隐藏任务行; 原件仍在/失败的继续可见
+      revDropFromRun(removed);
+      const parts = [`📥 已入库 ${(rr.imported || []).length} 张`];
+      if ((rr.skipped || []).length) parts.push(`⏭ 跳过 ${rr.skipped.length} 张`);
+      if ((rr.failed || []).length) parts.push(`✖ 失败 ${rr.failed.length} 张`);
+      if (rr.source_kept) parts.push(`📌 原件仍在 ${rr.source_kept} 张`);
+      if (rr.over_limit) parts.push(`⚠ 另有 ${rr.over_limit} 张超出单次上限`);
+      toast(parts.join(' · '), (rr.imported || []).length ? 'ok' : 'info');
+      void loadReverseStatus();
+      loadLibrary(); loadStats(); loadLibFacets(); loadTrashBadge();
+    },
+    onError: (e) => {
+      toast('入库失败: ' + e.message, 'err');
+      void loadReverseStatus();
+    },
+  };
+}
+
+async function executeRevAdoptBatch(list) {
+  const total = list.length;
+  const cap = Math.min(total, 500);
+  const extra = Math.max(0, total - 500);
+  if (!confirm(`把这 ${total} 张图直接加入图库？\n\n`
+    + `· 本次将处理前 ${cap} 张（单次最多 500 张）`
+    + (extra ? `，另有 ${extra} 张留待下一批` : '') + `\n`
+    + `· 会收纳到 img/#其他来源# 并建成「自定义作品」（标题=文件名）\n`
+    + `· 入库成功后移走收件箱原文件；未成功的会保留`)) return;
+  await runWithProgress(revAdoptTaskOptions(list));
+}
+
+function revAdoptRepaint() {
+  repaintOp('reverse-adopt');
+  if (!_opRuns.has('reverse-adopt') && opSessionGet('reverse-adopt')) {
+    resumeOp('reverse-adopt', revAdoptTaskOptions([]));
+  }
+}
+window.revAdoptRepaint = revAdoptRepaint;
+
 window.revAdopt = async function (files) {
   const list = files && files.length ? files : revSelectedRels();
   if (!list.length) { toast('先勾选要入库的图片', 'err'); return; }
+  if (!files || !files.length) {
+    await executeRevAdoptBatch(list);
+    return;
+  }
+  // 行内单张: 保持旧同步入口, 不显示共用进度
   if (!confirm(`把这 ${list.length} 张图直接加入图库？\n\n会收纳到 img/${'#其他来源#'} 并建成「自定义作品」（标题=文件名），\n收件箱里的原文件会被移走（图库里有的是副本）。`)) return;
   try {
     const r = await api('/api/reverse/adopt', { method: 'POST',
@@ -13525,10 +13711,13 @@ window.revAdopt = async function (files) {
     if ((r.skipped || []).length) parts.push(`⏭ 跳过 ${r.skipped.length} 张（${r.skipped[0].reason}）`);
     if ((r.failed || []).length) parts.push(`✖ 失败 ${r.failed.length} 张（${r.failed[0].reason}）`);
     if ((r.convert_failed || []).length) parts.push(`⚠ ${r.convert_failed.length} 张转换失败已保留原格式（${r.convert_failed[0].reason}）`);
+    if (r.source_kept) parts.push(`📌 ${r.source_kept} 张已入库，收件箱原件仍在`);
     if (r.over_limit) parts.push(`⚠ 单次最多 500 张，另有 ${r.over_limit} 张未处理（请再点一次）`);
     toast(parts.join(' · '), r.imported.length ? 'ok' : 'info');
-    // 收走的这几张不该再挂在「本次任务」里 (否则失败行一直显示, 用户以为没生效)
-    revDropFromRun(list);
+    // 只隐藏实际移走的行; 移不走/失败的行继续显示
+    const removed = Array.isArray(r.removed_rels) && r.removed_rels.length
+      ? r.removed_rels : (r.source_kept ? [] : list);
+    revDropFromRun(removed);
     await loadReverseStatus();
     loadLibrary(); loadStats(); loadLibFacets(); loadTrashBadge();
   } catch (e) { toast('入库失败: ' + e.message, 'err'); }
@@ -13539,14 +13728,25 @@ window.revDiscard = async function (files) {
   const list = files && files.length ? files : revSelectedRels();
   if (!list.length) { toast('先勾选要丢弃的图片', 'err'); return; }
   if (!confirm(`丢弃这 ${list.length} 张待反搜图片？\n\n它们会被送进 **Windows 电脑回收站**（之后仍可从那里还原）。`)) return;
-  try {
-    const r = await api('/api/reverse/discard', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: list }) });
-    toast(`已丢弃 ${r.removed} 张 · 送电脑回收站 ${r.recycled} 个`
-          + (r.over_limit ? ` · ⚠ 另有 ${r.over_limit} 张超出单次上限未处理` : ''), 'ok');
-    revDropFromRun(list);
-    await loadReverseStatus();
-  } catch (e) { toast('丢弃失败: ' + e.message, 'err'); }
+  await runWithProgress({
+    key: 'reverse-discard', host: '#op-progress-host',
+    label: '丢弃待反搜图片', unit: '张', scanText: '正在送进回收站…',
+    request: {
+      run: () => api('/api/reverse/discard', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: list }) }),
+      timeout: 180000,
+      validate: r => (!r || r.status !== 'ok')
+        ? ((r && (r.error || r.message)) || '丢弃失败') : '',
+    },
+    onDone: (r) => {
+      toast(`已丢弃 ${r.removed} 张 · 送电脑回收站 ${r.recycled} 个`
+            + (r.over_limit ? ` · ⚠ 另有 ${r.over_limit} 张超出单次上限未处理` : ''), 'ok');
+      revDropFromRun(list);
+      void loadReverseStatus();
+    },
+    onError: (e) => toast('丢弃失败: ' + e.message, 'err'),
+  });
 };
 
 // 反搜收件箱「添加图片」上传进度: 共用入口的浏览器上传接法 (真实字节 → 写入 → 结果)
@@ -14560,11 +14760,21 @@ function bind() {
   $('#reverse-upload').addEventListener('click', () => $('#reverse-file-input').click());
   $('#reverse-clear').addEventListener('click', async () => {
     if (!confirm('确认清空待反搜区？\n\n该目录下所有图片（含 not_found 子目录）会被送进 **Windows 电脑回收站**，之后仍可从那里还原。')) return;
-    try {
-      const r = await api('/api/reverse/clear', { method: 'POST' });
-      toast(`已清空待反搜区（${r.removed} 张进电脑回收站）`, 'ok');
-      loadReverseStatus();
-    } catch (e) { toast('清空失败: ' + e.message, 'err'); }
+    await runWithProgress({
+      key: 'reverse-clear', host: '#op-progress-host',
+      label: '清空待反搜区', unit: '张', scanText: '正在清空待反搜区…',
+      request: {
+        run: () => api('/api/reverse/clear', { method: 'POST' }),
+        timeout: 180000,
+        validate: r => (!r || !r.ok)
+          ? ((r && (r.error || r.message)) || '清空失败') : '',
+      },
+      onDone: (r) => {
+        toast(`已清空待反搜区（${r.removed} 张进电脑回收站）`, 'ok');
+        void loadReverseStatus();
+      },
+      onError: (e) => toast('清空失败: ' + e.message, 'err'),
+    });
   });
   $('#reverse-clear-result').addEventListener('click', async () => {
     try {
