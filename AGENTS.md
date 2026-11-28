@@ -1,6 +1,6 @@
 # AGENTS.md · 接手须知
 
-> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128m`）。
+> 给后续接手本项目的 Codex / 其他代理看。最后更新 2026-11-28（当前前端版本 `20261128n`）。
 > 产品面向普通用户的说明在 [README.md](README.md)，历史排障在 [DEBUG_HISTORY.md](DEBUG_HISTORY.md)，
 > 表结构在 [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)，版本记录在 [CHANGELOG.md](CHANGELOG.md)。思考要用中文。
 
@@ -113,7 +113,7 @@
 ### 3.1 版本串
 
 `index.html` 里 `style.css?v=` 与 `app.js?v=` 必须同值，**且 `autotest/smoke_all.py` 里有 4 处同样的断言**。
-改前端后一起升（当前源码 `20261128m`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
+改前端后一起升（当前源码 `20261128n`，格式 `yyyyMMdd+字母`）。漏一处冒烟必失败。
 2026-11-16 新增的三个共享菜单资源同样带版本串（`management-drawer-state.js` / `management-toolbar.js` / `management-toolbar.css`）。
 
 ### 3.2 文案与风格
@@ -1206,6 +1206,37 @@
   去重，新增备份 14,926,543 字节）。`dist/vixiq` 与 `D:\Program Files\Vixiq` 的 exe /
   app.js / index.html / base_library.zip 哈希一致，两处 `config/user.json` 哈希未变；
   安装版 7810 健康、`/api/version` 前端 `20261123b`、`built_at 03:56:21`。GitHub 未推送。
+
+### 4.99 「重下修复」登记失败后的原图回滚（2026-11-28，前端 `20261128n`，已发布到安装版）
+
+- 历史偶发：T171 三份日志同停 `ASSERT FAIL: 来源写入失败也不得留下新图`
+  （11-27 23:25、11-28 15:33、11-28 20:06）。定位为登记失败后
+  `.bak → 正式路径` 的 `os.replace` 遇 Windows 文件占用抛 `PermissionError`，
+  旧代码只记警告仍返回统一文案「文件与登记已保持一致」，正式路径实际仍是新图；
+  队列失败行也只显示「失败」。
+- `_finalize_downloaded_page`：新增 `_file_sig`/`_same_sig`；强制重下备份后立即核验
+  `.bak` 可读且可取指纹，取不到则 `backup_failed` 保留现图；登记失败回执新增
+  `old_restored / restore_failed / target_changed / backup_path / backup_verified`。
+  - 回滚前与每轮重试前都核对目标仍是本次新图；被他人更新 → `target_changed`、
+    保留后来文件与 `.bak`，回执标冲突。
+  - `.bak` 字节不可验 → `restore_failed`，回执「旧图尚未恢复；可恢复副本不可用」。
+  - 恢复重试 3 次（50ms）；成功校验字节并回执「已恢复旧图」，失败回执
+    「旧图尚未恢复；可恢复副本：<bak>」。
+  - 下载队列两处失败行改为显示 `conv["note"]`，不再吞掉恢复结果。
+- T171：②/③ 断言旧图字节恢复、重试后 `.bak` 仍等于旧图；新增 ③b 恢复被拒绝、
+  ③c 登记期间目标被另一操作替换；T206 补静态断言。
+- 回归：T171 定向 5 连跑通过（单跑需按冒烟打桩 `ingest_auto_png=True`），
+  全量 **197/197**（171.21 s），日志
+  `_dev_runtime/diagnostics/trae-20261128n-download-repair-smoke.log`。
+- **候选/发布**：候选（`built_at 2026-11-28 21:58:51`，前端 `20261128n`）在 7813
+  通过 `/api/version`、`/api/cart/repair` 跳过回执与 app.js「重下修复」入口核对
+  （首页本身不含该文案，改查 app.js）。回滚清单
+  `_dev_runtime/backups/publish-20261128n-20261128-220018.json`（3 个旧文件、
+  6 个替换项、14,514,519 字节）。候选/dist/安装版 exe `3bf019cc6afd…`、
+  base_library `87309729a1e3…`、app.js `d9a3eba58345…`、index.html
+  `f15f1423feeb…`；两处配置哈希未变。安装版 7810 前端
+  `20261128n-1795864710-1795859951-1795859951`、健康正常。
+  交接见 `trae-20261128n-download-repair-rollback-handoff-20261128.md`。
 
 ### 4.98 共用进度控件复用时的 300ms 显示阈值（2026-11-28，前端 `20261128m`，已发布到安装版）
 
